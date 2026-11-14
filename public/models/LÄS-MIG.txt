@@ -1,8 +1,0 @@
-Lägg 3D-modellen för poliserna här som  swat.glb  (glTF binary, .glb).
-Inställningar finns i models.json:
-  file   – filnamn i den här mappen
-  height – figurens höjd i meter i spelet
-  yaw    – vridning i grader om figuren tittar åt fel håll (prova 0, 90, 180, 270)
-  credit – text som visas under Tack/licenser i inställningarna
-Har modellen animationer med namn som innehåller idle / walk / run används de automatiskt.
-Saknas filen används spelets inbyggda figurer.
