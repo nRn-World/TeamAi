@@ -8,7 +8,8 @@ FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / 'public' / 'voice'
 HF = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/sv/sv_SE/'
-VOICES = {'m': 'nst/medium/sv_SE-nst-medium', 'f': 'lisa/medium/sv_SE-lisa-medium'}
+# Only voices with a clearly free licence: NST Swedish (dataset CC0, model trained by KBLab).
+VOICES = {'m': 'nst/medium/sv_SE-nst-medium'}
 lines = json.load(open(ROOT / 'voice' / 'lines.json', encoding='utf-8'))
 tmp = pathlib.Path('/tmp/pipervoices'); tmp.mkdir(exist_ok=True)
 

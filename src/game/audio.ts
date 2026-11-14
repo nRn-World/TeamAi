@@ -11,7 +11,37 @@ export class GameAudio {
     for (let ch = 0; ch < 2; ch++) { const b = ir.getChannelData(ch); for (let i = 0; i < b.length; i++) b[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / b.length, 3.2); }
     this.verb = c.createConvolver(); this.verb.buffer = ir; this.wet = c.createGain(); this.wet.gain.value = 0.3; this.verb.connect(this.wet); this.wet.connect(this.master);
     // room tone
+    void this.loadLines();
     const hum = c.createBufferSource(); hum.buffer = this.noise; hum.loop = true; const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 140; const hg = c.createGain(); hg.gain.value = 0.05; hum.connect(lp); lp.connect(hg); hg.connect(this.master); hum.start();
+  }
+  // ---- recorded voice lines (public/voice, generated with the CC0 NST Swedish Piper voice) ----
+  private lines = new Map<string, AudioBuffer>(); private linesReq = false; linesReady = false;
+  private async loadLines() {
+    if (this.linesReq || !this.ctx) return; this.linesReq = true;
+    try {
+      const man = await (await fetch('./voice/manifest.json')).json(); const v = man.voices[0];
+      await Promise.all((man.lines as string[]).map(async (text, i) => { try { const ab = await (await fetch(`./voice/${v}/${i}.mp3`)).arrayBuffer(); this.lines.set(text, await this.ctx!.decodeAudioData(ab)); } catch { /* falls back to browser speech */ } }));
+      this.linesReady = this.lines.size > 0;
+    } catch { /* no clips: browser speech is used */ }
+  }
+  hasLine(text: string) { return this.lines.has(text); }
+  /** Plays a recorded line as a particular character. Returns its duration in ms, or 0 if there is no clip for the text.
+   *  rate shifts pitch and tempo together (different people), radio = team radio filter, gruff = rough close voice. */
+  line(text: string, o: { rate?: number; radio?: boolean; gruff?: boolean; gain?: number; pan?: number; muffle?: boolean } = {}) {
+    const buf = this.lines.get(text); if (!this.ctx || !buf) return 0;
+    const c = this.ctx, t = c.currentTime, rate = o.rate ?? 1, src = c.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
+    let node: AudioNode = src; const chain = (n: AudioNode) => { node.connect(n); node = n; };
+    const shape = (k: number) => { const w = c.createWaveShaper(), cv = new Float32Array(257); for (let i = 0; i < 257; i++) { const x = i / 128 - 1; cv[i] = Math.tanh(x * k) / Math.tanh(k); } w.curve = cv; return w; };
+    if (o.radio) {
+      const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 420; hp.Q.value = 0.8; chain(hp);
+      const pk = c.createBiquadFilter(); pk.type = 'peaking'; pk.frequency.value = 1900; pk.Q.value = 1; pk.gain.value = 7; chain(pk);
+      const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3100; lp.Q.value = 0.9; chain(lp); chain(shape(3.2));
+    } else if (o.gruff) { chain(shape(2.2)); const ls = c.createBiquadFilter(); ls.type = 'lowshelf'; ls.frequency.value = 260; ls.gain.value = 5; chain(ls); }
+    if (o.muffle) { const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900; chain(lp); }
+    const out = this.out(o.pan ?? 0, (o.gain ?? 1) * (o.radio ? 0.9 : 1.25), !o.radio); chain(out); src.start(t + (o.radio ? 0.06 : 0));
+    const dur = buf.duration / rate;
+    if (o.radio) { const g = this.out(o.pan ?? 0, 0.05, false); this.burst(g, dur + 0.1, 'bandpass', 2200, 2200, 0.7, 0.5); } // carrier hiss under the transmission
+    return dur * 1000 + 120;
   }
   setVolume(v: number) { this.volume = v; if (this.ctx) this.master.gain.value = v; }
   private out(pan: number, gain: number, wet = true) {
@@ -67,6 +97,8 @@ export class Speech {
   constructor() { if ('speechSynthesis' in window) { const load = () => { this.voices = speechSynthesis.getVoices(); }; load(); speechSynthesis.onvoiceschanged = load; } }
   /** True while the team is (estimated to be) talking. Uses our own timer – speechSynthesis.speaking can get stuck in some browsers. */
   get speaking() { return performance.now() < this.until; }
+  /** A recorded clip is playing for ms milliseconds (keeps `speaking` correct). */
+  busy(ms: number) { this.until = Math.max(this.until, performance.now() + ms); }
   private keep = new Set<SpeechSynthesisUtterance>(); // Chrome drops utterances that get garbage collected
   get voiceCount() { return this.voices.length; }
   private pick() {
