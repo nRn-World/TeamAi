@@ -4,8 +4,9 @@ export class GameAudio {
   init() {
     if (this.ctx) { this.ctx.resume(); return; }
     const AC = window.AudioContext || (window as any).webkitAudioContext; if (!AC) return;
-    const c = this.ctx = new AC(); this.master = c.createGain(); this.master.gain.value = this.volume;
-    const comp = c.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 6; this.master.connect(comp); comp.connect(c.destination);
+    let c: AudioContext; try { c = new AC({ latencyHint: 0 }); } catch { c = new AC(); } this.ctx = c; this.master = c.createGain(); this.master.gain.value = this.volume;
+    // soft limiter without look-ahead (a DynamicsCompressor delays everything by several milliseconds)
+    const lim = c.createWaveShaper(), cv = new Float32Array(1025); for (let i = 0; i < 1025; i++) { const x = (i / 512 - 1) * 2; cv[i] = Math.tanh(x * 0.9) / Math.tanh(0.9 * 2) * 0.98; } lim.curve = cv; const pre = c.createGain(); pre.gain.value = 0.5; this.master.connect(pre); pre.connect(lim); lim.connect(c.destination);
     this.noise = c.createBuffer(1, c.sampleRate, c.sampleRate); const d = this.noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     const ir = c.createBuffer(2, c.sampleRate * 1.1, c.sampleRate);
     for (let ch = 0; ch < 2; ch++) { const b = ir.getChannelData(ch); for (let i = 0; i < b.length; i++) b[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / b.length, 3.2); }
@@ -19,16 +20,18 @@ export class GameAudio {
   private async loadLines() {
     if (this.linesReq || !this.ctx) return; this.linesReq = true;
     try {
-      const man = await (await fetch('./voice/manifest.json')).json(); const v = man.voices[0];
-      await Promise.all((man.lines as string[]).map(async (text, i) => { try { const ab = await (await fetch(`./voice/${v}/${i}.mp3`)).arrayBuffer(); this.lines.set(text, await this.ctx!.decodeAudioData(ab)); } catch { /* falls back to browser speech */ } }));
+      const man = await (await fetch('./voice/manifest.json')).json();
+      await Promise.all((man.voices as string[]).flatMap(v => (man.lines as string[]).map(async (text, i) => { try { const ab = await (await fetch(`./voice/${v}/${i}.mp3`)).arrayBuffer(); this.lines.set(v + '|' + text, await this.ctx!.decodeAudioData(ab)); } catch { /* falls back to browser speech */ } })));
       this.linesReady = this.lines.size > 0;
     } catch { /* no clips: browser speech is used */ }
   }
-  hasLine(text: string) { return this.lines.has(text); }
+  hasLine(text: string) { return this.lines.has('m|' + text); }
+  /** Output delay reported by the browser, in milliseconds (0 if unknown). */
+  get latencyMs() { const c = this.ctx as any; return c ? Math.round(((c.baseLatency || 0) + (c.outputLatency || 0)) * 1000) : 0; }
   /** Plays a recorded line as a particular character. Returns its duration in ms, or 0 if there is no clip for the text.
    *  rate shifts pitch and tempo together (different people), radio = team radio filter, gruff = rough close voice. */
-  line(text: string, o: { rate?: number; radio?: boolean; gruff?: boolean; gain?: number; pan?: number; muffle?: boolean } = {}) {
-    const buf = this.lines.get(text); if (!this.ctx || !buf) return 0;
+  line(text: string, o: { voice?: 'm' | 'f'; rate?: number; radio?: boolean; gruff?: boolean; gain?: number; pan?: number; muffle?: boolean } = {}) {
+    const buf = this.lines.get((o.voice ?? 'm') + '|' + text) ?? this.lines.get('m|' + text); if (!this.ctx || !buf) return 0;
     const c = this.ctx, t = c.currentTime, rate = o.rate ?? 1, src = c.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
     let node: AudioNode = src; const chain = (n: AudioNode) => { node.connect(n); node = n; };
     const shape = (k: number) => { const w = c.createWaveShaper(), cv = new Float32Array(257); for (let i = 0; i < 257; i++) { const x = i / 128 - 1; cv[i] = Math.tanh(x * k) / Math.tanh(k); } w.curve = cv; return w; };
