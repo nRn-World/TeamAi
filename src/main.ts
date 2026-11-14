@@ -1,7 +1,9 @@
 import { loadModels, modelsReady } from './game/models';
 import * as THREE from 'three';
 import { Sim, Actor, Command, Team, Ev, fwd } from './sim/sim';
-import { MISSIONS, WALL, DOOR, LOW, HIGH } from './sim/level';
+import { MISSIONS, WALL, DOOR, LOW, HIGH, buildLevel } from './sim/level';
+import { MenuScene } from './game/menuscene';
+import '@fontsource/barlow-condensed/500.css'; import '@fontsource/barlow-condensed/600.css'; import '@fontsource/barlow-condensed/700.css'; import '@fontsource/barlow/400.css'; import '@fontsource/barlow/600.css';
 import { parseCommand, ACTION_LABEL, DIR_LABEL } from './sim/commands';
 import { LevelView, ActorView, FX, makeViewModel, TEAM_COLOR } from './game/world';
 import { GameAudio, Speech } from './game/audio';
@@ -76,13 +78,29 @@ class Game {
     const box = $('missions'); box.innerHTML = '';
     MISSIONS.forEach((m, i) => {
       const b = document.createElement('button'); b.className = 'mission';
-      b.innerHTML = `<em>UPPDRAG ${i + 1}</em><b>${m.name}</b><small>${m.brief.split('.')[0]}.</small><small>${m.suspects} misstänkta · ${m.civs} civila</small>` + (best[i] != null ? `<span class="best">Bästa poäng: ${best[i]}/100</span>` : '');
-      b.onclick = () => { this.audio.init(); this.audio.ui(); this.mission = i; $('briefTitle').textContent = `Uppdrag ${i + 1}: ${m.name}`; $('briefText').textContent = m.brief; show('menu', false); show('brief', true); };
+      const cv = document.createElement('canvas'); this.drawPlan(i, cv, 5); b.appendChild(cv);
+      const d = document.createElement('div'); d.className = 'minfo';
+      d.innerHTML = `<em>${String(i + 1).padStart(2, '0')}</em><b>${m.name}</b><small>${m.suspects} misstänkta · ${m.civs} civila</small>` + (best[i] != null ? `<span class="best">Bästa ${best[i]}/100</span>` : '<span class="best none">Ej klarat</span>');
+      b.appendChild(d);
+      b.onclick = () => { this.audio.init(); this.audio.ui(); this.mission = i; $('briefTitle').textContent = m.name; $('briefText').textContent = m.brief; this.drawPlan(i, $<HTMLCanvasElement>('briefMap'), 9);
+        $('briefFacts').innerHTML = `<div><b>${m.suspects}</b>misstänkta</div><div><b>${m.civs}</b>civila</div><div><b>4</b>poliser i teamet</div>`; show('menu', false); show('brief', true); };
       box.appendChild(b);
     });
+    const done = MISSIONS.filter((_, i) => best[i] != null).length; $('mBest').textContent = `${done}/${MISSIONS.length} uppdrag klarade`;
+    $('mMic').textContent = Voice.supported ? 'Röststyrning redo' : 'Röststyrning saknas'; $('mMic').className = Voice.supported ? 'ok' : 'bad';
+    document.querySelectorAll<HTMLElement>('.mnav [data-tab]').forEach(n => n.onclick = () => { this.audio.init(); this.audio.ui();
+      document.querySelectorAll('.mnav [data-tab]').forEach(o => o.classList.toggle('on', o === n)); for (const id of ['tabPlay', 'tabMp']) show(id, id === n.dataset.tab); });
     const w = $('micwarn');
     if (!Voice.supported) { w.className = 'note warn'; w.textContent = 'Din webbläsare saknar röstigenkänning (Web Speech API). Använd Chrome eller Edge för röststyrning – annars kan du ge order med Enter eller snabbtangenterna.'; }
     else { w.className = 'note'; w.textContent = 'Röststyrning: tillåt mikrofonen när webbläsaren frågar. Om spelet visas inbäddat och mikrofonen blockeras – öppna det i en egen flik.'; }
+  }
+  /** Blueprint-style floor plan of a mission, drawn for the menu card / briefing. */
+  drawPlan(index: number, c: HTMLCanvasElement, k: number) {
+    const l = buildLevel(index, 1); c.width = l.w * k; c.height = l.h * k; const g = c.getContext('2d')!;
+    g.fillStyle = '#0b1118'; g.fillRect(0, 0, c.width, c.height);
+    g.strokeStyle = 'rgba(120,160,200,.07)'; g.lineWidth = 1; g.beginPath(); for (let x = 0; x <= l.w; x += 2) { g.moveTo(x * k + 0.5, 0); g.lineTo(x * k + 0.5, c.height); } for (let z = 0; z <= l.h; z += 2) { g.moveTo(0, z * k + 0.5); g.lineTo(c.width, z * k + 0.5); } g.stroke();
+    for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) { const v = l.cells[z * l.w + x]; if (v === 0) continue; g.fillStyle = v === WALL ? '#9db4c8' : v === DOOR ? '#f2c14e' : v === LOW || v === HIGH ? '#263645' : '#152130'; g.fillRect(x * k, z * k, k, k); }
+    const s = l.playerSpawn; g.fillStyle = '#4fd07a'; g.beginPath(); g.arc(s.x * k, s.z * k, k * 0.75, 0, 6.3); g.fill();
   }
   bindUI() {
     const click = (id: string, fn: () => void) => { $(id).onclick = () => { this.audio.init(); this.audio.ui(); fn(); }; };
@@ -102,7 +120,7 @@ class Game {
     const bind = (id: string, k: keyof Settings, num = true) => $(id).addEventListener('input', e => { (S as any)[k] = num ? +(e.target as HTMLInputElement).value : (e.target as HTMLInputElement).value; saveSettings(); this.applySettings(); });
     bind('sSens', 'sens'); bind('sVol', 'vol'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff');
   }
-  toMenu() { this.net.close(); show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief']) show(id, false); this.buildMenu(); show('menu', true); if (document.pointerLockElement) document.exitPointerLock(); }
+  toMenu() { document.body.classList.remove('ingame'); this.net.close(); show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief']) show(id, false); this.buildMenu(); show('menu', true); if (document.pointerLockElement) document.exitPointerLock(); }
   // ---------------- online co-op ----------------
   newRound(mission: number) {
     if (this.net.role === 'client') return;
@@ -304,6 +322,7 @@ class Game {
     const sim = this.sim!, p = sim.player; if (p.bangs <= 0 || !p.alive) return; const d = this.aimDir(), o = [p.x + d.x * 0.4, this.eye - 0.1, p.z + d.z * 0.4];
     if (this.mirror) this.net.send({ t: 'bang', o, d: [d.x, d.y, d.z] }); else { p.bangs--; sim.throwBang(o[0], o[1], o[2], d.x, d.y, d.z); } this.vmKick = -0.6;
   }
+  menu = new MenuScene(); menuT = 0;
   slow = false; jumpV = 0; // sneak toggle, vertical jump speed
   preShot = false; // own shot sound already played in the mouse click
   fire() {
@@ -503,10 +522,11 @@ class Game {
   }
   render() {
     const r = this.renderer; r.clear();
-    if (this.sim) { r.render(this.scene, this.camera); if (this.state !== 'menu') { r.clearDepth(); r.render(this.viewScene, this.viewCam); } }
+    if (this.state === 'menu') { const now = performance.now(), dt = Math.min(0.05, (now - this.menuT) / 1000); this.menuT = now; this.menu.resize(innerWidth / innerHeight); this.menu.update(dt); r.render(this.menu.scene, this.menu.cam); }
+    else if (this.sim) { r.render(this.scene, this.camera); r.clearDepth(); r.render(this.viewScene, this.viewCam); }
   }
 }
 
 const game = new Game();
-loadModels().then(() => { $('modelStatus').textContent = modelsReady ? '' : '3D-figurerna kunde inte laddas – inbyggda figurer används.'; });
+loadModels().then(() => { game.menu.squad(); $('modelStatus').textContent = modelsReady ? '' : '3D-figurerna kunde inte laddas – inbyggda figurer används.'; });
 (window as any).__ta = game;
