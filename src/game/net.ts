@@ -8,7 +8,7 @@ export type Msg = { t: string;[k: string]: any };
 export class Net {
   role: 'solo' | 'host' | 'client' = 'solo'; code = ''; peer: Peer | null = null; conns: DataConnection[] = []; hostConn: DataConnection | null = null;
   onMsg: (from: DataConnection, m: Msg) => void = () => { }; onPeers: () => void = () => { }; onClosed: (why: string) => void = () => { };
-  stream: MediaStream | null = null; micOk = false; muted = false; private calls = new Map<string, MediaConnection>(); private audios = new Map<string, HTMLAudioElement>();
+  stream: MediaStream | null = null; micOk = false; muted = false; onVoice: () => void = () => { }; private voiceP: Promise<void> | null = null; private calls = new Map<string, MediaConnection>(); private audios = new Map<string, HTMLAudioElement>();
   get id() { return this.peer?.id ?? ''; }
   get online() { return this.role !== 'solo'; }
   private opts() {
@@ -23,15 +23,22 @@ export class Net {
       p.on('error', (e: any) => { if (!done) { done = true; clearTimeout(to); p.destroy(); rej(e); } else if (e?.type === 'network' || e?.type === 'server-error') this.onClosed('Tappade kontakten med förmedlingsservern.'); });
     });
   }
-  /** Microphone for voice chat. Falls back to a silent stream so listening still works without a mic. */
-  private async voice() {
-    if (this.stream) return;
-    try { this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); this.micOk = true; }
-    catch { const AC = window.AudioContext || (window as any).webkitAudioContext; this.stream = new AC().createMediaStreamDestination().stream; this.micOk = false; }
-    this.setMuted(this.muted);
+  /** Microphone for voice chat. Never blocks room creation: runs in the background, and falls back to a
+   *  silent stream (listen-only) if the microphone is denied or the permission prompt is left unanswered. */
+  private voice(): Promise<void> {
+    if (this.voiceP) return this.voiceP;
+    const silent = () => { const AC = window.AudioContext || (window as any).webkitAudioContext; return new AC().createMediaStreamDestination().stream as MediaStream; };
+    return this.voiceP = new Promise<void>(res => {
+      let settled = false;
+      const finish = (st: MediaStream, ok: boolean) => { if (settled) { if (ok) st.getTracks().forEach(t => t.stop()); return; } settled = true; this.stream = st; this.micOk = ok; this.setMuted(this.muted); this.onVoice(); res(); };
+      const to = setTimeout(() => finish(silent(), false), 20000);
+      if (!navigator.mediaDevices?.getUserMedia) { clearTimeout(to); finish(silent(), false); return; }
+      navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+        .then(st => { clearTimeout(to); finish(st, true); }).catch(() => { clearTimeout(to); finish(silent(), false); });
+    });
   }
   private hookCalls() {
-    this.peer!.on('call', call => { call.answer(this.stream!); this.track(call); });
+    this.peer!.on('call', call => { this.voice().then(() => { call.answer(this.stream!); this.track(call); }); });
   }
   private track(call: MediaConnection) {
     this.calls.set(call.peer, call);
@@ -40,15 +47,16 @@ export class Net {
     call.on('close', drop); call.on('error', drop);
   }
   /** Everyone gets the full id list; the peer with the smaller id places the call, so each pair connects exactly once. */
-  callPeers(ids: string[]) { if (!this.peer || !this.stream) return; for (const id of ids) if (id !== this.id && !this.calls.has(id) && this.id < id) this.track(this.peer.call(id, this.stream)); }
+  callPeers(ids: string[]) { this.voice().then(() => { if (!this.peer || !this.stream) return; for (const id of ids) if (id !== this.id && !this.calls.has(id) && this.id < id) this.track(this.peer.call(id, this.stream)); }); }
   get voiceCount() { return this.audios.size; }
   setMuted(m: boolean) { this.muted = m; this.stream?.getAudioTracks().forEach(t => { t.enabled = !m; }); }
 
   async host() {
-    this.close(); await this.voice();
+    this.close(); void this.voice();
     for (let attempt = 0; ; attempt++) {
       const code = Array.from({ length: 5 }, () => ALPHA[Math.floor(Math.random() * ALPHA.length)]).join('');
-      try { this.peer = await this.open(PREFIX + code); this.code = code; break; } catch (e: any) { if (e?.type !== 'unavailable-id' || attempt > 3) throw e; }
+      try { this.peer = await this.open(PREFIX + code); this.code = code; break; }
+      catch (e: any) { if (attempt >= 2) throw e; if (e?.type !== 'unavailable-id') await new Promise(r => setTimeout(r, 1200)); }
     }
     this.role = 'host'; this.hookCalls();
     this.peer!.on('connection', c => {
@@ -59,8 +67,9 @@ export class Net {
     });
   }
   async join(code: string) {
-    this.close(); await this.voice();
-    this.peer = await this.open(); this.hookCalls(); this.code = code.toUpperCase().trim();
+    this.close(); void this.voice();
+    try { this.peer = await this.open(); } catch { await new Promise(r => setTimeout(r, 1200)); this.peer = await this.open(); }
+    this.hookCalls(); this.code = code.toUpperCase().trim();
     const c = this.peer.connect(PREFIX + this.code, { reliable: true });
     await new Promise<void>((res, rej) => {
       const to = setTimeout(() => rej(new Error('Hittade inget rum med den koden.')), 12000);

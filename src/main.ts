@@ -110,9 +110,16 @@ class Game {
     this.lock();
   }
   bindNet() {
-    const err = (e: any) => { $('mpErr').textContent = 'Kunde inte ansluta: ' + (e?.message || e?.type || e) + '. Kontrollera rumskoden och internetanslutningen.'; };
+    const err = (e: any) => {
+      const t = e?.type, m = String(e?.message || '');
+      const why = m.startsWith('Hittade') ? m : t === 'network' || t === 'server-error' || t === 'socket-error' || t === 'socket-closed' || m === 'timeout' ? 'Förmedlingstjänsten som delar ut rumskoder svarar inte. Den kan vara nere, eller blockeras av annonsblockerare, VPN eller brandvägg. Stäng av dem för sidan och försök igen om en stund.' : t === 'browser-incompatible' ? 'Webbläsaren saknar stöd för direktanslutning (WebRTC). Använd Chrome eller Edge.' : t === 'peer-unavailable' ? 'Hittade inget rum med den koden.' : 'Okänt fel (' + (t || m || e) + ').';
+      $('mpErr').textContent = 'Kunde inte ansluta. ' + why;
+    };
+    const pre = params.get('join'); if (pre) $<HTMLInputElement>('mpCode').value = pre.toUpperCase().slice(0, 5);
+    this.net.onVoice = () => { if (!$('lobby').classList.contains('hidden')) this.lobby(); };
+    $('btnCopy').onclick = () => { const link = location.origin + location.pathname + '?join=' + this.net.code; const done = () => { $('btnCopy').textContent = 'Länk kopierad!'; setTimeout(() => { $('btnCopy').textContent = 'Kopiera inbjudningslänk'; }, 1800); }; if (navigator.clipboard?.writeText) navigator.clipboard.writeText(link).then(done, () => prompt('Kopiera länken:', link)); else prompt('Kopiera länken:', link); };
     const name = $<HTMLInputElement>('mpName'); name.value = S.name; name.addEventListener('input', () => { S.name = name.value.trim().slice(0, 12); saveSettings(); });
-    const busy = (on: boolean) => { for (const id of ['btnHost', 'btnJoin']) ($(id) as HTMLButtonElement).disabled = on; if (on) $('mpErr').textContent = 'Ansluter…'; };
+    const busy = (on: boolean) => { for (const id of ['btnHost', 'btnJoin']) ($(id) as HTMLButtonElement).disabled = on; if (on) $('mpErr').textContent = 'Ansluter till förmedlingstjänsten… (kan ta några sekunder)'; };
     $('btnHost').onclick = async () => { this.audio.init(); busy(true); try { await this.net.host(); $('mpErr').textContent = ''; show('menu', false); show('lobby', true); this.lobby(); } catch (e) { err(e); } busy(false); };
     $('btnJoin').onclick = async () => {
       const code = $<HTMLInputElement>('mpCode').value.trim(); if (code.length < 4) { $('mpErr').textContent = 'Skriv in rumskoden du fått av värden.'; return; }
@@ -142,7 +149,7 @@ class Game {
     $('lobbyPlayers').innerHTML = (this.lobbyNames.length ? this.lobbyNames : ['Ansluter…']).map((n, i) => `<li>${n.replace(/[<>&]/g, '')}${i === 0 ? ' <em>värd</em>' : ''}</li>`).join('');
     ($('lobbyMission') as HTMLSelectElement).disabled = !host; if (!host) ($('lobbyMission') as HTMLSelectElement).value = String(this.lobbyMission);
     $('btnLobbyStart').classList.toggle('hidden', !host);
-    $('lobbyInfo').textContent = (host ? 'Ge rumskoden till dina medspelare. Upp till 4 spelare. Starta när alla är inne.' : 'Väntar på att värden startar uppdraget…') + (this.net.micOk ? ' Röstchatten är på – ni hör varandra direkt.' : ' Din mikrofon är inte tillgänglig – du hör de andra men de hör inte dig.');
+    $('lobbyInfo').textContent = (host ? 'Ge rumskoden till dina medspelare. Upp till 4 spelare. Starta när alla är inne.' : 'Väntar på att värden startar uppdraget…') + (this.net.micOk ? ' Röstchatten är på – ni hör varandra direkt.' : this.net.stream ? ' Din mikrofon är inte tillgänglig – du hör de andra men de hör inte dig.' : ' Tillåt mikrofonen i webbläsarens ruta för att vara med i röstchatten.');
   }
   fromHost(m: Msg) {
     const sim = this.sim;
