@@ -30,6 +30,7 @@ export class Actor {
   hostile = false; hasFired = false; react = -1; alertT = 0; lastSeen: Pt | null = null; hunter = false; timer = 0; lostT = 0;
   challengeT = -9; firstChallengeT = Infinity; unwatchedT = 0; panicT = 0; room = -1;
   team: Team = 'A'; ti = 0; slot = 0; cuff: Actor | null = null; cuffT = 0; claimedBy: Actor | null = null;
+  prone = false; jumpY = 0; /** footstep-noise bookkeeping */ nx = 0; nz = 0; nd = 0; nt = 0;
   percT = 0; deadT = 0; crouch = false; variant = 0; flash = 0; pitch = 0; trail: Pt[] = []; bangs = 3; pi = 0;
   constructor(public id: number, public kind: Kind, public name: string) { }
   get down() { return this.surrendered || this.restrained; }
@@ -111,7 +112,7 @@ export class Sim {
     if (d > 2.5 && Math.abs(angDiff(a.yaw, yawTo(dx, dz))) > fov / 2) return false;
     return this.los(a.x, a.z, b.x, b.z);
   }
-  height(a: Actor) { return a.down ? 1.15 : a.crouch ? 1.25 : 1.8; }
+  height(a: Actor) { return a.down ? 1.15 : a.prone ? 0.55 : a.crouch ? 1.25 : 1.8; }
 
   /** 3D ray march against walls, props, floor/ceiling and actors. */
   ray(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxD: number, ignore?: Actor) {
@@ -222,6 +223,8 @@ export class Sim {
   }
 
   // ---------- combat ----------
+  /** A player made a sound (e.g. landing after a jump). */
+  playerNoise(p: Actor, radius: number) { this.noise(p.x, p.z, radius); }
   private noise(x: number, z: number, radius: number) {
     for (const s of this.suspects) if (s.active && !s.surrendered && Math.hypot(s.x - x, s.z - z) < radius) { if (s.alertT <= 0) s.lastSeen = { x, z }; s.alertT = Math.max(s.alertT, 8); }
   }
@@ -237,7 +240,7 @@ export class Sim {
   private aiFire(a: Actor, tg: Actor, spread: number, dmg: number) {
     if (a.reloadT > 0 || a.fireCd > 0) return;
     if (a.ammo <= 0) { a.reloadT = 2.2; a.ammo = 30; return; }
-    const ty = tg.down ? 0.8 : tg.kind === 'player' && tg.crouch ? 0.9 : 1.2;
+    const ty = tg.down ? 0.8 : tg.kind === 'player' && tg.prone ? 0.3 : tg.kind === 'player' && tg.crouch ? 0.9 : 1.2;
     let dx = tg.x - a.x, dy = ty - 1.4, dz = tg.z - a.z; const d = Math.hypot(dx, dy, dz); dx /= d; dy /= d; dz /= d;
     if (a.kind === 'officer') { // never shoot through friends or innocents
       for (const o of this.actors) {
@@ -634,6 +637,11 @@ export class Sim {
     this.time += dt;
     for (const d of this.level.doors) d.open += Math.max(-dt * 2.8, Math.min(dt * 2.8, d.target - d.open));
     for (const p of this.players) {
+      // footsteps: running is heard far away, walking nearby; sneaking, crouching and crawling are silent
+      if (p.alive) {
+        p.nd += Math.hypot(p.x - p.nx, p.z - p.nz); p.nx = p.x; p.nz = p.z; p.nt += dt;
+        if (p.nt >= 0.4) { const v = p.nd / p.nt; p.nd = 0; p.nt = 0; if (!p.prone && v < 9) { if (v > 4.4) this.noise(p.x, p.z, 12); else if (v > 2.4) this.noise(p.x, p.z, 6); } }
+      }
       p.flash = Math.max(0, p.flash - dt * 0.22);
       if (p.cuff) {
         const c = p.cuff;

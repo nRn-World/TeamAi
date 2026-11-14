@@ -95,3 +95,6 @@ button:disabled { opacity:.5; cursor:default; }
 
 .lobbywait{margin:10px 0 14px;padding:12px 14px;border-radius:8px;background:rgba(79,208,122,.12);border:1px solid rgba(79,208,122,.5);color:#bff0cf;font-weight:600;line-height:1.4}
 #lobbyPlayers em.you{color:#4fd07a}
+
+#stance{position:absolute;left:18px;bottom:74px;font:700 12px/1 system-ui,sans-serif;letter-spacing:.14em;color:#8fe0a8;text-shadow:0 1px 3px #000}
+#stance.loud{color:#ffb14a}
