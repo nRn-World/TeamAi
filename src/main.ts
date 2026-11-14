@@ -20,20 +20,23 @@ const params = new URLSearchParams(location.search);
 const AUTO = params.has('auto');
 
 // ---------------- settings ----------------
-const defaults = { sens: 1, vol: 0.8, mic: 1, ptt: 1, lang: 'sv-SE', tts: 1, head: 0, qual: 1, diff: 1, name: '' };
+const defaults = { sens: 1, vol: 0.8, mic: 1, ptt: 1, lang: 'en-US', tts: 1, head: 0, qual: 1, diff: 1, name: '' };
 type Settings = typeof defaults;
 const S: Settings = { ...defaults, ...JSON.parse(localStorage.getItem('teamai.settings') || '{}') };
+if (!String(S.lang).startsWith('en')) S.lang = 'en-US'; // the game is English only; older saves may hold another language
 const best: Record<string, number> = JSON.parse(localStorage.getItem('teamai.best') || '{}');
 if (params.has('q')) S.qual = +params.get('q')!;
 const saveSettings = () => localStorage.setItem('teamai.settings', JSON.stringify(S));
 
 // where the animated arms move to when aiming: x, y, z offset and pitch, yaw; carbine then pistol
 const AIMPOS = [[-0.113, 0.036, 0, 0, 0], [-0.03, 0.03, -0.03, 0, 0]];
+// the challenges the player and the officers yell; one is picked at random each time
+const SHOUTS = ['Police! Drop the weapon!', 'Police! Get on the ground!', 'Police! Hands up! Now!', 'Get down! Get down on the ground!', 'Drop it! Drop it now!', 'Show me your hands!'];
 const WEAPONS = [
-  { name: 'KARBIN', mag: 30, rate: 0.095, dmg: 34, auto: true, spread: 0.004, reload: 2.0, kick: 0.011 },
+  { name: 'CARBINE', mag: 30, rate: 0.095, dmg: 34, auto: true, spread: 0.004, reload: 2.0, kick: 0.011 },
   { name: 'PISTOL', mag: 15, rate: 0.15, dmg: 26, auto: false, spread: 0.008, reload: 1.4, kick: 0.016 },
 ];
-const ORDER_LABEL: Record<string, string> = { follow: 'FÖLJER', hold: 'HÅLLER', move: 'FÖRFLYTTAR', cover: 'SKYDDAR DIG', stack: 'VID DÖRR', breach: 'STORMAR', door: 'DÖRR', restrain: 'SÄKRAR' };
+const ORDER_LABEL: Record<string, string> = { follow: 'FOLLOWING', hold: 'HOLDING', move: 'MOVING', cover: 'COVERING YOU', stack: 'AT DOOR', breach: 'STORMAR', door: 'DOOR', restrain: 'SECURING' };
 
 class Game {
   renderer: THREE.WebGLRenderer; scene = new THREE.Scene(); camera = new THREE.PerspectiveCamera(74, 1, 0.06, 120);
@@ -59,7 +62,7 @@ class Game {
     this.voice.onState = (s, d) => this.micState(s, d);
     this.voice.onIgnored = t => { // heard an order while V was not held: tell the player instead of silently dropping it
       if (this.state !== 'play' || !t || !parseCommand(t, this.lastTeam)) return;
-      $('heard').textContent = '« ' + t + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'HÅLL V INTRYCKT MEDAN DU PRATAR – ordern skickades inte'; this.parsedT = 5; this.audio.fail();
+      $('heard').textContent = '« ' + t + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'HOLD V WHILE YOU SPEAK – the order was not sent'; this.parsedT = 5; this.audio.fail();
     };
     this.applySettings();
     requestAnimationFrame(() => this.frame());
@@ -84,19 +87,19 @@ class Game {
       const b = document.createElement('button'); b.className = 'mission';
       const cv = document.createElement('canvas'); this.drawPlan(i, cv, 5); b.appendChild(cv);
       const d = document.createElement('div'); d.className = 'minfo';
-      d.innerHTML = `<em>${String(i + 1).padStart(2, '0')}</em><b>${m.name}</b><small>${m.suspects} misstänkta · ${m.civs} civila</small>` + (best[i] != null ? `<span class="best">Bästa ${best[i]}/100</span>` : '<span class="best none">Ej klarat</span>');
+      d.innerHTML = `<em>${String(i + 1).padStart(2, '0')}</em><b>${m.name}</b><small>${m.suspects} suspects · ${m.civs} civilians</small>` + (best[i] != null ? `<span class="best">Best ${best[i]}/100</span>` : '<span class="best none">Ej klarat</span>');
       b.appendChild(d);
       b.onclick = () => { this.audio.init(); this.audio.ui(); this.mission = i; $('briefTitle').textContent = m.name; $('briefText').textContent = m.brief; this.drawPlan(i, $<HTMLCanvasElement>('briefMap'), 9);
-        $('briefFacts').innerHTML = `<div><b>${m.suspects}</b>misstänkta</div><div><b>${m.civs}</b>civila</div><div><b>4</b>poliser i teamet</div>`; show('menu', false); show('brief', true); };
+        $('briefFacts').innerHTML = `<div><b>${m.suspects}</b>suspects</div><div><b>${m.civs}</b>civilians</div><div><b>4</b>officers on your team</div>`; show('menu', false); show('brief', true); };
       box.appendChild(b);
     });
-    const done = MISSIONS.filter((_, i) => best[i] != null).length; $('mBest').textContent = `${done}/${MISSIONS.length} uppdrag klarade`;
-    $('mMic').textContent = Voice.supported ? 'Röststyrning redo' : 'Röststyrning saknas'; $('mMic').className = Voice.supported ? 'ok' : 'bad';
+    const done = MISSIONS.filter((_, i) => best[i] != null).length; $('mBest').textContent = `${done}/${MISSIONS.length} missions completed`;
+    $('mMic').textContent = Voice.supported ? 'Voice control ready' : 'No voice control'; $('mMic').className = Voice.supported ? 'ok' : 'bad';
     document.querySelectorAll<HTMLElement>('.mnav [data-tab]').forEach(n => n.onclick = () => { this.audio.init(); this.audio.ui();
       document.querySelectorAll('.mnav [data-tab]').forEach(o => o.classList.toggle('on', o === n)); for (const id of ['tabPlay', 'tabMp']) show(id, id === n.dataset.tab); });
     const w = $('micwarn');
-    if (!Voice.supported) { w.className = 'note warn'; w.textContent = 'Din webbläsare saknar röstigenkänning (Web Speech API). Använd Chrome eller Edge för röststyrning – annars kan du ge order med Enter eller snabbtangenterna.'; }
-    else { w.className = 'note'; w.textContent = 'Röststyrning: tillåt mikrofonen när webbläsaren frågar. Om spelet visas inbäddat och mikrofonen blockeras – öppna det i en egen flik.'; }
+    if (!Voice.supported) { w.className = 'note warn'; w.textContent = 'Your browser has no speech recognition (Web Speech API). Use Chrome or Edge for voice control – otherwise give orders with Enter or the quick keys.'; }
+    else { w.className = 'note'; w.textContent = 'Voice control: allow the microphone when the browser asks. If the game is embedded in another page and the microphone is blocked – open it in its own tab.'; }
   }
   /** Blueprint-style floor plan of a mission, drawn for the menu card / briefing. */
   drawPlan(index: number, c: HTMLCanvasElement, k: number) {
@@ -130,7 +133,7 @@ class Game {
     if (this.net.role === 'client') return;
     const seed = (Math.random() * 1e6) | 0;
     if (this.net.role === 'host') {
-      const conns = this.net.conns.slice(0, 3), names = [S.name || 'Värd', ...conns.map((c, i) => this.connName.get(c) || 'Spelare ' + (i + 2))];
+      const conns = this.net.conns.slice(0, 3), names = [S.name || 'Host', ...conns.map((c, i) => this.connName.get(c) || 'Player ' + (i + 2))];
       this.connIdx.clear(); conns.forEach((c, i) => { this.connIdx.set(c, i + 1); c.send({ t: 'start', mission, seed, diff: S.diff, n: names.length, you: i + 1, names }); });
       this.start(mission, seed, names.length, 0, S.diff, names);
     } else this.start(mission, seed);
@@ -139,51 +142,51 @@ class Game {
   bindNet() {
     const err = (e: any) => {
       const t = e?.type, m = String(e?.message || '');
-      const why = m.startsWith('Hittade') ? m : t === 'network' || t === 'server-error' || t === 'socket-error' || t === 'socket-closed' || m === 'timeout' ? 'Förmedlingstjänsten som delar ut rumskoder svarar inte. Den kan vara nere, eller blockeras av annonsblockerare, VPN eller brandvägg. Stäng av dem för sidan och försök igen om en stund.' : t === 'browser-incompatible' ? 'Webbläsaren saknar stöd för direktanslutning (WebRTC). Använd Chrome eller Edge.' : t === 'peer-unavailable' ? 'Hittade inget rum med den koden.' : 'Okänt fel (' + (t || m || e) + ').';
-      $('mpErr').textContent = 'Kunde inte ansluta. ' + why;
+      const why = m.startsWith('Hittade') ? m : t === 'network' || t === 'server-error' || t === 'socket-error' || t === 'socket-closed' || m === 'timeout' ? 'The matchmaking service that hands out room codes is not responding. It may be down, or blocked by an ad blocker, VPN or firewall. Turn those off for this page and try again in a moment.' : t === 'browser-incompatible' ? 'This browser does not support direct connections (WebRTC). Use Chrome or Edge.' : t === 'peer-unavailable' ? 'No room found with that code.' : 'Unknown error (' + (t || m || e) + ').';
+      $('mpErr').textContent = 'Could not connect. ' + why;
     };
     const pre = params.get('join'); if (pre) $<HTMLInputElement>('mpCode').value = pre.toUpperCase().slice(0, 5);
     this.net.onVoice = () => { if (!$('lobby').classList.contains('hidden')) this.lobby(); };
-    $('btnCopy').onclick = () => { const link = location.origin + location.pathname + '?join=' + this.net.code; const done = () => { $('btnCopy').textContent = 'Länk kopierad!'; setTimeout(() => { $('btnCopy').textContent = 'Kopiera inbjudningslänk'; }, 1800); }; if (navigator.clipboard?.writeText) navigator.clipboard.writeText(link).then(done, () => prompt('Kopiera länken:', link)); else prompt('Kopiera länken:', link); };
+    $('btnCopy').onclick = () => { const link = location.origin + location.pathname + '?join=' + this.net.code; const done = () => { $('btnCopy').textContent = 'Link copied!'; setTimeout(() => { $('btnCopy').textContent = 'Copy invite link'; }, 1800); }; if (navigator.clipboard?.writeText) navigator.clipboard.writeText(link).then(done, () => prompt('Copy the link:', link)); else prompt('Copy the link:', link); };
     const name = $<HTMLInputElement>('mpName'); name.value = S.name; name.addEventListener('input', () => { S.name = name.value.trim().slice(0, 12); saveSettings(); });
-    const busy = (on: boolean) => { for (const id of ['btnHost', 'btnJoin']) ($(id) as HTMLButtonElement).disabled = on; if (on) $('mpErr').textContent = 'Ansluter till förmedlingstjänsten… (kan ta några sekunder)'; };
+    const busy = (on: boolean) => { for (const id of ['btnHost', 'btnJoin']) ($(id) as HTMLButtonElement).disabled = on; if (on) $('mpErr').textContent = 'Connecting to the matchmaking service… (may take a few seconds)'; };
     $('btnHost').onclick = async () => { this.audio.init(); busy(true); try { await this.net.host(); $('mpErr').textContent = ''; show('menu', false); show('lobby', true); this.lobby(); } catch (e) { err(e); } busy(false); };
     $('btnJoin').onclick = async () => {
-      const code = $<HTMLInputElement>('mpCode').value.trim(); if (code.length < 4) { $('mpErr').textContent = 'Skriv in rumskoden du fått av värden.'; return; }
+      const code = $<HTMLInputElement>('mpCode').value.trim(); if (code.length < 4) { $('mpErr').textContent = 'Enter the room code you got from the host.'; return; }
       this.audio.init(); busy(true);
-      try { await this.net.join(code); this.net.send({ t: 'hello', name: S.name || 'Spelare' }); $('mpErr').textContent = ''; show('menu', false); show('lobby', true); this.lobby(); } catch (e) { err(e); this.net.close(); }
+      try { await this.net.join(code); this.net.send({ t: 'hello', name: S.name || 'Player' }); $('mpErr').textContent = ''; show('menu', false); show('lobby', true); this.lobby(); } catch (e) { err(e); this.net.close(); }
       busy(false);
     };
     $('btnLeave').onclick = () => this.toMenu();
     $('btnLobbyStart').onclick = () => { this.audio.init(); this.newRound(+($('lobbyMission') as HTMLSelectElement).value); };
-    const sel = $('lobbyMission') as HTMLSelectElement; sel.innerHTML = MISSIONS.map((m, i) => `<option value="${i}">Uppdrag ${i + 1}: ${m.name}</option>`).join(''); sel.onchange = () => this.lobby();
+    const sel = $('lobbyMission') as HTMLSelectElement; sel.innerHTML = MISSIONS.map((m, i) => `<option value="${i}">Mission ${i + 1}: ${m.name}</option>`).join(''); sel.onchange = () => this.lobby();
     this.net.onPeers = () => {
       if (this.net.role !== 'host') return;
-      if (this.sim && (this.state === 'play' || this.state === 'pause')) for (const [c, i] of this.connIdx) if (!this.net.conns.includes(c)) { const pa = this.sim.players[i]; this.connIdx.delete(c); if (pa?.alive) { pa.alive = false; pa.hp = 0; this.log(`${pa.name} lämnade spelet.`, 'warn'); this.sim.checkPlayers(); } }
+      if (this.sim && (this.state === 'play' || this.state === 'pause')) for (const [c, i] of this.connIdx) if (!this.net.conns.includes(c)) { const pa = this.sim.players[i]; this.connIdx.delete(c); if (pa?.alive) { pa.alive = false; pa.hp = 0; this.log(`${pa.name} left the game.`, 'warn'); this.sim.checkPlayers(); } }
       this.lobby();
     };
     this.net.onClosed = why => { if (!this.net.online) return; this.toMenu(); $('mpErr').textContent = why; };
     this.net.onMsg = (c, m) => { if (this.net.role === 'host') this.fromClient(c, m); else this.fromHost(m); };
-    $('btnTts').onclick = () => { this.audio.init(); setTimeout(() => { $('latInfo').textContent = this.audio.latencyMs ? `Ljudfördröjning enligt webbläsaren: ${this.audio.latencyMs} ms.` : ''; }, 300); const n = this.speech.voiceCount; this.speech.say(S.lang.startsWith('sv') ? 'Team A, uppfattat. Vi följer dig.' : 'Team A, copy. Following you.', 1, 1.1, 1, true); $('ttsInfo').textContent = n === 0 ? 'Webbläsaren hittar inga talröster – teamet kan då inte prata med ord. Installera en röst i operativsystemets tal-inställningar eller använd Chrome/Edge.' : this.speech.hasLangVoice ? `${n} röster hittades. Hör du inget? Kontrollera volymen och att fliken inte är tystad.` : `${n} röster hittades, men ingen på valt språk – webbläsarens standardröst används.`; };
+    $('btnTts').onclick = () => { this.audio.init(); setTimeout(() => { $('latInfo').textContent = this.audio.latencyMs ? `Audio latency reported by the browser: ${this.audio.latencyMs} ms.` : ''; }, 300); const n = this.speech.voiceCount; if (!this.speak('Copy, following you.', null, { voice: 'o1' })) this.speech.say('Team A, copy. Following you.', 1, 1.1, 1, true); $('ttsInfo').textContent = n === 0 ? 'The browser has no speech voices – lines without a recorded clip stay silent. Install a voice in the operating system’s speech settings or use Chrome/Edge.' : this.speech.hasLangVoice ? `${n} voices found. Hear nothing? Check the volume and that the tab is not muted.` : `${n} voices found, but none in the chosen language – the browser's default voice is used.`; };
   }
   lobbyMe = 0;
   lobby() {
     const host = this.net.role === 'host';
     if (host) {
-      this.lobbyNames = [S.name || 'Värd', ...this.net.conns.map((c, i) => this.connName.get(c) || 'Spelare ' + (i + 2))]; this.lobbyMission = +($('lobbyMission') as HTMLSelectElement).value;
+      this.lobbyNames = [S.name || 'Host', ...this.net.conns.map((c, i) => this.connName.get(c) || 'Player ' + (i + 2))]; this.lobbyMission = +($('lobbyMission') as HTMLSelectElement).value;
       this.net.broadcast({ t: 'lobby', names: this.lobbyNames, ids: [this.net.id, ...this.net.conns.map(c => c.peer)], mission: this.lobbyMission });
     }
     $('lobbyCode').textContent = this.net.code;
-    $('lobbyPlayers').innerHTML = (this.lobbyNames.length ? this.lobbyNames : ['Ansluter…']).map((n, i) => `<li>${n.replace(/[<>&]/g, '')}${i === 0 ? ' <em>värd</em>' : ''}${i === (host ? 0 : this.lobbyMe) ? ' <em class="you">du</em>' : ''}</li>`).join('');
-    const hostName = (this.lobbyNames[0] || 'värden').replace(/[<>&]/g, '');
-    $('lobbyTitle').textContent = host ? 'Ditt rum – du är värd' : 'Du är med i ' + hostName + 's rum';
+    $('lobbyPlayers').innerHTML = (this.lobbyNames.length ? this.lobbyNames : ['Ansluter…']).map((n, i) => `<li>${n.replace(/[<>&]/g, '')}${i === 0 ? ' <em>host</em>' : ''}${i === (host ? 0 : this.lobbyMe) ? ' <em class="you">you</em>' : ''}</li>`).join('');
+    const hostName = (this.lobbyNames[0] || 'the host').replace(/[<>&]/g, '');
+    $('lobbyTitle').textContent = host ? 'Your room – you are the host' : 'You have joined ' + hostName + '’s room';
     $('btnCopy').classList.toggle('hidden', !host);
     $('lobbyWait').classList.toggle('hidden', host);
-    $('lobbyWait').textContent = 'Ansluten ✔  Väntar på att ' + hostName + ' trycker «Starta uppdraget». Du behöver inte göra något.';
-    $('lobbySelLabel').textContent = host ? 'Uppdrag' : 'Uppdrag (värden väljer)';
+    $('lobbyWait').textContent = 'Connected ✔  Waiting for ' + hostName + ' to press «Start mission». You do not need to do anything.';
+    $('lobbySelLabel').textContent = host ? 'Mission' : 'Mission (the host chooses)';
     ($('lobbyMission') as HTMLSelectElement).disabled = !host; if (!host) ($('lobbyMission') as HTMLSelectElement).value = String(this.lobbyMission);
     $('btnLobbyStart').classList.toggle('hidden', !host);
-    $('lobbyInfo').textContent = (host ? 'Ge rumskoden till dina medspelare. Upp till 4 spelare. Starta när alla är inne.' : 'Spelet startar automatiskt hos dig när värden startar.') + (this.net.micOk ? ' Röstchatten är på – ni hör varandra direkt.' : this.net.stream ? ' Din mikrofon är inte tillgänglig – du hör de andra men de hör inte dig.' : ' Tillåt mikrofonen i webbläsarens ruta för att vara med i röstchatten.');
+    $('lobbyInfo').textContent = (host ? 'Give the room code to your friends. Up to 4 players. Start when everyone is in.' : 'The game starts automatically for you when the host starts.') + (this.net.micOk ? ' Voice chat is on – you can hear each other right away.' : this.net.stream ? ' Your microphone is not available – you hear the others but they cannot hear you.' : ' Allow the microphone in the browser prompt to join the voice chat.');
   }
   fromHost(m: Msg) {
     const sim = this.sim;
@@ -193,7 +196,7 @@ class Game {
     else if (m.t === 'ev' && sim && (this.state === 'play' || this.state === 'pause')) for (const e of m.e) this.handle(decodeEv(sim, e));
   }
   fromClient(c: DataConnection, m: Msg) {
-    if (m.t === 'hello') { this.connName.set(c, String(m.name || 'Spelare').slice(0, 12)); this.lobby(); return; }
+    if (m.t === 'hello') { this.connName.set(c, String(m.name || 'Player').slice(0, 12)); this.lobby(); return; }
     const sim = this.sim, i = this.connIdx.get(c); if (!sim || !i || sim.over) return; const pa = sim.players[i]; if (!pa || !pa.alive) return;
     const num = (v: any) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
     switch (m.t) {
@@ -228,8 +231,8 @@ class Game {
     this.selTeam = this.lastTeam = 'ALL'; this.state = 'play'; this.last = performance.now(); $('log').innerHTML = ''; $('heard').textContent = ''; $('parsed').textContent = '';
     this.buildMap(); show('menu', false); show('hud', true); this.updateHud(true);
     if (S.mic && !AUTO) this.voice.start();
-    if (mp && !document.pointerLockElement) this.log('Klicka i spelet för att ta kontroll över musen.', 'warn');
-    this.log('Insatsledning: ' + MISSIONS[mission].name + '. Ge order med rösten – lycka till.', 'me');
+    if (mp && !document.pointerLockElement) this.log('Click in the game to take control of the mouse.', 'warn');
+    this.log('Insatsledning: ' + MISSIONS[mission].name + '. Give orders with your voice – good luck.', 'me');
   }
 
   // ---------------- input ----------------
@@ -282,45 +285,46 @@ class Game {
   // ---------------- commands ----------------
   lastSay = ''; lastSayT = 0; micS = ''; micD: string | undefined;
   /** Speaks a line as a given character: recorded clip with a per-character voice, else the browser's speech synthesis. */
-  speak(text: string, a: Actor | null, o: { gain?: number; pan?: number; muffle?: boolean; pitch?: number; rate?: number } = {}) {
-    if (!S.tts) return;
-    const clean = text.replace(/^Team [AB]: /, ''), kind = a?.kind ?? 'player';
-    // each character gets its own voice: [recorded voice, pitch/tempo]
-    const prof: ['m' | 'f', number] = kind === 'officer' ? ([['m', 1.0], ['f', 1.0], ['m', 0.87], ['f', 0.92]] as ['m' | 'f', number][])[a!.slot] ?? ['m', 1]
-      : kind === 'suspect' ? ([['m', 0.8], ['m', 0.93], ['f', 0.84], ['m', 0.86], ['m', 1.02]] as ['m' | 'f', number][])[a!.id % 5]
-        : kind === 'civ' ? ([['f', 1.0], ['m', 1.12], ['f', 1.1], ['m', 1.22], ['f', 0.94]] as ['m' | 'f', number][])[a!.id % 5]
-          : a && a !== this.sim?.player ? ['m', 0.9 + (a.pi % 3) * 0.07] : ['m', 0.97];
-    const ms = this.audio.line(clean, { voice: prof[0], rate: prof[1], radio: kind === 'officer', gruff: kind === 'suspect', gain: o.gain, pan: o.pan, muffle: o.muffle });
+  speak(text: string, a: Actor | null, o: { gain?: number; pan?: number; muffle?: boolean; pitch?: number; rate?: number; voice?: string } = {}) {
+    if (!S.tts) return 0;
+    let clean = text.replace(/^Team [AB]: /, ''); const kind = a?.kind ?? 'player';
+    if (clean === SHOUTS[0]) clean = SHOUTS[Math.floor(Math.random() * SHOUTS.length)]; // a challenge is never yelled the same way twice in a row
+    // every character has a voice of its own (the voice matches the figure: women sound like women)
+    const voice = o.voice ?? (kind === 'officer' ? 'o' + ((a!.slot % 4) + 1) : kind === 'suspect' ? ['s1', 's2', 's4', 's3', 's5'][a!.id % 5] : kind === 'civ' ? 'c' + ((a!.id % 5) + 1) : 'p1');
+    const rate = kind === 'player' && a && a !== this.sim?.player ? 0.94 + (a.pi % 3) * 0.06 : 1, loud = this.audio.isShout(clean);
+    const ms = this.audio.line(clean, { voice, rate, radio: kind === 'officer' && !loud, gruff: kind === 'suspect', gain: (o.gain ?? 1) * (loud ? 1.5 : 1), pan: o.pan, muffle: o.muffle });
     if (ms) this.speech.busy(ms); else this.speech.say(text, o.pitch ?? 1, o.rate ?? 1.2, o.gain ?? 0.9);
+    return ms;
   }
   heard(text: string, fromMic: boolean) {
     if (this.state !== 'play' || !this.sim) return;
     if (fromMic && !S.head && !S.ptt && this.speech.speaking) { // don't let the team's own radio voice trigger orders
-      $('heard').textContent = '« ' + text.split('|')[0].trim() + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'Ignorerat – teamet pratade samtidigt (säg det igen)'; this.parsedT = 4; return;
+      $('heard').textContent = '« ' + text.split('|')[0].trim() + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'Ignored – the team was talking at the same time (say it again)'; this.parsedT = 4; return;
     }
     const alts = text.split('|').map(s => s.trim()).filter(Boolean); let cmd: Command | null = null;
     for (const a of alts) { cmd = parseCommand(a, this.lastTeam); if (cmd) break; }
     $('heard').textContent = '« ' + alts[0] + ' »'; this.parsedT = 4;
     const p = $('parsed');
-    if (!cmd) { p.className = 'bad'; p.textContent = 'Uppfattade ingen order'; this.audio.fail(); return; }
+    if (!cmd) { p.className = 'bad'; p.textContent = 'No order recognised'; this.audio.fail(); return; }
     this.exec(cmd, !fromMic);
   }
   exec(cmd: Command, byKey: boolean) {
     const sim = this.sim!; const p = $('parsed'); p.className = ''; this.parsedT = 4;
     if (cmd.action === 'shout') { p.textContent = ACTION_LABEL.shout; this.shout(byKey); return; }
-    const tname = cmd.team === 'ALL' ? 'ALLA' : 'TEAM ' + cmd.team;
+    const tname = cmd.team === 'ALL' ? 'ALL' : 'TEAM ' + cmd.team;
     p.textContent = `${tname} › ${ACTION_LABEL[cmd.action]}${cmd.action === 'move' && cmd.dir ? ' ' + DIR_LABEL[cmd.dir] : ''}`;
     this.lastTeam = cmd.team; this.selTeam = cmd.team;
     if (this.mirror) this.net.send({ t: 'cmd', cmd, aim: this.aimPoint() });
-    const ok = this.mirror ? true : sim.command(cmd, this.aimPoint()); if (ok) this.audio.ok(); else { this.audio.fail(); this.log('Ingen i det teamet kan svara.', 'warn'); }
+    const ok = this.mirror ? true : sim.command(cmd, this.aimPoint()); if (ok) this.audio.ok(); else { this.audio.fail(); this.log('Nobody on that team can answer.', 'warn'); }
     this.updateHud(true);
   }
   aimDir() { const cp = Math.cos(this.pitch); return new THREE.Vector3(-Math.sin(this.yaw) * cp, Math.sin(this.pitch), -Math.cos(this.yaw) * cp); }
   aimPoint() { const sim = this.sim!, p = sim.player, d = this.aimDir(); const h = sim.ray(p.x, this.eye, p.z, d.x, d.y, d.z, 40, p); return h.kind === 'none' ? null : { x: h.x - d.x * 0.4, z: h.z - d.z * 0.4 }; }
+  private shoutT = 0;
   shout(tts: boolean) {
     const sim = this.sim!; if (!sim.player.alive) return; if (this.mirror) this.net.send({ t: 'shout' }); else sim.playerShout();
-    if (tts) this.speak(S.lang.startsWith('sv') ? 'Polis! Ner på marken!' : 'Police! Get down!', null, { pitch: 0.7, rate: 1.3, gain: 1 });
-    this.log('DU: Polis! Lägg ner vapnet!', 'me');
+    void tts; const now = performance.now(); if (now - this.shoutT > 900) { this.shoutT = now; this.speak(SHOUTS[0], null, { pitch: 0.7, rate: 1.3, gain: 1 }); } // your own voice yells the challenge, also when you gave it by microphone
+    this.log('YOU: Police! Drop the weapon!', 'me');
   }
   reload() { const w = WEAPONS[this.weapon]; if (this.reloadT > 0 || this.ammo[this.weapon] >= w.mag || this.reserve[this.weapon] <= 0) return; this.reloadT = w.reload; if (this.weapon === 0) this.arms.reload(w.reload); this.audio.reload(this.weapon === 0 ? 'rifle' : 'pistol', w.reload); }
   throwBang() {
@@ -358,7 +362,7 @@ class Game {
         break;
       }
       case 'hurt': this.views.get(e.a)?.wound(); if (e.a === p) { this.dmgFx = 1; this.audio.hurt(); this.recoil += 0.03; } else if (e.a.kind !== 'officer') { /* hit marker only for own shots handled below */ } break;
-      case 'death': if (e.a !== p) { fx.burst(e.a.x, 1.1, e.a.z, 26, 0x8a0f0f, 2.6, 8, 0.7); fx.burst(e.a.x, 0.5, e.a.z, 14, 0x6a0808, 1.4, 6, 0.9); } if (e.a.kind === 'officer') this.log(`${e.a.name} har stupat.`, 'warn'); break;
+      case 'death': if (e.a !== p) { fx.burst(e.a.x, 1.1, e.a.z, 26, 0x8a0f0f, 2.6, 8, 0.7); fx.burst(e.a.x, 0.5, e.a.z, 14, 0x6a0808, 1.4, 6, 0.9); } if (e.a.kind === 'officer') this.log(`${e.a.name} has been killed.`, 'warn'); break;
       case 'door': { const q = this.pan(e.door.cx + 0.5, e.door.cz + 0.5); this.audio.door(q.d, q.pan); break; }
       case 'say': {
         const o = e.a; this.log(`${o.name}: ${e.text.replace(/^Team [AB]: /, '')}`, o.team);
@@ -371,34 +375,34 @@ class Game {
       }
       case 'bang': { const q = this.pan(e.x, e.z); this.audio.bang(q.d, q.pan, p.flash); fx.flashAt(e.x, 1, e.z, 900, 0.12, 0xffffff); fx.burst(e.x, 0.3, e.z, 60, 0xffffff, 7, 3, 0.5); fx.burst(e.x, 0.3, e.z, 30, 0x999999, 2, -0.5, 1.6); break; }
       case 'throw': this.audio.step(0.3); break;
-      case 'shout': if (e.a !== p) { this.log(`${e.a.name}: Polis! Lägg ner vapnet!`, ''); const q = this.pan(e.a.x, e.a.z); if (!this.audio.hasLine('Polis! Lägg ner vapnet!') || !S.tts) this.audio.vocal('shout', 0.9, q.d, q.pan); else this.speak('Polis! Lägg ner vapnet!', e.a, { gain: 1 / (1 + q.d * 0.1), pan: q.pan }); } break;
+      case 'shout': if (e.a !== p) { this.log(`${e.a.name}: Police! Drop the weapon!`, ''); const q = this.pan(e.a.x, e.a.z); if (!this.audio.hasLine(SHOUTS[0]) || !S.tts) this.audio.vocal('shout', 0.9, q.d, q.pan); else this.speak(SHOUTS[0], e.a, { gain: 1 / (1 + q.d * 0.1), pan: q.pan }); } break;
       case 'bark': {
         const a = e.a, q = this.pan(a.x, a.z); if (q.d > 22) break;
-        const near = sim.los(p.x, p.z, a.x, a.z) ? 1 : 0.45, pitch = (a.kind === 'civ' ? 1.25 : 0.85) + (a.variant % 3) * 0.12, sv = S.lang.startsWith('sv');
+        const near = sim.los(p.x, p.z, a.x, a.z) ? 1 : 0.45, pitch = (a.kind === 'civ' ? 1.25 : 0.85) + (a.variant % 3) * 0.12;
         const d2 = q.d / near; // muffled through walls
-        const clip = sv && !!S.tts && this.audio.linesReady; // recorded lines replace the synthetic shout
+        const clip = !!S.tts && this.audio.linesReady; // recorded lines replace the synthetic shout
         const pick = (l: string[]) => l[(a.id + Math.floor(sim.time)) % l.length];
         let line = '';
         if (e.kind === 'pain') this.audio.vocal('pain', pitch, d2, q.pan);
         else if (e.kind === 'die') this.audio.vocal('die', pitch, d2, q.pan);
-        else if (e.kind === 'spot') { if (!clip) this.audio.vocal('shout', pitch, d2, q.pan); line = sv ? pick(['Snuten!', 'Polisen är här!', 'De kommer in!', 'Skjut dem!', 'Vi har besök!', 'Ta dem!']) : pick(['Cops!', 'They are here!', 'Shoot them!']); }
-        else if (e.kind === 'unrest') { if (!clip) this.audio.vocal('shout', pitch, d2, q.pan); line = sv ? 'Nu sticker jag!' : 'I am out of here!'; }
-        else if (e.kind === 'panic') { this.audio.vocal('whimper', pitch, d2, q.pan); line = sv ? pick(['Hjälp!', 'Nej, nej!', 'Skjut inte!', 'Vad händer?']) : pick(['Help!', 'No, no!']); }
-        else if (e.kind === 'surrender') { if (!clip || a.kind === 'civ') this.audio.vocal(a.kind === 'civ' ? 'whimper' : 'yes', pitch, d2, q.pan); line = a.kind === 'civ' ? (sv ? pick(['Skjut inte, snälla!', 'Jag gör som ni säger!', 'Hjälp mig!']) : pick(['Please do not shoot!', 'Help me!'])) : (sv ? pick(['Skjut inte! Jag ger upp!', 'Okej, okej! Jag ger mig!', 'Jag släpper vapnet!']) : pick(['Do not shoot! I give up!', 'Okay, okay!'])); }
-        if (line && q.d < 16) { this.log(`${a.kind === 'civ' ? 'Civil' : 'Misstänkt'}: ${line}`, ''); this.speak(line, a, { pitch: Math.min(2, pitch * 1.1), rate: 1.25, gain: Math.max(0.15, near * (1 - q.d / 20)), pan: q.pan, muffle: near < 1 }); }
+        else if (e.kind === 'spot') { if (!clip) this.audio.vocal('shout', pitch, d2, q.pan); line = pick(['Cops!', 'The cops are here!', "They're coming in!", 'Shoot them!', 'We got company!', 'Get them!']); }
+        else if (e.kind === 'unrest') { if (!clip) this.audio.vocal('shout', pitch, d2, q.pan); line = "I'm out of here!"; }
+        else if (e.kind === 'panic') { this.audio.vocal('whimper', pitch, d2, q.pan); line = pick(['Help!', 'No, no!', "Don't shoot!", "What's going on?"]); }
+        else if (e.kind === 'surrender') { if (!clip || a.kind === 'civ') this.audio.vocal(a.kind === 'civ' ? 'whimper' : 'yes', pitch, d2, q.pan); line = a.kind === 'civ' ? pick(["Don't shoot, please!", "I'll do what you say!", 'Help me!', "Please don't hurt me!"]) : pick(["Don't shoot! I give up!", 'Okay, okay! I give up!', "I'm dropping the gun!"]); }
+        if (line && q.d < 16) { this.log(`${a.kind === 'civ' ? 'Civilian' : 'Suspect'}: ${line}`, ''); this.speak(line, a, { pitch: Math.min(2, pitch * 1.1), rate: 1.25, gain: Math.max(0.15, near * (1 - q.d / 20)), pan: q.pan, muffle: near < 1 }); }
         break;
       }
-      case 'cuff': { const q = this.pan(e.a.x, e.a.z); if (q.d < 10) this.audio.cuff(); if (e.by === p) this.log(e.a.kind === 'suspect' ? 'Du säkrade en misstänkt.' : 'Du säkrade en civil.', 'me'); break; }
-      case 'surrender': { const q = this.pan(e.a.x, e.a.z); if (q.d < 14 && sim.los(p.x, p.z, e.a.x, e.a.z)) this.log(e.a.kind === 'suspect' ? 'Misstänkt ger upp – sätt handfängsel!' : 'Civil lyder – säkra personen.', ''); break; }
+      case 'cuff': { const q = this.pan(e.a.x, e.a.z); if (q.d < 10) this.audio.cuff(); if (e.by === p) this.log(e.a.kind === 'suspect' ? 'You secured a suspect.' : 'You secured a civilian.', 'me'); break; }
+      case 'surrender': { const q = this.pan(e.a.x, e.a.z); if (q.d < 14 && sim.los(p.x, p.z, e.a.x, e.a.z)) this.log(e.a.kind === 'suspect' ? 'Suspect gives up – cuff them!' : 'Civilian complies – cuff them before you move on.', ''); break; }
       case 'marker': fx.marker(e.x, e.z, TEAM_COLOR[e.team]); break;
       case 'info': this.log(e.text, 'warn'); this.audio.fail(); break;
-      case 'end': this.endT = 2.2; this.log(e.win ? 'Byggnaden är säkrad. Bra jobbat!' : 'Du är nere. Insatsen avbryts.', e.win ? 'me' : 'warn'); break;
+      case 'end': this.endT = 2.2; this.log(e.win ? 'The building is secure. Good work!' : 'You are down. The operation is aborted.', e.win ? 'me' : 'warn'); break;
     }
     if (e.t === 'shot' && e.by === p && e.hit === 'actor') { this.hitFx = 1; }
   }
   debrief() {
     const sim = this.sim!, sc = sim.score(), win = !!sim.over?.win; this.state = 'end'; this.voice.stop(); if (document.pointerLockElement) document.exitPointerLock();
-    $('debTitle').textContent = win ? 'Uppdraget slutfört' : 'Uppdraget misslyckades'; $('debRank').textContent = 'Omdöme: ' + sc.rank;
+    $('debTitle').textContent = win ? 'Mission completed' : 'Mission failed'; $('debRank').textContent = 'Rating: ' + sc.rank;
     $('debTable').innerHTML = sc.parts.filter(p => p.max > 0 || p.pts < 0).map(p => `<tr><td>${p.label}</td><td class="${p.pts < 0 ? 'neg' : ''}">${p.pts}${p.max ? ' / ' + p.max : ''}</td></tr>`).join('') + `<tr class="total"><td>Totalt</td><td>${sc.total} / 100</td></tr>`;
     if (win && (best[this.mission] ?? -1) < sc.total) { best[this.mission] = sc.total; localStorage.setItem('teamai.best', JSON.stringify(best)); }
     show('hud', false); show('debrief', true); win ? this.audio.ok() : this.audio.fail();
@@ -410,21 +414,21 @@ class Game {
     const ptt = !!S.ptt, held = this.voice.held;
     const dot = $('micdot'), txt = $('micstate'); dot.className = s === 'listening' && (!ptt || held) ? 'on' : s === 'denied' || s === 'error' || s === 'unsupported' ? 'err' : '';
     const why: Record<string, [string, string]> = {
-      iframe: ['MIKROFON BLOCKERAD AV FÖRHANDSVISNINGEN – pausa (Esc) och välj «Öppna i egen flik»', 'Spelet visas inbäddat i en annan sida, och den sidan släpper inte fram mikrofonen. Det hjälper inte att tillåta mikrofonen i webbläsaren – öppna spelet i en egen flik med knappen nedan.'],
-      mic: ['MIKROFON NEKAD – pausa (Esc) för hjälp', 'Webbläsaren nekar mikrofonen för den här sidan. Klicka på ikonen till vänster om adressen, sätt Mikrofon till «Tillåt», ladda om sidan och försök igen. Kontrollera också att operativsystemet tillåter webbläsaren att använda mikrofonen.'],
-      service: ['TALTJÄNSTEN NEKAS AV WEBBLÄSAREN – pausa (Esc) för hjälp', 'Mikrofonen fungerar, men webbläsaren tillåter inte sin taligenkänningstjänst. Det händer i bl.a. Brave, Opera och ibland Edge. Använd Google Chrome, och stäng av VPN/annonsblockerare för sidan.'],
-      nomic: ['INGEN MIKROFON HITTADES', 'Ingen mikrofon hittades. Anslut en mikrofon och välj den som inspelningsenhet i systemets ljudinställningar.'],
-      busy: ['MIKROFONEN ÄR UPPTAGEN', 'Mikrofonen används av ett annat program eller kan inte läsas. Stäng andra program som använder den och försök igen.'],
-      network: ['TALTJÄNSTEN NÅS INTE (NÄTVERK)', 'Webbläsarens taligenkänning når inte sin molntjänst. Kontrollera internet, VPN, brandvägg och annonsblockerare.'],
-      lang: ['SPRÅKET STÖDS INTE AV TALTJÄNSTEN', 'Det valda språket för röstkommandon stöds inte av webbläsarens taltjänst. Byt språk under Inställningar.'],
+      iframe: ['MICROPHONE BLOCKED BY THE PREVIEW – pause (Esc) and choose «Open in its own tab»', 'The game is embedded in another page, and that page does not pass the microphone through. Allowing the microphone in the browser does not help – open the game in its own tab with the button below.'],
+      mic: ['MICROPHONE DENIED – pause (Esc) for help', 'The browser denies the microphone for this page. Click the icon to the left of the address, set Microphone to «Allow», reload the page and try again. Also check that the operating system lets the browser use the microphone.'],
+      service: ['SPEECH SERVICE DENIED BY THE BROWSER – pause (Esc) for help', 'The microphone works, but the browser does not allow its speech recognition service. This happens in Brave, Opera and sometimes Edge. Use Google Chrome, and turn off VPN/ad blockers for this page.'],
+      nomic: ['NO MICROPHONE FOUND', 'No microphone found. Connect one and select it as the recording device in the system sound settings.'],
+      busy: ['MICROPHONE IS BUSY', 'The microphone is used by another program or cannot be read. Close other programs that use it and try again.'],
+      network: ['SPEECH SERVICE UNREACHABLE (NETWORK)', 'The browser’s speech recognition cannot reach its cloud service. Check your internet, VPN, firewall and ad blocker.'],
+      lang: ['LANGUAGE NOT SUPPORTED BY THE SPEECH SERVICE', 'The chosen accent for voice commands is not supported by the browser’s speech service. Change it under Settings.'],
     };
     const base: Record<string, [string, string]> = {
-      listening: ptt ? [held ? 'LYSSNAR – släpp V när du är klar' : 'HÅLL V FÖR ATT PRATA', 'Håll ner V medan du ger en order och släpp när du är klar.'] : ['MIKROFON PÅ – LYSSNAR', 'Mikrofonen är på och lyssnar.'],
-      starting: ptt && held ? ['STARTAR MIKROFON – vänta en sekund och säg det igen', 'Startar mikrofonen…'] : ptt ? ['HÅLL V FÖR ATT PRATA', 'Håll ner V medan du ger en order och släpp när du är klar.'] : ['STARTAR MIKROFON…', 'Startar mikrofonen…'],
-      off: ['MIKROFON AV – tryck Enter för att skriva order', 'Mikrofonen är av.'], unsupported: ['RÖSTSTYRNING STÖDS EJ HÄR – använd Chrome', 'Den här webbläsaren saknar röstigenkänning. Använd Google Chrome.'],
+      listening: ptt ? [held ? 'LISTENING – release V when you are done' : 'HOLD V TO TALK', 'Hold V while you give an order and release it when you are done.'] : ['MICROPHONE ON – LISTENING', 'The microphone is on and listening.'],
+      starting: ptt && held ? ['STARTING MICROPHONE – wait a second and say it again', 'Starting the microphone…'] : ptt ? ['HOLD V TO TALK', 'Hold V while you give an order and release it when you are done.'] : ['STARTING MICROPHONE…', 'Starting the microphone…'],
+      off: ['MICROPHONE OFF – press Enter to type an order', 'The microphone is off.'], unsupported: ['VOICE CONTROL NOT SUPPORTED HERE – use Chrome', 'This browser has no speech recognition. Use Google Chrome.'],
     };
-    const m = (detail && why[detail]) || base[s] || ['MIKROFONFEL' + (detail ? ' (' + detail + ')' : ''), 'Okänt mikrofonfel' + (detail ? ': ' + detail : '') + '.'];
-    txt.textContent = m[0]; $('micHelp').textContent = m[1] + (this.voice.lastHeard ? ` Senast uppfattat av mikrofonen: «${this.voice.lastHeard}».` : ' Mikrofonen har inte uppfattat några ord ännu.') + (this.voice.lastError ? ` Senaste fel från taltjänsten: ${this.voice.lastError}.` : ''); $('micHelp').className = 'note' + (dot.className === 'err' ? ' warn' : '');
+    const m = (detail && why[detail]) || base[s] || ['MIKROFONFEL' + (detail ? ' (' + detail + ')' : ''), 'Unknown microphone error' + (detail ? ': ' + detail : '') + '.'];
+    txt.textContent = m[0]; $('micHelp').textContent = m[1] + (this.voice.lastHeard ? ` Last words heard by the microphone: «${this.voice.lastHeard}».` : ' The microphone has not picked up any words yet.') + (this.voice.lastError ? ` Last error from the speech service: ${this.voice.lastError}.` : ''); $('micHelp').className = 'note' + (dot.className === 'err' ? ' warn' : '');
   }
   buildMap() {
     const sim = this.sim!, l = sim.level, k = 4, c = document.createElement('canvas'); c.width = l.w * k; c.height = l.h * k; const g = c.getContext('2d')!;
@@ -445,20 +449,20 @@ class Game {
     const sim = this.sim; if (!sim) return; this.hudT -= 1; if (!force && this.hudT > 0) return; this.hudT = 8;
     const p = sim.player, r = sim.remaining();
     ($('hpbar').firstElementChild as HTMLElement).style.width = Math.max(0, p.hp) + '%'; $('hptxt').textContent = String(Math.ceil(Math.max(0, p.hp)));
-    $('wname').textContent = WEAPONS[this.weapon].name + (this.reloadT > 0 ? ' – LADDAR OM' : ''); const ac = $('acount'); ac.innerHTML = `<b>${this.ammo[this.weapon]}</b> / ${this.reserve[this.weapon]}`; ac.className = this.ammo[this.weapon] <= 5 ? 'low' : '';
+    $('wname').textContent = WEAPONS[this.weapon].name + (this.reloadT > 0 ? ' – RELOADING' : ''); const ac = $('acount'); ac.innerHTML = `<b>${this.ammo[this.weapon]}</b> / ${this.reserve[this.weapon]}`; ac.className = this.ammo[this.weapon] <= 5 ? 'low' : '';
     $('bangs').textContent = 'CHOCKGRANAT ' + '◉'.repeat(p.bangs) + '○'.repeat(Math.max(0, 3 - p.bangs));
-    $('objective').innerHTML = `MISSTÄNKTA KVAR <b>${r.suspects}</b> &nbsp;·&nbsp; CIVILA ATT SÄKRA <b>${r.civs}</b>`;
+    $('objective').innerHTML = `SUSPECTS LEFT <b>${r.suspects}</b> &nbsp;·&nbsp; CIVILIANS TO SECURE <b>${r.civs}</b>`;
     let html = '';
     for (const t of ['A', 'B'] as Team[]) {
-      const T = sim.teams[t]; html += `<div class="tcard ${t} ${this.selTeam === t || this.selTeam === 'ALL' ? 'sel' : ''}"><h4>TEAM ${t}<span>${ORDER_LABEL[T.order.type]}${T.fire === 'hold' ? ' · ELD UPPHÖR' : ''}</span></h4>`;
+      const T = sim.teams[t]; html += `<div class="tcard ${t} ${this.selTeam === t || this.selTeam === 'ALL' ? 'sel' : ''}"><h4>TEAM ${t}<span>${ORDER_LABEL[T.order.type]}${T.fire === 'hold' ? ' · HOLD FIRE' : ''}</span></h4>`;
       for (const o of sim.officers.filter(o => o.team === t)) html += `<div class="mem ${o.alive ? '' : 'dead'}">${o.name}<i><u style="width:${o.hp}%;background:${o.hp > 60 ? '#5fe08a' : o.hp > 30 ? '#f2c14e' : '#e04848'}"></u></i></div>`;
       html += '</div>';
     }
     $('team').innerHTML = html;
-    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALLA' : 'TEAM ' + this.selTeam}</b> &nbsp; <kbd>3</kbd> Följ <kbd>4</kbd> Håll <kbd>5</kbd> Dit <kbd>6</kbd> Skydda <kbd>7</kbd> Ställ upp <kbd>8</kbd> Storma <kbd>9</kbd> Granat <kbd>0</kbd> Säkra &nbsp; <kbd>Enter</kbd> Skriv order`;
+    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> &nbsp; <kbd>3</kbd> Follow <kbd>4</kbd> Hold <kbd>5</kbd> There <kbd>6</kbd> Cover <kbd>7</kbd> Stack <kbd>8</kbd> Breach <kbd>9</kbd> Bang <kbd>0</kbd> Secure &nbsp; <kbd>Enter</kbd> Type order`;
     const it = sim.interactTarget(), pr = $('prompt');
-    if (p.cuff) { pr.style.opacity = '1'; pr.textContent = 'Sätter handfängsel…'; $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = (p.cuffT / 1.6) * 100 + '%'; }
-    else { $('progress').style.opacity = '0'; if (it?.actor) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Sätt handfängsel'; } else if (it?.door) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> ${it.door.target ? 'Stäng' : 'Öppna'} dörr`; } else pr.style.opacity = '0'; }
+    if (p.cuff) { pr.style.opacity = '1'; pr.textContent = 'Cuffing…'; $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = (p.cuffT / 1.6) * 100 + '%'; }
+    else { $('progress').style.opacity = '0'; if (it?.actor) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Handcuff'; } else if (it?.door) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> ${it.door.target ? 'Close' : 'Open'} door`; } else pr.style.opacity = '0'; }
   }
 
   // ---------------- frame ----------------
@@ -504,12 +508,12 @@ class Game {
       if (a === p || !a.alive || !a.moving) continue; const ph = Math.floor(a.walk / Math.PI), last = this.stepPh.get(a); this.stepPh.set(a, ph);
       if (last !== undefined && ph !== last && !a.prone) { const q = this.pan(a.x, a.z); if (q.d < 14) this.audio.step((a.kind === 'officer' || a.kind === 'player' ? 0.2 : 0.14) / (1 + q.d * 0.25), q.pan); }
     }
-    if (this.net.online) { const vc = $('vc'); vc.textContent = this.net.micOk ? (this.net.muted ? 'RÖSTCHATT: DIN MIK ÄR AV (B)' : `RÖSTCHATT PÅ · ${this.net.voiceCount} ansluten${this.net.voiceCount === 1 ? '' : 'a'} · B = stäng av mik`) : 'RÖSTCHATT: ingen mikrofon – du hör bara de andra'; vc.className = this.net.muted || !this.net.micOk ? 'off' : ''; }
+    if (this.net.online) { const vc = $('vc'); vc.textContent = this.net.micOk ? (this.net.muted ? 'VOICE CHAT: YOUR MIC IS OFF (B)' : `VOICE CHAT ON · ${this.net.voiceCount} connected · B = mute mic`) : 'VOICE CHAT: no microphone – you can only hear the others'; vc.className = this.net.muted || !this.net.micOk ? 'off' : ''; }
     this.level!.update(); for (const v of this.views.values()) v.update(dt, sim.time); this.fx.update(dt, sim);
     // camera
     this.recoil = Math.max(0, this.recoil - dt * 0.22); this.dmgFx = Math.max(0, this.dmgFx - dt * 1.4); this.hitFx = Math.max(0, this.hitFx - dt * 5);
     const targetEye = (!p.alive ? 0.35 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive ? p.jumpY : 0); this.eye += (targetEye - this.eye) * Math.min(1, dt * (p.jumpY > 0 ? 30 : 9));
-    { const st = $('stance'), run = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch, t = !p.alive ? '' : p.prone ? 'KRYPER · TYST' : p.crouch ? 'HUKAR · TYST' : run ? 'SPRINGER · HÖRS LÅNGT' : this.slow ? 'SMYGER · TYST' : ''; if (st.textContent !== t) { st.textContent = t; st.className = run ? 'loud' : ''; } }
+    { const st = $('stance'), run = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch, t = !p.alive ? '' : p.prone ? 'CRAWLING · SILENT' : p.crouch ? 'CROUCHING · SILENT' : run ? 'RUNNING · HEARD FAR AWAY' : this.slow ? 'SNEAKING · SILENT' : ''; if (st.textContent !== t) { st.textContent = t; st.className = run ? 'loud' : ''; } }
     this.camera.position.set(p.x, this.eye + Math.sin(this.bob * 2) * 0.022, p.z); this.camera.rotation.set(this.pitch, this.yaw, !p.alive ? 0.5 : Math.sin(this.bob) * 0.004);
     { const sprint = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch && (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD'));
       const want = this.ads && p.alive && this.reloadT <= 0 && !sprint && !this.typing && !!document.pointerLockElement || (AUTO && this.ads) ? 1 : 0;
@@ -551,5 +555,5 @@ loadWeapons().then(async () => {
     game.vm.rifle.clear(); game.vm.pistol.clear(); game.viewCam.add(game.arms.root); game.viewScene.environment = studioEnv(game.renderer); game.viewScene.environmentIntensity = 0.5;
   }
 });
-loadModels().then(() => { game.menu.squad(); if (S.qual > 0) { game.menu.env(game.renderer); game.menu.hero('./models/operator/scene.gltf', 3); } $('modelStatus').textContent = modelsReady ? '' : '3D-figurerna kunde inte laddas – inbyggda figurer används.'; });
+loadModels().then(() => { game.menu.squad(); if (S.qual > 0) { game.menu.env(game.renderer); game.menu.hero('./models/operator/scene.gltf', 3); } $('modelStatus').textContent = modelsReady ? '' : 'The 3D characters could not be loaded – built-in figures are used.'; });
 (window as any).__ta = game;

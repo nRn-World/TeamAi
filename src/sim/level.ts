@@ -93,43 +93,43 @@ interface Spec { name: string; brief: string; theme: Level['theme']; suspects: n
 
 const SPECS: Spec[] = [
   {
-    name: 'Kontorskomplexet', theme: 'office', w: 32, h: 26, suspects: 5, civs: 3,
-    brief: 'Beväpnade gärningsmän har tagit sig in på ett redovisningskontor i Kista. Minst tre anställda hålls kvar. Gå in genom huvudentrén, säkra alla rum och grip gärningsmännen levande om möjligt.',
+    name: 'The Office Complex', theme: 'office', w: 32, h: 26, suspects: 5, civs: 3,
+    brief: 'Armed suspects have entered an accounting office in Kista. At least three employees are being held inside. Go in through the main entrance, secure every room and arrest the suspects alive if possible.',
     build(b) {
-      b.room(4, 10, 24, 5, 'Korridor', 'corridor', 'tile', false);
+      b.room(4, 10, 24, 5, 'Corridor', 'corridor', 'tile', false);
       b.room(10, 14, 10, 7, 'Reception', 'lobby', 'tile', false);
-      b.room(4, 3, 7, 8, 'Kontor Väst', 'office', 'carpet');
-      b.room(10, 3, 6, 8, 'Mötesrum', 'office', 'carpet');
-      b.room(15, 3, 6, 8, 'Kontor Mitt', 'office', 'carpet');
-      b.room(20, 3, 8, 8, 'Chefskontor', 'office', 'wood');
-      b.room(4, 14, 7, 7, 'Arkiv', 'storage', 'concrete');
-      b.room(19, 14, 9, 7, 'Fikarum', 'office', 'wood');
+      b.room(4, 3, 7, 8, 'Office West', 'office', 'carpet');
+      b.room(10, 3, 6, 8, 'Meeting Room', 'office', 'carpet');
+      b.room(15, 3, 6, 8, 'Office Center', 'office', 'carpet');
+      b.room(20, 3, 8, 8, "Manager's Office", 'office', 'wood');
+      b.room(4, 14, 7, 7, 'Archive', 'storage', 'concrete');
+      b.room(19, 14, 9, 7, 'Break Room', 'office', 'wood');
       for (const [x, z] of [[14, 20], [14, 14], [7, 10], [12, 10], [17, 10], [24, 10], [7, 14], [23, 14], [19, 17], [27, 12]]) b.door(x, z);
       return { x: 14.5, z: 23.2, yaw: 0 };
     },
   },
   {
-    name: 'Lagerlokalen', theme: 'warehouse', w: 44, h: 32, suspects: 8, civs: 4,
-    brief: 'En vapenhandel pågår i ett lager i hamnen. Lagerarbetare hålls som gisslan. Lagerhallen är stor och full av skydd – använd teamen för att täcka flera vinklar samtidigt.',
+    name: 'The Warehouse', theme: 'warehouse', w: 44, h: 32, suspects: 8, civs: 4,
+    brief: 'An arms deal is under way in a warehouse at the docks. Warehouse workers are held hostage. The floor is large and full of cover – use your teams to cover several angles at once.',
     build(b) {
-      b.room(4, 4, 26, 20, 'Lagerhall', 'warehouse', 'concrete');
-      b.room(29, 4, 10, 7, 'Kontor', 'office', 'carpet');
-      b.room(29, 10, 10, 7, 'Personalrum', 'office', 'tile');
-      b.room(29, 16, 10, 8, 'Förråd', 'storage', 'concrete');
+      b.room(4, 4, 26, 20, 'Warehouse Floor', 'warehouse', 'concrete');
+      b.room(29, 4, 10, 7, 'Office', 'office', 'carpet');
+      b.room(29, 10, 10, 7, 'Staff Room', 'office', 'tile');
+      b.room(29, 16, 10, 8, 'Storage', 'storage', 'concrete');
       for (const [x, z] of [[16, 23], [4, 12], [29, 7], [29, 13], [29, 20], [33, 10], [33, 16], [38, 20]]) b.door(x, z);
       return { x: 16.5, z: 27.5, yaw: 0 };
     },
   },
   {
-    name: 'Hotell Nordstjärnan', theme: 'hotel', w: 46, h: 30, suspects: 10, civs: 6,
-    brief: 'En beväpnad grupp har barrikaderat sig på ett hotell med gäster som gisslan. Många små rum och en lång korridor – ställ upp vid dörrarna och rensa rum för rum.',
+    name: 'Hotel North Star', theme: 'hotel', w: 46, h: 30, suspects: 10, civs: 6,
+    brief: 'An armed group has barricaded itself in a hotel with guests as hostages. Many small rooms and one long corridor – stack up on the doors and clear room by room.',
     build(b) {
-      b.room(4, 12, 38, 5, 'Korridor', 'corridor', 'carpet', false);
+      b.room(4, 12, 38, 5, 'Corridor', 'corridor', 'carpet', false);
       b.room(16, 16, 13, 9, 'Lobby', 'lobby', 'tile', false);
       const xs = [4, 10, 16, 22, 28, 34];
-      xs.forEach((x, i) => b.room(x, 4, i === 5 ? 8 : 7, 9, 'Rum 10' + (i + 1), 'bedroom', i % 2 ? 'wood' : 'carpet'));
-      b.room(4, 16, 7, 9, 'Rum 107', 'bedroom', 'carpet'); b.room(10, 16, 7, 9, 'Linneförråd', 'storage', 'concrete');
-      b.room(28, 16, 7, 9, 'Rum 108', 'bedroom', 'wood'); b.room(34, 16, 8, 9, 'Svit', 'bedroom', 'carpet');
+      xs.forEach((x, i) => b.room(x, 4, i === 5 ? 8 : 7, 9, 'Room 10' + (i + 1), 'bedroom', i % 2 ? 'wood' : 'carpet'));
+      b.room(4, 16, 7, 9, 'Room 107', 'bedroom', 'carpet'); b.room(10, 16, 7, 9, 'Linen Storage', 'storage', 'concrete');
+      b.room(28, 16, 7, 9, 'Room 108', 'bedroom', 'wood'); b.room(34, 16, 8, 9, 'Suite', 'bedroom', 'carpet');
       for (const x of xs) b.door(x + 3, 12);
       for (const [x, z] of [[22, 24], [22, 16], [7, 16], [13, 16], [31, 16], [37, 16], [10, 8], [28, 8], [41, 14]]) b.door(x, z);
       return { x: 22.5, z: 27.3, yaw: 0 };

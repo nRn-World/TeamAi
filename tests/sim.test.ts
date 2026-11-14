@@ -9,13 +9,14 @@ const ok = (c: boolean, msg: string) => { if (!c) { fails++; console.log('  FAIL
 
 // ---- parser ----
 const cases: [string, string][] = [
-  ['Team A gå till vänster', 'A move left'], ['Team B du skyddar mig', 'B cover'], ['team b, följ mig', 'B follow'],
-  ['alla stanna', 'ALL hold'], ['Bravo storma rummet', 'B breach'], ['alfa ställ upp vid dörren', 'A stack'],
-  ['team a chockgranat och gå in', 'A bang'], ['Polis! Lägg ner vapnet!', 'ALL shout'], ['öppna dörren team a', 'A open'],
-  ['team b säkra dem', 'B restrain'], ['röda laget höger', 'A move right'], ['blå laget gå dit', 'B move there'],
-  ['eld upphör', 'ALL fireHold'], ['team a fri eld', 'A fireFree'], ['Team A move left', 'A move left'], ['team two cover me', 'B cover'],
-  ['everyone on me', 'ALL follow'], ['tema framåt', 'A move forward'], ['team a och team b följ mig', 'ALL follow'], ['hej hur mår du', 'null'],
-  ['team a backa', 'A move back'], ['team a öppna dörren', 'A open'], ['Team A öppnar dörren', 'A open'], ['team-a stänger dörren', 'A close'], ['bravo dörren', 'B stack'], ['team b stormar', 'B breach'], ['stäng dörren', 'ALL close'],
+  ['Team A go left', 'A move left'], ['Team B you cover me', 'B cover'], ['team b, follow me', 'B follow'],
+  ['everyone hold', 'ALL hold'], ['Bravo breach the room', 'B breach'], ['alpha stack up on the door', 'A stack'],
+  ['team a flashbang and go in', 'A bang'], ['Police! Drop the weapon!', 'ALL shout'], ['open the door team a', 'A open'],
+  ['team b cuff them', 'B restrain'], ['red team right', 'A move right'], ['blue team go over there', 'B move there'],
+  ['hold fire', 'ALL fireHold'], ['team a weapons free', 'A fireFree'], ['Team A move left', 'A move left'], ['team two cover me', 'B cover'],
+  ['everyone on me', 'ALL follow'], ['team one move up', 'A move forward'], ['team a and team b follow me', 'ALL follow'], ['hello how are you', 'null'],
+  ['team a fall back', 'A move back'], ['Team A opens the door', 'A open'], ['team-a close the door', 'A close'], ['bravo door', 'B stack'], ['team b breaching', 'B breach'], ['shut the door', 'ALL close'],
+  ['Police! Get on the ground!', 'ALL shout'], ['show me your hands', 'ALL shout'], ['team b wait', 'B hold'], ['alpha sitrep', 'A report'], ['bravo bang and clear', 'B bang'], ['team a secure them', 'A restrain'],
 ];
 for (const [t, exp] of cases) { const c = parseCommand(t); const got = c ? [c.team, c.action, c.dir].filter(Boolean).join(' ') : 'null'; ok(got === exp, `parse "${t}" => ${got} (expected ${exp})`); }
 console.log('parser cases:', cases.length);

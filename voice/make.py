@@ -25,7 +25,7 @@ def shout(up):
     return (f'asetrate=24000*{up},aresample=24000,atempo={1 / up * 1.04:.4f},' + TRIM +
             ',highpass=f=220,equalizer=f=1500:t=q:w=1:g=4,equalizer=f=3100:t=q:w=0.9:g=9,'
             'acompressor=threshold=-30dB:ratio=10:attack=2:release=70:makeup=10,volume=7dB,asoftclip=type=tanh,'
-            'aecho=0.85:0.55:27|63:0.2|0.11,alimiter=limit=0.93:level=disabled,dynaudnorm=p=0.95:m=4')
+            'aecho=0.85:0.55:27|63:0.2|0.11,dynaudnorm=p=0.95:m=4,volume=5dB,alimiter=limit=0.94:level=disabled')
 
 # call signs are spelled out so the synthesiser reads "A1" as "Alpha one"
 def spoken(t):

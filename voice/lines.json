@@ -26,6 +26,7 @@
 {"t": "Securing.", "r": "o"},
 {"t": "Securing them.", "r": "o"},
 {"t": "Bang and clear!", "r": "o", "s": 1},
+{"t": "Breaching!", "r": "o", "s": 1},
 {"t": "Flashbang out!", "r": "o", "s": 1},
 {"t": "I'm hit!", "r": "o", "s": 1},
 {"t": "A1 is down!", "r": "o", "s": 1},

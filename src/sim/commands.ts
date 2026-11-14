@@ -1,35 +1,35 @@
-// Natural-language (Swedish + English) voice command parser. Pure function, unit-tested.
+// Natural-language (English) voice command parser. Pure function, unit-tested.
 import type { Command, Action, Dir, Team } from './sim';
 
 const norm = (s: string) => ' ' + s.toLowerCase().replace(/[.,!?;:"\-–]/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
 
 const fix = (re: RegExp) => new RegExp(re.source.replace(/\\b\(/g, '(?<= )(').replace(/\)\\b/g, ')(?= )'));
 
-const TEAM_A = fix(/\b(team|teamet|tim|teem|tem|lag|laget|grupp|gruppen|squad)\s*(a|ah|alfa|alpha|ett|1|one|röd|röda|red)\b|\b(alfa|alpha|röda laget|red team|a-laget|a laget|a-team|teama|tema)\b/);
-const TEAM_B = fix(/\b(team|teamet|tim|teem|tem|lag|laget|grupp|gruppen|squad)\s*(b|be|bee|bi|bravo|två|2|two|blå|blåa|blue)\b|\b(bravo|blå laget|blåa laget|blue team|b-laget|b laget|b-team|teamb|teambe|timbe|tb)\b/);
-const TEAM_ALL = fix(/\b(alla|allihop|allihopa|hela laget|hela teamet|båda|bägge|everyone|everybody|all teams|both teams|team)\b/);
+const TEAM_A = fix(/\b(team|teem|tim|squad|group|element)\s*(a|ay|eh|hey|alpha|alfa|one|1|red)\b|\b(alpha|alfa|red team|a team|a-team|teama)\b/);
+const TEAM_B = fix(/\b(team|teem|tim|squad|group|element)\s*(b|be|bee|bravo|two|2|blue)\b|\b(bravo|blue team|b team|b-team|teamb)\b/);
+const TEAM_ALL = fix(/\b(everyone|everybody|all teams|both teams|all of you|whole team|all|team)\b/);
 
 // Ordered by priority: first match wins.
 const RULES: [Action, RegExp, Dir?][] = ([
-  ['shout', /\b(polis|police|lägg ner|släpp vapnet|släpp vapnen|händerna|ner på marken|ner på knä|hands up|drop (the|your) (gun|weapon)|get down|on the ground|ge upp|ge er)\b/],
-  ['fireHold', /\b(eld upphör|skjut inte|håll elden|vapenvila|hold fire|hold your fire|cease fire|don't shoot)\b/],
-  ['fireFree', /\b(fri eld|eld fritt|eld tillåten|öppna eld|weapons free|fire at will|open fire)\b/],
-  ['bang', /\b(chockgranat|chock granat|distraktionsgranat|flashbang|flash bang|bang and clear|granat|grenade|blända)\b/],
-  ['breach', /\b(storma|stormar|stormade|stormning|stormen|storm|breach|breacha|spräng|slå in|sparka in|rensa|rensar|clear|gå in|in i rummet|ta rummet|inbrytning|move in|go in|enter)\b/],
-  ['stack', /\b(ställ upp|ställer upp|ställa upp|ställ er|ställ dig|stack up|stack|stapla|vid dörren|till dörren|on the door|at the door)\b/],
-  ['close', /\b(stäng|stänga|stänger|stängd|stängt|stängde|close|shut)\b/],
-  ['open', /\b(öppna|öppnar|öppnas|öppnade|öppen|öppet|öppnat|open|opens)\b/],
-  ['restrain', /\b(säkra|säkrar|säkrade|säkrat|säker|handfängsel|handbojor|bojor|boja|grip|gripa|arrestera|fängsla|restrain|cuff|handcuff|arrest|secure|zip ?tie)\b/],
-  ['cover', /\b(skydda|skyddar|skyddade|skydd|täck|täcker|täcka|bevaka|bevakar|cover|protect|watch my|vakta|ryggen)\b/],
-  ['report', /\b(rapport|rapportera|status|läget|report|sitrep)\b/],
-  ['move', /\b(dit|där borta|ditåt|over there|there|den positionen|that position)\b/, 'there'],
-  ['move', /\b(vänster|vänstra|left)\b/, 'left'],
-  ['move', /\b(höger|högra|right)\b/, 'right'],
-  ['move', /\b(bakåt|backa|tillbaka|retirera|dra er tillbaka|back|fall back|retreat)\b/, 'back'],
-  ['follow', /\b(följ|följer|följa|följde|följd|kom hit|kom med|kom|efter mig|med mig|till mig|samling|återsamla|fall in|follow|on me|regroup|with me|come)\b/],
-  ['move', /\b(framåt|fram|rakt fram|avancera|forward|advance|move up|push)\b/, 'forward'],
-  ['hold', /\b(stanna|stannar|stannade|stann|håll|håller|vänta|väntar|stopp|halt|stå kvar|hold|stop|stay|wait|freeze)\b/],
-  ['stack', /\b(dörr|dörren|dörrn|door)\b/],
+  ['shout', /\b(police|hands up|hands in the air|show me your hands|drop (the|your|that) (gun|weapon)|drop it|put (the|your) (gun|weapon) down|put it down|get down|on the ground|on your knees|give up|surrender|freeze)\b/],
+  ['fireHold', /\b(hold fire|hold your fire|cease fire|ceasefire|don't shoot|do not shoot|weapons tight|weapons hold)\b/],
+  ['fireFree', /\b(weapons free|fire at will|open fire|free fire|engage)\b/],
+  ['bang', /\b(flashbang|flash bang|flash and clear|bang and clear|bang|grenade|stun grenade|flash)\b/],
+  ['breach', /\b(breach|breaching|storm|clear|clear the room|move in|go in|get in|enter|take the room|kick it|kick the door)\b/],
+  ['stack', /\b(stack up|stack|line up|on the door|at the door|to the door)\b/],
+  ['close', /\b(close|shut)\b/],
+  ['open', /\b(open|opens)\b/],
+  ['restrain', /\b(restrain|cuff|cuffs|cuff them|handcuff|handcuffs|arrest|secure|zip ?tie|tie them)\b/],
+  ['cover', /\b(cover|cover me|protect|protect me|watch my|guard|my back|my six)\b/],
+  ['report', /\b(report|status|sitrep|sit rep)\b/],
+  ['move', /\b(over there|there|that position|that spot)\b/, 'there'],
+  ['move', /\b(left)\b/, 'left'],
+  ['move', /\b(right)\b/, 'right'],
+  ['move', /\b(back|backwards|fall back|retreat|pull back|back up)\b/, 'back'],
+  ['follow', /\b(follow|follow me|on me|regroup|with me|come|come here|fall in|to me)\b/],
+  ['move', /\b(forward|forwards|advance|move up|push|push up|go ahead)\b/, 'forward'],
+  ['hold', /\b(hold|hold position|stop|stay|wait|halt|stand by)\b/],
+  ['stack', /\b(door)\b/],
 ] as [Action, RegExp, Dir?][]).map(([a, re, d]) => [a, fix(re), d]);
 
 export function parseCommand(text: string, lastTeam: Team | 'ALL' = 'ALL'): Command | null {
@@ -49,7 +49,7 @@ export function parseCommand(text: string, lastTeam: Team | 'ALL' = 'ALL'): Comm
 }
 
 export const ACTION_LABEL: Record<Action, string> = {
-  follow: 'FÖLJ MIG', hold: 'HÅLL POSITION', move: 'FÖRFLYTTA', cover: 'SKYDDA MIG', stack: 'STÄLL UPP VID DÖRR', breach: 'STORMA RUMMET', bang: 'CHOCKGRANAT + STORMA',
-  open: 'ÖPPNA DÖRR', close: 'STÄNG DÖRR', restrain: 'SÄKRA / HANDFÄNGSEL', fireFree: 'FRI ELD', fireHold: 'ELD UPPHÖR', report: 'RAPPORT', shout: 'POLIS! GE UPP!',
+  follow: 'FOLLOW ME', hold: 'HOLD POSITION', move: 'MOVE', cover: 'COVER ME', stack: 'STACK UP ON DOOR', breach: 'BREACH THE ROOM', bang: 'BANG AND CLEAR',
+  open: 'OPEN DOOR', close: 'CLOSE DOOR', restrain: 'SECURE / HANDCUFF', fireFree: 'WEAPONS FREE', fireHold: 'HOLD FIRE', report: 'REPORT', shout: 'POLICE! GIVE UP!',
 };
-export const DIR_LABEL: Record<Dir, string> = { left: 'VÄNSTER', right: 'HÖGER', forward: 'FRAMÅT', back: 'BAKÅT', there: 'DIT' };
+export const DIR_LABEL: Record<Dir, string> = { left: 'LEFT', right: 'RIGHT', forward: 'FORWARD', back: 'BACK', there: 'THERE' };

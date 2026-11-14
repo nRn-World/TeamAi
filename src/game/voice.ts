@@ -2,7 +2,7 @@
 // Two modes: always-on, or push-to-talk (recogniser stays warm, results only accepted while the key is held).
 export type VoiceState = 'off' | 'starting' | 'listening' | 'denied' | 'unsupported' | 'error';
 export class Voice {
-  state: VoiceState = 'off'; lang = 'sv-SE'; onFinal: (text: string) => void = () => { }; onInterim: (text: string) => void = () => { }; /** Speech recognised while the push-to-talk key was NOT held. */ onIgnored: (text: string) => void = () => { }; lastHeard = ''; lastError = ''; onState: (s: VoiceState, detail?: string) => void = () => { };
+  state: VoiceState = 'off'; lang = 'en-US'; onFinal: (text: string) => void = () => { }; onInterim: (text: string) => void = () => { }; /** Speech recognised while the push-to-talk key was NOT held. */ onIgnored: (text: string) => void = () => { }; lastHeard = ''; lastError = ''; onState: (s: VoiceState, detail?: string) => void = () => { };
   private rec: any = null; private want = false; private restarts = 0;
   ptt = false; held = false; private base = 0; private finals = 0; private grace = 0;
   /** Push-to-talk key pressed: accept what is said from now on. */
