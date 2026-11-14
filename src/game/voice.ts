@@ -2,7 +2,7 @@
 // Two modes: always-on, or push-to-talk (recogniser stays warm, results only accepted while the key is held).
 export type VoiceState = 'off' | 'starting' | 'listening' | 'denied' | 'unsupported' | 'error';
 export class Voice {
-  state: VoiceState = 'off'; lang = 'sv-SE'; onFinal: (text: string) => void = () => { }; onInterim: (text: string) => void = () => { }; onState: (s: VoiceState, detail?: string) => void = () => { };
+  state: VoiceState = 'off'; lang = 'sv-SE'; onFinal: (text: string) => void = () => { }; onInterim: (text: string) => void = () => { }; /** Speech recognised while the push-to-talk key was NOT held. */ onIgnored: (text: string) => void = () => { }; lastHeard = ''; lastError = ''; onState: (s: VoiceState, detail?: string) => void = () => { };
   private rec: any = null; private want = false; private restarts = 0;
   ptt = false; held = false; private base = 0; private finals = 0; private grace = 0;
   /** Push-to-talk key pressed: accept what is said from now on. */
@@ -38,16 +38,17 @@ export class Voice {
       let n = 0; for (let i = 0; i < e.results.length; i++) if (e.results[i].isFinal) n++;
       const open = !this.ptt || this.held || performance.now() < this.grace;
       let interim = '';
-      for (let i = Math.max(e.resultIndex, this.ptt ? this.base : 0); i < e.results.length; i++) {
-        if (!open) break;
+      for (let i = open ? Math.max(e.resultIndex, this.ptt ? this.base : 0) : e.resultIndex; i < e.results.length; i++) {
         const res = e.results[i];
-        if (res.isFinal) { const alts: string[] = []; for (let k = 0; k < res.length; k++) alts.push(res[k].transcript.trim()); this.onFinal(alts.join(' | ')); }
+        if (!open) { if (res.isFinal && i >= e.resultIndex) { this.lastHeard = res[0].transcript.trim(); this.onIgnored(this.lastHeard); } continue; }
+        if (res.isFinal) { const alts: string[] = []; for (let k = 0; k < res.length; k++) alts.push(res[k].transcript.trim()); this.lastHeard = alts[0]; this.onFinal(alts.join(' | ')); }
         else interim += res[0].transcript;
       }
       this.finals = n; if (this.ptt && !this.held) this.base = n;
       if (interim) this.onInterim(interim.trim());
     };
     r.onerror = (e: any) => {
+      if (e.error !== 'no-speech' && e.error !== 'aborted') this.lastError = e.error;
       if (e.error === 'service-not-allowed') { this.want = false; this.set('denied', 'service'); }
       else if (e.error === 'not-allowed') { this.want = false; this.set('denied', window.top !== window.self ? 'iframe' : 'mic'); }
       else if (e.error === 'audio-capture') { this.want = false; this.set('error', 'nomic'); }
