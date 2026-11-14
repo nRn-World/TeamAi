@@ -18,6 +18,7 @@ jobs:
       - run: pip install piper-tts==1.8.0
       - run: python voice/make.py
       - name: Spara klippen i projektet
+        if: always()
         run: |
           git config user.name "teamai-voices"
           git config user.email "actions@users.noreply.github.com"
