@@ -29,22 +29,35 @@
 </div>
 
 <div id="menu" class="screen">
-  <div class="panel wide">
-    <div class="logo">TEAM<span>Ai</span></div>
-    <div class="tag">Röststyrd taktisk insatsstyrka</div>
+  <header class="mtop">
+    <div class="brand"><div class="logo">TEAM<span>AI</span></div><div class="tag">Röststyrd insatsstyrka</div></div>
+    <div class="mstat"><span id="mMic"></span><span id="mBest"></span><span class="ver">Version 0.1</span></div>
+  </header>
+  <nav class="mnav">
+    <button data-tab="tabPlay" class="on"><i>01</i>Uppdrag</button>
+    <button data-tab="tabMp"><i>02</i>Spela online</button>
+    <button id="btnHelp"><i>03</i>Kontroller &amp; röstorder</button>
+    <button id="btnSettings"><i>04</i>Inställningar</button>
+  </nav>
+  <section id="tabPlay" class="mtab">
+    <div class="mhead"><b>Välj uppdrag</b><span>Ensam med fyra AI-poliser som lyder din röst</span></div>
     <div id="missions"></div>
+  </section>
+  <section id="tabMp" class="mtab hidden">
+    <div class="mhead"><b>Spela online</b><span>Upp till fyra spelare · röstchatt · alla kan ge order till Team A och B</span></div>
     <div class="mp">
-      <h3>Spela tillsammans online</h3>
-      <div class="mprow"><input id="mpName" maxlength="12" placeholder="Ditt namn" /><button id="btnHost">Skapa rum</button><span>eller</span><input id="mpCode" maxlength="5" placeholder="Rumskod" /><button id="btnJoin">Gå med</button></div>
-      <div id="mpErr" class="note warn"></div>
+      <div class="mpcol"><label for="mpName">Ditt namn</label><input id="mpName" maxlength="12" placeholder="Spelare" /></div>
+      <div class="mpcol"><label>Nytt rum</label><button id="btnHost" class="primary">Skapa rum</button></div>
+      <div class="mpsep"></div>
+      <div class="mpcol"><label for="mpCode">Rumskod från en vän</label><input id="mpCode" maxlength="5" placeholder="ABCDE" /></div>
+      <div class="mpcol"><label>&nbsp;</label><button id="btnJoin">Gå med</button></div>
     </div>
-    <div class="row">
-      <button id="btnHelp">Kontroller &amp; röstkommandon</button>
-      <button id="btnSettings">Inställningar</button>
-    </div>
+    <div id="mpErr" class="note warn"></div>
+  </section>
+  <footer class="mfoot">
     <div id="micwarn" class="note"></div>
-    <div class="ver">v0.1 – tidig prototyp</div>
-  </div>
+    <div class="hints"><span><kbd>V</kbd> håll in och prata med teamet</span><span><kbd>Q</kbd> ropa «Polis!»</span><span><kbd>F</kbd> handfängsel</span><span><kbd>Esc</kbd> paus</span></div>
+  </footer>
 </div>
 
 <div id="lobby" class="screen hidden"><div class="panel">
@@ -58,8 +71,11 @@
   <div class="row"><button id="btnLeave">Lämna</button><button id="btnLobbyStart" class="primary">Starta uppdraget</button></div>
 </div></div>
 
-<div id="brief" class="screen hidden"><div class="panel">
-  <h2 id="briefTitle"></h2><p id="briefText"></p>
+<div id="brief" class="screen hidden"><div class="panel wide briefp">
+  <div class="kicker">Insatsgenomgång</div>
+  <h2 id="briefTitle"></h2>
+  <div class="briefgrid"><div class="plan"><canvas id="briefMap"></canvas><div class="planlbl">Planritning · <i class="dotE"></i> ingång</div></div>
+  <div><p id="briefText"></p><div id="briefFacts" class="facts"></div></div></div>
   <div class="tips"><b>Säg till exempel:</b> «Team A gå till vänster» · «Team B du skyddar mig» · «Alla ställ upp vid dörren» · «Bravo chockgranat och storma» · «Polis! Lägg ner vapnet!» · «Team A säkra dem»</div>
   <div class="row"><button id="btnBack">Tillbaka</button><button id="btnGo" class="primary">Påbörja insats</button></div>
 </div></div>
@@ -133,9 +149,10 @@
     <p><b>Röster</b> – inspelade repliker skapade med talsyntesen Piper (MIT) och den svenska rösten «NST» · röstmodell tränad av KBLab, Kungliga biblioteket · taldata från Språkbanken, Nasjonalbiblioteket (NST) · CC0</p>
     <p><b>Kvinnlig röst «Lisa»</b> – Piper-röstmodell sv_SE-lisa (rhasspy/piper-voices) · licens ej angiven av upphovspersonen – kontrolleras före kommersiell utgivning</p>
     <p><b>3D-figurer</b> – «Ultimate Modular Men» och «Ultimate Modular Women» av Quaternius (quaternius.com) · CC0</p>
+    <p><b>Typsnitt</b> – Barlow och Barlow Condensed av Jeremy Tribby · SIL Open Font License 1.1</p>
     <p><b>PeerJS</b> – nätverk och röstchatt mellan spelare (WebRTC) · MIT-licens · © PeerJS-bidragsgivare</p>
     <p><b>Web Speech API</b> – röstigenkänning och talsyntes sker via din webbläsares inbyggda tjänster.</p>
-    <p><b>Grafik, 3D-figurer, texturer och ljud</b> – allt genereras av spelets egen kod (procedurellt). Inga tredjepartsfiler används, så inga ytterligare licenser eller erkännanden krävs.</p>
+    <p><b>Texturer, banor och ljudeffekter</b> – genereras av spelets egen kod (procedurellt).</p>
   </div>
   <div class="row"><button class="close primary">Stäng</button></div>
 </div></div>
