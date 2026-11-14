@@ -47,11 +47,12 @@
 </div>
 
 <div id="lobby" class="screen hidden"><div class="panel">
-  <h2>Rum för samarbete</h2>
+  <h2 id="lobbyTitle">Rum för samarbete</h2>
+  <div id="lobbyWait" class="lobbywait hidden"></div>
   <div class="codebox">Rumskod <b id="lobbyCode"></b></div>
   <button id="btnCopy" type="button">Kopiera inbjudningslänk</button>
   <ul id="lobbyPlayers"></ul>
-  <label class="lobbysel">Uppdrag <select id="lobbyMission"></select></label>
+  <label class="lobbysel"><span id="lobbySelLabel">Uppdrag</span> <select id="lobbyMission"></select></label>
   <div id="lobbyInfo" class="note"></div>
   <div class="row"><button id="btnLeave">Lämna</button><button id="btnLobbyStart" class="primary">Starta uppdraget</button></div>
 </div></div>

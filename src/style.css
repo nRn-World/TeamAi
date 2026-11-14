@@ -92,3 +92,6 @@ button:disabled { opacity:.5; cursor:default; }
 #lobbyPlayers { list-style:none; padding:0; margin:14px 0; } #lobbyPlayers li { padding:8px 10px; background:#141d26; border-left:3px solid #4fd07a; margin-bottom:5px; border-radius:3px; } #lobbyPlayers em { font-style:normal; color:var(--acc); font-size:11px; letter-spacing:.1em; margin-left:8px; text-transform:uppercase; }
 .lobbysel { display:flex; align-items:center; gap:12px; font-size:14px; } .lobbysel select { width:auto; flex:1; max-width:none; }
 #vc { position:absolute; top:50px; left:50%; transform:translateX(-50%); font-size:11px; letter-spacing:.1em; background:var(--bg); padding:3px 10px; border-radius:12px; color:#8be28f; white-space:nowrap; } #vc.off { color:#ffb37a; }
+
+.lobbywait{margin:10px 0 14px;padding:12px 14px;border-radius:8px;background:rgba(79,208,122,.12);border:1px solid rgba(79,208,122,.5);color:#bff0cf;font-weight:600;line-height:1.4}
+#lobbyPlayers em.you{color:#4fd07a}
