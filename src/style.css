@@ -83,3 +83,12 @@ select, input[type=range] { width:300px; max-width:55%; } select { background:#1
 @media (max-width:760px) { #missions { grid-template-columns:1fr; } #log { width:60vw; } }
 
 @media (max-width:1150px) { #quick { display:none; } }
+
+.mp { margin-top:18px; padding:14px; background:#101820; border:1px solid #263544; border-radius:8px; } .mp h3 { margin:0 0 10px; font-size:14px; letter-spacing:.08em; color:#fff; }
+.mprow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; } .mprow span { opacity:.6; font-size:13px; }
+.mprow input, .lobbysel select { background:#1a2530; color:#fff; border:1px solid #33475a; border-radius:6px; padding:9px 10px; font-size:14px; width:150px; } #mpCode { text-transform:uppercase; letter-spacing:.2em; width:120px; }
+button:disabled { opacity:.5; cursor:default; }
+.codebox { font-size:13px; letter-spacing:.14em; text-transform:uppercase; opacity:.9; } .codebox b { display:block; font:800 46px ui-monospace, Consolas, monospace; letter-spacing:.25em; color:var(--acc); user-select:all; }
+#lobbyPlayers { list-style:none; padding:0; margin:14px 0; } #lobbyPlayers li { padding:8px 10px; background:#141d26; border-left:3px solid #4fd07a; margin-bottom:5px; border-radius:3px; } #lobbyPlayers em { font-style:normal; color:var(--acc); font-size:11px; letter-spacing:.1em; margin-left:8px; text-transform:uppercase; }
+.lobbysel { display:flex; align-items:center; gap:12px; font-size:14px; } .lobbysel select { width:auto; flex:1; max-width:none; }
+#vc { position:absolute; top:50px; left:50%; transform:translateX(-50%); font-size:11px; letter-spacing:.1em; background:var(--bg); padding:3px 10px; border-radius:12px; color:#8be28f; white-space:nowrap; } #vc.off { color:#ffb37a; }
