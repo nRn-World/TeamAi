@@ -139,6 +139,7 @@ class Game {
     this.net.onMsg = (c, m) => { if (this.net.role === 'host') this.fromClient(c, m); else this.fromHost(m); };
     $('btnTts').onclick = () => { this.audio.init(); const n = this.speech.voiceCount; this.speech.say(S.lang.startsWith('sv') ? 'Team A, uppfattat. Vi följer dig.' : 'Team A, copy. Following you.', 1, 1.1, 1, true); $('ttsInfo').textContent = n === 0 ? 'Webbläsaren hittar inga talröster – teamet kan då inte prata med ord. Installera en röst i operativsystemets tal-inställningar eller använd Chrome/Edge.' : this.speech.hasLangVoice ? `${n} röster hittades. Hör du inget? Kontrollera volymen och att fliken inte är tystad.` : `${n} röster hittades, men ingen på valt språk – webbläsarens standardröst används.`; };
   }
+  lobbyMe = 0;
   lobby() {
     const host = this.net.role === 'host';
     if (host) {
@@ -146,14 +147,20 @@ class Game {
       this.net.broadcast({ t: 'lobby', names: this.lobbyNames, ids: [this.net.id, ...this.net.conns.map(c => c.peer)], mission: this.lobbyMission });
     }
     $('lobbyCode').textContent = this.net.code;
-    $('lobbyPlayers').innerHTML = (this.lobbyNames.length ? this.lobbyNames : ['Ansluter…']).map((n, i) => `<li>${n.replace(/[<>&]/g, '')}${i === 0 ? ' <em>värd</em>' : ''}</li>`).join('');
+    $('lobbyPlayers').innerHTML = (this.lobbyNames.length ? this.lobbyNames : ['Ansluter…']).map((n, i) => `<li>${n.replace(/[<>&]/g, '')}${i === 0 ? ' <em>värd</em>' : ''}${i === (host ? 0 : this.lobbyMe) ? ' <em class="you">du</em>' : ''}</li>`).join('');
+    const hostName = (this.lobbyNames[0] || 'värden').replace(/[<>&]/g, '');
+    $('lobbyTitle').textContent = host ? 'Ditt rum – du är värd' : 'Du är med i ' + hostName + 's rum';
+    $('btnCopy').classList.toggle('hidden', !host);
+    $('lobbyWait').classList.toggle('hidden', host);
+    $('lobbyWait').textContent = 'Ansluten ✔  Väntar på att ' + hostName + ' trycker «Starta uppdraget». Du behöver inte göra något.';
+    $('lobbySelLabel').textContent = host ? 'Uppdrag' : 'Uppdrag (värden väljer)';
     ($('lobbyMission') as HTMLSelectElement).disabled = !host; if (!host) ($('lobbyMission') as HTMLSelectElement).value = String(this.lobbyMission);
     $('btnLobbyStart').classList.toggle('hidden', !host);
-    $('lobbyInfo').textContent = (host ? 'Ge rumskoden till dina medspelare. Upp till 4 spelare. Starta när alla är inne.' : 'Väntar på att värden startar uppdraget…') + (this.net.micOk ? ' Röstchatten är på – ni hör varandra direkt.' : this.net.stream ? ' Din mikrofon är inte tillgänglig – du hör de andra men de hör inte dig.' : ' Tillåt mikrofonen i webbläsarens ruta för att vara med i röstchatten.');
+    $('lobbyInfo').textContent = (host ? 'Ge rumskoden till dina medspelare. Upp till 4 spelare. Starta när alla är inne.' : 'Spelet startar automatiskt hos dig när värden startar.') + (this.net.micOk ? ' Röstchatten är på – ni hör varandra direkt.' : this.net.stream ? ' Din mikrofon är inte tillgänglig – du hör de andra men de hör inte dig.' : ' Tillåt mikrofonen i webbläsarens ruta för att vara med i röstchatten.');
   }
   fromHost(m: Msg) {
     const sim = this.sim;
-    if (m.t === 'lobby') { this.lobbyNames = m.names; this.lobbyMission = m.mission; this.net.callPeers(m.ids); if (!$('lobby').classList.contains('hidden')) this.lobby(); }
+    if (m.t === 'lobby') { this.lobbyMe = (m.ids as string[]).indexOf(this.net.id); this.lobbyNames = m.names; this.lobbyMission = m.mission; this.net.callPeers(m.ids); if (!$('lobby').classList.contains('hidden')) this.lobby(); }
     else if (m.t === 'start') { this.start(m.mission, m.seed, m.n, m.you, m.diff, m.names); }
     else if (m.t === 'snap' && sim && (this.state === 'play' || this.state === 'pause')) applySnap(sim, m.s, sim.player);
     else if (m.t === 'ev' && sim && (this.state === 'play' || this.state === 'pause')) for (const e of m.e) this.handle(decodeEv(sim, e));
