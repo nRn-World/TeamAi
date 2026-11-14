@@ -63,12 +63,12 @@
     <div><kbd>W A S D</kbd> Gå</div><div><kbd>Shift</kbd> Spring · <kbd>C</kbd> Huka</div>
     <div><kbd>Mus</kbd> Sikta · <kbd>Vänsterklick</kbd> Skjut</div><div><kbd>R</kbd> Ladda om · <kbd>1</kbd>/<kbd>2</kbd> Vapen</div>
     <div><kbd>F</kbd> Öppna dörr / sätt handfängsel</div><div><kbd>G</kbd> Kasta chockgranat</div>
-    <div><kbd>V</kbd> Ropa «Polis! Ge upp!»</div><div><kbd>T</kbd> Ficklampa · <kbd>M</kbd> Karta</div>
+    <div><kbd>V</kbd> (håll in) Prata med teamet · <kbd>Q</kbd> Ropa «Polis! Ge upp!»</div><div><kbd>T</kbd> Ficklampa · <kbd>M</kbd> Karta</div>
     <div><kbd>Enter</kbd> Skriv en order (om mikrofon saknas)</div><div><kbd>Tab</kbd> Välj team för snabbtangenter</div>
   </div>
   <div class="note">Snabbtangenter (valt team): <kbd>3</kbd> Följ <kbd>4</kbd> Håll <kbd>5</kbd> Gå dit jag siktar <kbd>6</kbd> Skydda mig <kbd>7</kbd> Ställ upp <kbd>8</kbd> Storma <kbd>9</kbd> Granat+storma <kbd>0</kbd> Säkra</div>
   <h2>Röstkommandon</h2>
-  <p>Mikrofonen är på hela tiden. Börja med vilket team du menar – <b>«Team A»</b> (även «Alfa», «röda laget»), <b>«Team B»</b> («Bravo», «blå laget») eller <b>«Alla»</b> – och säg sedan vad de ska göra. Utan teamnamn gäller ordern det team du senast pratade med. Engelska fungerar också.</p>
+  <p>Håll ner <kbd>V</kbd> medan du pratar och släpp när du är klar (kan ändras till «alltid på» i Inställningar). Börja med vilket team du menar – <b>«Team A»</b> (även «Alfa», «röda laget»), <b>«Team B»</b> («Bravo», «blå laget») eller <b>«Alla»</b> – och säg sedan vad de ska göra. Utan teamnamn gäller ordern det team du senast pratade med. Engelska fungerar också.</p>
   <table class="cmds">
     <tr><td>«gå till vänster / höger / framåt / bakåt»</td><td>Förflyttar sig åt det hållet sett från dig</td></tr>
     <tr><td>«gå dit»</td><td>Går till platsen du siktar på</td></tr>
@@ -94,7 +94,8 @@
   <div class="form">
     <label>Muskänslighet <input id="sSens" type="range" min="0.3" max="3" step="0.05" /></label>
     <label>Ljudvolym <input id="sVol" type="range" min="0" max="1" step="0.05" /></label>
-    <label>Röstigenkänning <select id="sMic"><option value="1">På (mikrofon alltid på)</option><option value="0">Av</option></select></label>
+    <label>Röstigenkänning <select id="sMic"><option value="1">På</option><option value="0">Av</option></select></label>
+    <label>Mikrofonläge <select id="sPtt"><option value="1">Håll V för att prata</option><option value="0">Alltid på</option></select></label>
     <label>Språk för röstkommandon <select id="sLang"><option value="sv-SE">Svenska</option><option value="en-US">English</option></select></label>
     <label>Teamet svarar med röst <select id="sTts"><option value="1">På</option><option value="0">Av</option></select></label>
     <label>Jag använder hörlurar <select id="sHead"><option value="0">Nej (ignorera mikrofonen medan teamet pratar)</option><option value="1">Ja</option></select></label>
