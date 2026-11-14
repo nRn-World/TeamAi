@@ -1,0 +1,26 @@
+name: Generera röster
+# Skapar talklipp för spelets repliker med Piper (fri, lokal talsyntes) och lägger dem i public/voice/.
+on:
+  push:
+    branches: ['arena/**']
+    paths: ['voice/**', '.github/workflows/voices.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  voices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install piper-tts==1.8.0 imageio-ffmpeg
+      - run: python voice/make.py
+      - name: Spara klippen i projektet
+        if: always()
+        run: |
+          git config user.name "teamai-voices"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A public/voice
+          git diff --cached --quiet || (git commit -m "Genererade röstklipp [skip ci]" && git push)

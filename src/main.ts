@@ -255,6 +255,14 @@ class Game {
 
   // ---------------- commands ----------------
   lastSay = ''; lastSayT = 0; micS = ''; micD: string | undefined;
+  /** Speaks a line as a given character: recorded clip with a per-character voice, else the browser's speech synthesis. */
+  speak(text: string, a: Actor | null, o: { gain?: number; pan?: number; muffle?: boolean; pitch?: number; rate?: number } = {}) {
+    if (!S.tts) return;
+    const clean = text.replace(/^Team [AB]: /, ''), kind = a?.kind ?? 'player';
+    const rate = kind === 'officer' ? [1.0, 1.09, 0.88, 0.95][a!.slot] ?? 1 : kind === 'suspect' ? [0.8, 0.87, 0.94, 1.03][a!.id % 4] : kind === 'civ' ? [1.3, 1.22, 1.12, 1.34][a!.id % 4] : a && a !== this.sim?.player ? 0.9 + (a.pi % 3) * 0.07 : 0.97;
+    const ms = this.audio.line(clean, { rate, radio: kind === 'officer', gruff: kind === 'suspect', gain: o.gain, pan: o.pan, muffle: o.muffle });
+    if (ms) this.speech.busy(ms); else this.speech.say(text, o.pitch ?? 1, o.rate ?? 1.2, o.gain ?? 0.9);
+  }
   heard(text: string, fromMic: boolean) {
     if (this.state !== 'play' || !this.sim) return;
     if (fromMic && !S.head && !S.ptt && this.speech.speaking) { // don't let the team's own radio voice trigger orders
@@ -281,7 +289,7 @@ class Game {
   aimPoint() { const sim = this.sim!, p = sim.player, d = this.aimDir(); const h = sim.ray(p.x, this.eye, p.z, d.x, d.y, d.z, 40, p); return h.kind === 'none' ? null : { x: h.x - d.x * 0.4, z: h.z - d.z * 0.4 }; }
   shout(tts: boolean) {
     const sim = this.sim!; if (!sim.player.alive) return; if (this.mirror) this.net.send({ t: 'shout' }); else sim.playerShout();
-    if (tts) this.speech.say(S.lang.startsWith('sv') ? 'Polis! Ner på marken!' : 'Police! Get down!', 0.7, 1.3, 1);
+    if (tts) this.speak(S.lang.startsWith('sv') ? 'Polis! Ner på marken!' : 'Police! Get down!', null, { pitch: 0.7, rate: 1.3, gain: 1 });
     this.log('DU: Polis! Lägg ner vapnet!', 'me');
   }
   reload() { const w = WEAPONS[this.weapon]; if (this.reloadT > 0 || this.ammo[this.weapon] >= w.mag || this.reserve[this.weapon] <= 0) return; this.reloadT = w.reload; this.audio.reload(); }
@@ -324,25 +332,26 @@ class Game {
         const key = e.text.replace(/^Team [AB]: /, ''), now = performance.now(), dup = !e.shout && key === this.lastSay && now - this.lastSayT < 2500; this.lastSay = key; this.lastSayT = now;
         if (dup) break;
         this.audio.radio();
-        if (!e.shout || Math.random() < 0.6) this.speech.say(e.text, [0.85, 1.25, 0.65, 1.05][o.slot] ?? 1, e.shout ? 1.35 : 1.2, e.shout ? 1 : 0.85);
+        if (!e.shout || Math.random() < 0.6) this.speak(e.text, o, { pitch: [0.85, 1.25, 0.65, 1.05][o.slot] ?? 1, rate: e.shout ? 1.35 : 1.2, gain: e.shout ? 1 : 0.85 });
         break;
       }
       case 'bang': { const q = this.pan(e.x, e.z); this.audio.bang(q.d, q.pan, p.flash); fx.flashAt(e.x, 1, e.z, 900, 0.12, 0xffffff); fx.burst(e.x, 0.3, e.z, 60, 0xffffff, 7, 3, 0.5); fx.burst(e.x, 0.3, e.z, 30, 0x999999, 2, -0.5, 1.6); break; }
       case 'throw': this.audio.step(0.3); break;
-      case 'shout': if (e.a !== p) { this.log(`${e.a.name}: Polis! Lägg ner vapnet!`, ''); const q = this.pan(e.a.x, e.a.z); this.audio.vocal('shout', 0.9, q.d, q.pan); } break;
+      case 'shout': if (e.a !== p) { this.log(`${e.a.name}: Polis! Lägg ner vapnet!`, ''); const q = this.pan(e.a.x, e.a.z); if (!this.audio.hasLine('Polis! Lägg ner vapnet!') || !S.tts) this.audio.vocal('shout', 0.9, q.d, q.pan); else this.speak('Polis! Lägg ner vapnet!', e.a, { gain: 1 / (1 + q.d * 0.1), pan: q.pan }); } break;
       case 'bark': {
         const a = e.a, q = this.pan(a.x, a.z); if (q.d > 22) break;
         const near = sim.los(p.x, p.z, a.x, a.z) ? 1 : 0.45, pitch = (a.kind === 'civ' ? 1.25 : 0.85) + (a.variant % 3) * 0.12, sv = S.lang.startsWith('sv');
         const d2 = q.d / near; // muffled through walls
+        const clip = sv && !!S.tts && this.audio.linesReady; // recorded lines replace the synthetic shout
         const pick = (l: string[]) => l[(a.id + Math.floor(sim.time)) % l.length];
         let line = '';
         if (e.kind === 'pain') this.audio.vocal('pain', pitch, d2, q.pan);
         else if (e.kind === 'die') this.audio.vocal('die', pitch, d2, q.pan);
-        else if (e.kind === 'spot') { this.audio.vocal('shout', pitch, d2, q.pan); line = sv ? pick(['Snuten!', 'Polisen är här!', 'De kommer in!', 'Skjut dem!']) : pick(['Cops!', 'They are here!', 'Shoot them!']); }
-        else if (e.kind === 'unrest') { this.audio.vocal('shout', pitch, d2, q.pan); line = sv ? 'Nu sticker jag!' : 'I am out of here!'; }
-        else if (e.kind === 'panic') { this.audio.vocal('whimper', pitch, d2, q.pan); line = sv ? pick(['Hjälp!', 'Nej, nej!', 'Skjut inte!']) : pick(['Help!', 'No, no!']); }
-        else if (e.kind === 'surrender') { this.audio.vocal(a.kind === 'civ' ? 'whimper' : 'yes', pitch, d2, q.pan); line = a.kind === 'civ' ? (sv ? pick(['Skjut inte, snälla!', 'Jag gör som ni säger!', 'Hjälp mig!']) : pick(['Please do not shoot!', 'Help me!'])) : (sv ? pick(['Skjut inte! Jag ger upp!', 'Okej, okej! Jag ger mig!', 'Jag släpper vapnet!']) : pick(['Do not shoot! I give up!', 'Okay, okay!'])); }
-        if (line && q.d < 16) { this.log(`${a.kind === 'civ' ? 'Civil' : 'Misstänkt'}: ${line}`, ''); this.speech.say(line, Math.min(2, pitch * 1.1), 1.25, Math.max(0.15, near * (1 - q.d / 20))); }
+        else if (e.kind === 'spot') { if (!clip) this.audio.vocal('shout', pitch, d2, q.pan); line = sv ? pick(['Snuten!', 'Polisen är här!', 'De kommer in!', 'Skjut dem!', 'Vi har besök!', 'Ta dem!']) : pick(['Cops!', 'They are here!', 'Shoot them!']); }
+        else if (e.kind === 'unrest') { if (!clip) this.audio.vocal('shout', pitch, d2, q.pan); line = sv ? 'Nu sticker jag!' : 'I am out of here!'; }
+        else if (e.kind === 'panic') { this.audio.vocal('whimper', pitch, d2, q.pan); line = sv ? pick(['Hjälp!', 'Nej, nej!', 'Skjut inte!', 'Vad händer?']) : pick(['Help!', 'No, no!']); }
+        else if (e.kind === 'surrender') { if (!clip || a.kind === 'civ') this.audio.vocal(a.kind === 'civ' ? 'whimper' : 'yes', pitch, d2, q.pan); line = a.kind === 'civ' ? (sv ? pick(['Skjut inte, snälla!', 'Jag gör som ni säger!', 'Hjälp mig!']) : pick(['Please do not shoot!', 'Help me!'])) : (sv ? pick(['Skjut inte! Jag ger upp!', 'Okej, okej! Jag ger mig!', 'Jag släpper vapnet!']) : pick(['Do not shoot! I give up!', 'Okay, okay!'])); }
+        if (line && q.d < 16) { this.log(`${a.kind === 'civ' ? 'Civil' : 'Misstänkt'}: ${line}`, ''); this.speak(line, a, { pitch: Math.min(2, pitch * 1.1), rate: 1.25, gain: Math.max(0.15, near * (1 - q.d / 20)), pan: q.pan, muffle: near < 1 }); }
         break;
       }
       case 'cuff': { const q = this.pan(e.a.x, e.a.z); if (q.d < 10) this.audio.cuff(); if (e.by === p) this.log(e.a.kind === 'suspect' ? 'Du säkrade en misstänkt.' : 'Du säkrade en civil.', 'me'); break; }

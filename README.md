@@ -20,3 +20,7 @@ npm run build    # produktion till dist/
 ## Licenser
 
 Kod-beroenden: three.js (MIT), Vite (MIT), TypeScript (Apache-2.0). All grafik, alla figurer och allt ljud genereras av spelets egen kod – inga tredjepartsfiler.
+
+## Röster
+
+Replikerna i `voice/lines.json` spelas in av arbetsflödet `.github/workflows/voices.yml` (Piper + den svenska rösten NST, CC0) och sparas i `public/voice/`. Ändra eller lägg till rader i `voice/lines.json` och pusha, så skapas klippen om automatiskt. Spelet ger varje figur en egen röstprofil (tonläge, radiofilter för teamet, grövre röst för misstänkta). Rader utan klipp läses upp av webbläsarens talsyntes.
