@@ -27,6 +27,8 @@ const best: Record<string, number> = JSON.parse(localStorage.getItem('teamai.bes
 if (params.has('q')) S.qual = +params.get('q')!;
 const saveSettings = () => localStorage.setItem('teamai.settings', JSON.stringify(S));
 
+// where the animated arms move to when aiming: x, y, z offset and pitch, yaw; carbine then pistol
+const AIMPOS = [[-0.113, 0.036, 0, 0, 0], [-0.03, 0.03, -0.03, 0, 0]];
 const WEAPONS = [
   { name: 'KARBIN', mag: 30, rate: 0.095, dmg: 34, auto: true, spread: 0.004, reload: 2.0, kick: 0.011 },
   { name: 'PISTOL', mag: 15, rate: 0.15, dmg: 26, auto: false, spread: 0.008, reload: 1.4, kick: 0.016 },
@@ -237,11 +239,12 @@ class Game {
     document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement && this.state === 'play' && !AUTO && !this.typing) this.pause(); });
     document.addEventListener('mousemove', e => {
       if (this.state !== 'play' || (!document.pointerLockElement && !AUTO)) return;
-      const k = 0.0022 * S.sens; this.yaw -= e.movementX * k; this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * k));
+      const k = 0.0022 * S.sens * (1 - this.aimK * 0.5); this.yaw -= e.movementX * k; this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * k));
       this.sway.x += e.movementX * 0.00012; this.sway.y += e.movementY * 0.00012;
     });
-    document.addEventListener('mousedown', e => { if (this.state !== 'play' || !document.pointerLockElement) return; if (e.button === 0) { this.mouseDown = true; const sp = this.sim?.player; if (sp?.alive && !this.typing && this.fireCd <= 0 && this.reloadT <= 0 && this.ammo[this.weapon] > 0 && !this.semiLock && !this.preShot) { this.preShot = true; this.audio.shot(0, 0, true, this.weapon === 0 ? 'rifle' : 'pistol'); } } if (e.button === 1) { e.preventDefault(); this.shout(true); } });
-    document.addEventListener('mouseup', e => { if (e.button === 0) { this.mouseDown = false; this.semiLock = false; } });
+    document.addEventListener('mousedown', e => { if (this.state !== 'play' || !document.pointerLockElement) return; if (e.button === 0) { this.mouseDown = true; const sp = this.sim?.player; if (sp?.alive && !this.typing && this.fireCd <= 0 && this.reloadT <= 0 && this.ammo[this.weapon] > 0 && !this.semiLock && !this.preShot) { this.preShot = true; this.audio.shot(0, 0, true, this.weapon === 0 ? 'rifle' : 'pistol'); } } if (e.button === 1) { e.preventDefault(); this.shout(true); } if (e.button === 2) this.ads = true; });
+    document.addEventListener('contextmenu', e => { if (this.state === 'play') e.preventDefault(); });
+    document.addEventListener('mouseup', e => { if (e.button === 0) { this.mouseDown = false; this.semiLock = false; } if (e.button === 2) this.ads = false; });
     document.addEventListener('keydown', e => {
       if (this.typing) { if (e.code === 'Enter') { const inp = $<HTMLInputElement>('cmdinput'); const v = inp.value.trim(); inp.value = ''; this.setTyping(false); if (v) this.heard(v, false); e.preventDefault(); } else if (e.code === 'Escape') this.setTyping(false); return; }
       if (e.code === 'Escape') { if (!$('help').classList.contains('hidden') || !$('settings').classList.contains('hidden')) { show('help', false); show('settings', false); } else if (this.state === 'pause') this.resume(); else if (this.state === 'play' && AUTO) this.pause(); return; }
@@ -325,6 +328,7 @@ class Game {
     if (this.mirror) this.net.send({ t: 'bang', o, d: [d.x, d.y, d.z] }); else { p.bangs--; sim.throwBang(o[0], o[1], o[2], d.x, d.y, d.z); } this.vmKick = -0.6;
   }
   menu = new MenuScene(); menuT = 0; arms = new FpsArms();
+  ads = false; aimK = 0; // aiming down the sights (hold right mouse button)
   slow = false; jumpV = 0; // sneak toggle, vertical jump speed
   preShot = false; // own shot sound already played in the mouse click
   fire() {
@@ -332,7 +336,7 @@ class Game {
     if (this.ammo[this.weapon] <= 0) { if (!this.semiLock) { this.audio.dry(); this.semiLock = true; this.reload(); } return; }
     this.ammo[this.weapon]--; this.fireCd = w.rate;
     const moving = this.keys.has('KeyW') || this.keys.has('KeyA') || this.keys.has('KeyS') || this.keys.has('KeyD');
-    const sp = w.spread * (moving ? 3.5 : 1) * (p.crouch ? 0.6 : 1) + this.recoil * 0.25, d = this.aimDir();
+    const sp = (w.spread * (moving ? 3.5 : 1) * (p.crouch ? 0.6 : 1) + this.recoil * 0.25) * (1 - this.aimK * 0.65), d = this.aimDir();
     d.x += (Math.random() - 0.5) * sp * 2; d.y += (Math.random() - 0.5) * sp * 2; d.z += (Math.random() - 0.5) * sp * 2; d.normalize();
     if (this.mirror) { this.net.send({ t: 'fire', o: [p.x, this.eye, p.z], d: [d.x, d.y, d.z], dmg: w.dmg }); if (!this.preShot) this.audio.shot(0, 0, true, this.weapon === 0 ? 'rifle' : 'pistol'); this.preShot = false; } else sim.fire(p, p.x, this.eye, p.z, d.x, d.y, d.z, w.dmg);
     this.recoil = Math.min(0.09, this.recoil + w.kick); this.pitch = Math.min(1.45, this.pitch + w.kick * 0.55); this.yaw += (Math.random() - 0.5) * w.kick * 0.5; this.vmKick = 1; if (this.weapon === 0) this.arms.fire();
@@ -507,23 +511,28 @@ class Game {
     const targetEye = (!p.alive ? 0.35 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive ? p.jumpY : 0); this.eye += (targetEye - this.eye) * Math.min(1, dt * (p.jumpY > 0 ? 30 : 9));
     { const st = $('stance'), run = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch, t = !p.alive ? '' : p.prone ? 'KRYPER · TYST' : p.crouch ? 'HUKAR · TYST' : run ? 'SPRINGER · HÖRS LÅNGT' : this.slow ? 'SMYGER · TYST' : ''; if (st.textContent !== t) { st.textContent = t; st.className = run ? 'loud' : ''; } }
     this.camera.position.set(p.x, this.eye + Math.sin(this.bob * 2) * 0.022, p.z); this.camera.rotation.set(this.pitch, this.yaw, !p.alive ? 0.5 : Math.sin(this.bob) * 0.004);
+    { const sprint = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch && (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD'));
+      const want = this.ads && p.alive && this.reloadT <= 0 && !sprint && !this.typing && !!document.pointerLockElement || (AUTO && this.ads) ? 1 : 0;
+      this.aimK += (want - this.aimK) * Math.min(1, dt * 12); if (Math.abs(want - this.aimK) < 0.002) this.aimK = want;
+      const fov = 74 * (1 - this.aimK * (this.weapon === 0 ? 0.45 : 0.25)); if (Math.abs(this.camera.fov - fov) > 0.01) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); } }
     this.torch.intensity = this.torchOn ? 22 : 0;
     // view model
     const g = this.vm.group; this.vmKick += (0 - this.vmKick) * Math.min(1, dt * 14); this.sway.multiplyScalar(Math.max(0, 1 - dt * 9));
     const rl = this.reloadT > 0 ? Math.sin(Math.min(1, this.reloadT / WEAPONS[this.weapon].reload) * Math.PI) : 0;
-    g.position.set(0.17 - this.sway.x + Math.sin(this.bob) * 0.006, -0.16 + this.sway.y - rl * 0.16 + Math.abs(Math.cos(this.bob)) * 0.006 + Math.min(0, this.vmKick) * 0.2, -0.5 + Math.max(0, this.vmKick) * 0.05);
+    const ak = this.aimK, AIM = AIMPOS;
+    g.position.set(0.17 * (1 - ak) - this.sway.x + Math.sin(this.bob) * 0.006, -0.16 + ak * 0.075 + this.sway.y - rl * 0.16 + Math.abs(Math.cos(this.bob)) * 0.006 + Math.min(0, this.vmKick) * 0.2, -0.5 + Math.max(0, this.vmKick) * 0.05);
     g.rotation.set(Math.max(0, this.vmKick) * 0.07 - rl * 0.7, 0.03 + this.sway.x * 2, rl * 0.5);
     this.vm.rifle.visible = this.weapon === 0; this.vm.pistol.visible = this.weapon === 1; g.visible = p.alive;
     if (this.arms.ready) { // animated arms: the clips do the reloading and walking, the code only adds sway and recoil
       const a = this.arms.root, rf = this.weapon === 0, dip = rf ? 0 : rl, mv = !p.alive || this.typing || !(K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD')) ? 0 : (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.crouch && !p.prone ? 2 : 1;
-      a.position.set(-this.sway.x, this.sway.y + Math.min(0, this.vmKick) * 0.2 - dip * 0.16, Math.max(0, this.vmKick) * 0.035);
-      a.rotation.set(Math.max(0, this.vmKick) * 0.035 - dip * 0.7, this.sway.x * 2, dip * 0.5); a.visible = p.alive;
+      const am = AIM[this.weapon]; a.position.set(-this.sway.x * (1 - ak * 0.7) + am[0] * ak, this.sway.y * (1 - ak * 0.7) + Math.min(0, this.vmKick) * 0.2 - dip * 0.16 + am[1] * ak, Math.max(0, this.vmKick) * 0.035 + am[2] * ak);
+      a.rotation.set(Math.max(0, this.vmKick) * 0.035 * (1 - ak * 0.6) - dip * 0.7 + am[3] * ak, this.sway.x * 2 * (1 - ak * 0.7) + am[4] * ak, dip * 0.5); a.visible = p.alive;
       this.arms.update(dt, this.weapon, mv); a.updateMatrixWorld(true); this.vm.flash.position.copy(g.worldToLocal(this.arms.muzzle.getWorldPosition(new THREE.Vector3())));
     }
     // overlays
     $('dmg').style.opacity = String(Math.max(this.dmgFx, p.hp < 35 && p.alive ? 0.35 : 0, p.alive ? 0 : 0.8)); $('flash').style.opacity = String(Math.min(1, p.flash * 1.6));
     const hm = $('hitmark'); hm.style.opacity = String(this.hitFx);
-    const gap = 6 + this.recoil * 260 + (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD') ? 7 : 0) - (p.crouch ? 2 : 0); $('cross').style.setProperty('--gap', gap + 'px');
+    const gap = 6 + this.recoil * 260 + (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD') ? 7 : 0) - (p.crouch ? 2 : 0); $('cross').style.setProperty('--gap', gap * (1 - this.aimK * 0.5) + 'px'); $('cross').style.opacity = String(this.weapon === 0 ? 1 - this.aimK : 1); // the carbine aims with its red dot, the pistol keeps the crosshair
     if (this.parsedT > 0) { this.parsedT -= dt; if (this.parsedT <= 0) { $('parsed').textContent = ''; $('heard').textContent = ''; } }
     this.updateHud(); this.drawMap();
     if (this.endT > 0) { this.endT -= dt; if (this.endT <= 0) this.debrief(); }
