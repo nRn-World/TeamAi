@@ -14,7 +14,7 @@ const cases: [string, string][] = [
   ['team b säkra dem', 'B restrain'], ['röda laget höger', 'A move right'], ['blå laget gå dit', 'B move there'],
   ['eld upphör', 'ALL fireHold'], ['team a fri eld', 'A fireFree'], ['Team A move left', 'A move left'], ['team two cover me', 'B cover'],
   ['everyone on me', 'ALL follow'], ['tema framåt', 'A move forward'], ['team a och team b följ mig', 'ALL follow'], ['hej hur mår du', 'null'],
-  ['team a backa', 'A move back'], ['stäng dörren', 'ALL close'],
+  ['team a backa', 'A move back'], ['team a öppna dörren', 'A open'], ['Team A öppnar dörren', 'A open'], ['team-a stänger dörren', 'A close'], ['bravo dörren', 'B stack'], ['team b stormar', 'B breach'], ['stäng dörren', 'ALL close'],
 ];
 for (const [t, exp] of cases) { const c = parseCommand(t); const got = c ? [c.team, c.action, c.dir].filter(Boolean).join(' ') : 'null'; ok(got === exp, `parse "${t}" => ${got} (expected ${exp})`); }
 console.log('parser cases:', cases.length);

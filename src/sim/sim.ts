@@ -342,7 +342,7 @@ export class Sim {
       const dx = d.cx + 0.5 - p.x, dz = d.cz + 0.5 - p.z, dd = Math.hypot(dx, dz); if (dd > maxD) continue;
       const s = (dx * f.x + dz * f.z) / dd - dd * 0.03; if (s > bs) { bs = s; best = d; }
     }
-    return best ?? this.nearestDoor(p, 6);
+    return best ?? this.nearestDoor(p, 12);
   }
   private doorSide(door: Door, from: Pt) { return door.horiz ? (from.z > door.cz + 0.5 ? 1 : -1) : (from.x > door.cx + 0.5 ? 1 : -1); }
   private stackPts(door: Door, side: number, offset: number): Pt[] {
