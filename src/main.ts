@@ -142,7 +142,7 @@ class Game {
     };
     this.net.onClosed = why => { if (!this.net.online) return; this.toMenu(); $('mpErr').textContent = why; };
     this.net.onMsg = (c, m) => { if (this.net.role === 'host') this.fromClient(c, m); else this.fromHost(m); };
-    $('btnTts').onclick = () => { this.audio.init(); const n = this.speech.voiceCount; this.speech.say(S.lang.startsWith('sv') ? 'Team A, uppfattat. Vi följer dig.' : 'Team A, copy. Following you.', 1, 1.1, 1, true); $('ttsInfo').textContent = n === 0 ? 'Webbläsaren hittar inga talröster – teamet kan då inte prata med ord. Installera en röst i operativsystemets tal-inställningar eller använd Chrome/Edge.' : this.speech.hasLangVoice ? `${n} röster hittades. Hör du inget? Kontrollera volymen och att fliken inte är tystad.` : `${n} röster hittades, men ingen på valt språk – webbläsarens standardröst används.`; };
+    $('btnTts').onclick = () => { this.audio.init(); setTimeout(() => { $('latInfo').textContent = this.audio.latencyMs ? `Ljudfördröjning enligt webbläsaren: ${this.audio.latencyMs} ms.` : ''; }, 300); const n = this.speech.voiceCount; this.speech.say(S.lang.startsWith('sv') ? 'Team A, uppfattat. Vi följer dig.' : 'Team A, copy. Following you.', 1, 1.1, 1, true); $('ttsInfo').textContent = n === 0 ? 'Webbläsaren hittar inga talröster – teamet kan då inte prata med ord. Installera en röst i operativsystemets tal-inställningar eller använd Chrome/Edge.' : this.speech.hasLangVoice ? `${n} röster hittades. Hör du inget? Kontrollera volymen och att fliken inte är tystad.` : `${n} röster hittades, men ingen på valt språk – webbläsarens standardröst används.`; };
   }
   lobbyMe = 0;
   lobby() {
@@ -220,7 +220,7 @@ class Game {
       const k = 0.0022 * S.sens; this.yaw -= e.movementX * k; this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * k));
       this.sway.x += e.movementX * 0.00012; this.sway.y += e.movementY * 0.00012;
     });
-    document.addEventListener('mousedown', e => { if (this.state !== 'play' || !document.pointerLockElement) return; if (e.button === 0) this.mouseDown = true; if (e.button === 1) { e.preventDefault(); this.shout(true); } });
+    document.addEventListener('mousedown', e => { if (this.state !== 'play' || !document.pointerLockElement) return; if (e.button === 0) { this.mouseDown = true; const sp = this.sim?.player; if (sp?.alive && !this.typing && this.fireCd <= 0 && this.reloadT <= 0 && this.ammo[this.weapon] > 0 && !this.semiLock && !this.preShot) { this.preShot = true; this.audio.shot(0, 0, true, this.weapon === 0); } } if (e.button === 1) { e.preventDefault(); this.shout(true); } });
     document.addEventListener('mouseup', e => { if (e.button === 0) { this.mouseDown = false; this.semiLock = false; } });
     document.addEventListener('keydown', e => {
       if (this.typing) { if (e.code === 'Enter') { const inp = $<HTMLInputElement>('cmdinput'); const v = inp.value.trim(); inp.value = ''; this.setTyping(false); if (v) this.heard(v, false); e.preventDefault(); } else if (e.code === 'Escape') this.setTyping(false); return; }
@@ -259,8 +259,12 @@ class Game {
   speak(text: string, a: Actor | null, o: { gain?: number; pan?: number; muffle?: boolean; pitch?: number; rate?: number } = {}) {
     if (!S.tts) return;
     const clean = text.replace(/^Team [AB]: /, ''), kind = a?.kind ?? 'player';
-    const rate = kind === 'officer' ? [1.0, 1.09, 0.88, 0.95][a!.slot] ?? 1 : kind === 'suspect' ? [0.8, 0.87, 0.94, 1.03][a!.id % 4] : kind === 'civ' ? [1.3, 1.22, 1.12, 1.34][a!.id % 4] : a && a !== this.sim?.player ? 0.9 + (a.pi % 3) * 0.07 : 0.97;
-    const ms = this.audio.line(clean, { rate, radio: kind === 'officer', gruff: kind === 'suspect', gain: o.gain, pan: o.pan, muffle: o.muffle });
+    // each character gets its own voice: [recorded voice, pitch/tempo]
+    const prof: ['m' | 'f', number] = kind === 'officer' ? ([['m', 1.0], ['f', 1.0], ['m', 0.87], ['f', 0.92]] as ['m' | 'f', number][])[a!.slot] ?? ['m', 1]
+      : kind === 'suspect' ? ([['m', 0.8], ['m', 0.93], ['f', 0.84], ['m', 0.86], ['m', 1.02]] as ['m' | 'f', number][])[a!.id % 5]
+        : kind === 'civ' ? ([['f', 1.0], ['m', 1.12], ['f', 1.1], ['m', 1.22], ['f', 0.94]] as ['m' | 'f', number][])[a!.id % 5]
+          : a && a !== this.sim?.player ? ['m', 0.9 + (a.pi % 3) * 0.07] : ['m', 0.97];
+    const ms = this.audio.line(clean, { voice: prof[0], rate: prof[1], radio: kind === 'officer', gruff: kind === 'suspect', gain: o.gain, pan: o.pan, muffle: o.muffle });
     if (ms) this.speech.busy(ms); else this.speech.say(text, o.pitch ?? 1, o.rate ?? 1.2, o.gain ?? 0.9);
   }
   heard(text: string, fromMic: boolean) {
@@ -297,6 +301,7 @@ class Game {
     const sim = this.sim!, p = sim.player; if (p.bangs <= 0 || !p.alive) return; const d = this.aimDir(), o = [p.x + d.x * 0.4, this.eye - 0.1, p.z + d.z * 0.4];
     if (this.mirror) this.net.send({ t: 'bang', o, d: [d.x, d.y, d.z] }); else { p.bangs--; sim.throwBang(o[0], o[1], o[2], d.x, d.y, d.z); } this.vmKick = -0.6;
   }
+  preShot = false; // own shot sound already played in the mouse click
   fire() {
     const sim = this.sim!, w = WEAPONS[this.weapon], p = sim.player;
     if (this.ammo[this.weapon] <= 0) { if (!this.semiLock) { this.audio.dry(); this.semiLock = true; this.reload(); } return; }
@@ -304,7 +309,7 @@ class Game {
     const moving = this.keys.has('KeyW') || this.keys.has('KeyA') || this.keys.has('KeyS') || this.keys.has('KeyD');
     const sp = w.spread * (moving ? 3.5 : 1) * (p.crouch ? 0.6 : 1) + this.recoil * 0.25, d = this.aimDir();
     d.x += (Math.random() - 0.5) * sp * 2; d.y += (Math.random() - 0.5) * sp * 2; d.z += (Math.random() - 0.5) * sp * 2; d.normalize();
-    if (this.mirror) { this.net.send({ t: 'fire', o: [p.x, this.eye, p.z], d: [d.x, d.y, d.z], dmg: w.dmg }); this.audio.shot(0, 0, true, this.weapon === 0); } else sim.fire(p, p.x, this.eye, p.z, d.x, d.y, d.z, w.dmg);
+    if (this.mirror) { this.net.send({ t: 'fire', o: [p.x, this.eye, p.z], d: [d.x, d.y, d.z], dmg: w.dmg }); if (!this.preShot) this.audio.shot(0, 0, true, this.weapon === 0); this.preShot = false; } else sim.fire(p, p.x, this.eye, p.z, d.x, d.y, d.z, w.dmg);
     this.recoil = Math.min(0.09, this.recoil + w.kick); this.pitch = Math.min(1.45, this.pitch + w.kick * 0.55); this.yaw += (Math.random() - 0.5) * w.kick * 0.5; this.vmKick = 1;
     this.vm.flash.visible = true; this.vm.flash.material.rotation = Math.random() * 6; setTimeout(() => { this.vm.flash.visible = false; }, 45);
   }
@@ -318,7 +323,7 @@ class Game {
       case 'shot': {
         const own = e.by === p, a = new THREE.Vector3(e.x, e.y, e.z), b = new THREE.Vector3(e.x2, e.y2, e.z2);
         if (own) { const r = fwd(this.yaw); a.set(p.x + r.x * 0.5 - r.z * 0.12, this.eye - 0.12, p.z + r.z * 0.5 + r.x * 0.12); } else this.views.get(e.by)?.muzzle();
-        fx.tracer(a, b); const pn = this.pan(e.x, e.z); if (!(own && this.mirror)) this.audio.shot(pn.d, pn.pan, own, own ? this.weapon === 0 : true); fx.flashAt(a.x, a.y, a.z, own ? 14 : 22);
+        fx.tracer(a, b); const pn = this.pan(e.x, e.z); if (own && this.preShot) this.preShot = false; else if (!(own && this.mirror)) this.audio.shot(pn.d, pn.pan, own, own ? this.weapon === 0 : true); fx.flashAt(a.x, a.y, a.z, own ? 14 : 22);
         if (e.hit === 'wall') { fx.burst(e.x2, e.y2, e.z2, 7, 0xb8b0a0, 2.2, 6, 0.35); fx.burst(e.x2, e.y2, e.z2, 2, 0xffd080, 4, 9, 0.15); fx.hole(e.x2 - (e.x2 - e.x) * 0.002, e.y2, e.z2 - (e.z2 - e.z) * 0.002); const q = this.pan(e.x2, e.z2); if (q.d < 12) this.audio.impact(q.d, q.pan); }
         else if (e.hit === 'actor') fx.burst(e.x2, e.y2, e.z2, 12, 0x8a0f0f, 2.4, 7, 0.5);
         break;
@@ -448,6 +453,7 @@ class Game {
       this.fireCd -= dt;
       if (this.reloadT > 0) { this.reloadT -= dt; if (this.reloadT <= 0) { const w = WEAPONS[this.weapon], n = Math.min(w.mag - this.ammo[this.weapon], this.reserve[this.weapon]); this.ammo[this.weapon] += n; this.reserve[this.weapon] -= n; } }
       else if (this.mouseDown && this.fireCd <= 0 && (WEAPONS[this.weapon].auto || !this.semiLock)) { this.fire(); if (!WEAPONS[this.weapon].auto) this.semiLock = true; }
+      if (!this.mouseDown || this.fireCd > 0.25) this.preShot = false;
     }
     if (this.mirror) {
       this.inT -= dt; if (this.inT <= 0) { this.inT = 0.05; this.net.send({ t: 'in', x: p.x, z: p.z, yaw: this.yaw, pitch: this.pitch, cr: p.crouch, mv: K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD') }); }
