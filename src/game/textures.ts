@@ -77,7 +77,7 @@ export const doorTex = () => make('door', 128, 256, (g, w, h) => {
 export const fabricTex = (key: string, col: string) => make('fab' + key, 64, 64, (g, w, h) => { g.fillStyle = col; g.fillRect(0, 0, w, h); grain(g, w, h, 26, 9); });
 export const labelTex = (text: string, color: string) => make('label' + text + color, 128, 64, (g, w, h) => {
   g.clearRect(0, 0, w, h); g.fillStyle = 'rgba(8,12,18,0.7)'; g.beginPath(); (g as any).roundRect(14, 12, 100, 40, 9); g.fill(); g.strokeStyle = color; g.lineWidth = 4; g.stroke();
-  g.fillStyle = '#fff'; g.font = 'bold 30px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, w / 2, h / 2 + 2);
+  g.fillStyle = '#fff'; g.font = `bold ${text.length > 3 ? 20 : 30}px system-ui, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, w / 2, h / 2 + 2, 92);
 });
 export const polisTex = () => make('polis', 128, 64, (g, w, h) => { g.fillStyle = '#10141b'; g.fillRect(0, 0, w, h); g.fillStyle = '#e9edf2'; g.font = 'bold 34px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('POLIS', w / 2, h / 2 + 2); });
 export const glowTex = () => make('glow', 64, 64, (g, w, h) => { const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.3, 'rgba(255,220,150,0.7)'); gr.addColorStop(1, 'rgba(255,160,40,0)'); g.fillStyle = gr; g.fillRect(0, 0, w, h); });

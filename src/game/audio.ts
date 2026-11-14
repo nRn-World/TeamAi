@@ -34,8 +34,8 @@ export class GameAudio {
   }
   dry() { if (!this.ctx) return; const o = this.out(0, 0.5, false); this.tone(o, 'square', 1800, 900, 0.03, 0.25); }
   reload() { if (!this.ctx) return; const o = this.out(0.2, 0.5, false); this.burst(o, 0.05, 'bandpass', 2400, 1800, 4, 0.7); this.burst(o, 0.06, 'bandpass', 1500, 1100, 4, 0.8, 0.55); this.tone(o, 'square', 500, 200, 0.04, 0.15, 1.1); this.burst(o, 0.05, 'bandpass', 3000, 2000, 3, 0.9, 1.12); }
-  step(vol = 0.25, pan = 0) { if (!this.ctx) return; const o = this.out(pan, vol, false); this.burst(o, 0.07, 'lowpass', 500 + Math.random() * 200, 120, 1, 0.9); }
-  door(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 0.7 / (1 + dist * 0.15)); this.tone(o, 'sawtooth', 95, 150, 0.32, 0.12); this.burst(o, 0.12, 'lowpass', 600, 90, 1, 0.9, 0.3); }
+  step(vol = 0.25, pan = 0) { if (!this.ctx) return; const o = this.out(pan, vol * 1.8, false); this.burst(o, 0.07, 'lowpass', 500 + Math.random() * 200, 120, 1, 0.9); this.burst(o, 0.03, 'bandpass', 1800, 900, 1.5, 0.25); }
+  door(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 1.2 / (1 + dist * 0.12)); this.tone(o, 'sawtooth', 95, 150, 0.32, 0.12); this.burst(o, 0.12, 'lowpass', 600, 90, 1, 0.9, 0.3); }
   cuff() { if (!this.ctx) return; const o = this.out(0, 0.5, false); for (let i = 0; i < 6; i++) this.burst(o, 0.02, 'bandpass', 3500 + i * 250, 3000, 8, 0.6, i * 0.04); }
   bang(dist: number, pan: number, deaf: number) {
     if (!this.ctx) return; const o = this.out(pan, 1.6 / (1 + dist * 0.06)); this.burst(o, 0.5, 'lowpass', 9000, 120, 0.5, 1.5); this.tone(o, 'sine', 120, 30, 0.4, 1.2);
@@ -44,7 +44,18 @@ export class GameAudio {
   hurt() { if (!this.ctx) return; const o = this.out(0, 0.7, false); this.tone(o, 'sine', 140, 50, 0.18, 1); this.burst(o, 0.08, 'lowpass', 900, 200, 1, 0.6); }
   hitmark(head: boolean) { if (!this.ctx) return; const o = this.out(0, 0.3, false); this.tone(o, 'triangle', head ? 1500 : 950, head ? 1100 : 700, 0.05, 0.7); }
   impact(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 0.35 / (1 + dist * 0.2)); this.burst(o, 0.05, 'bandpass', 2600 + Math.random() * 1500, 900, 2, 0.8); }
-  radio() { if (!this.ctx) return; const o = this.out(0, 0.18, false); this.tone(o, 'square', 1250, 1250, 0.045, 0.4); this.burst(o, 0.09, 'bandpass', 2200, 2000, 1.5, 0.35, 0.05); }
+  radio() { if (!this.ctx) return; const o = this.out(0, 0.3, false); this.tone(o, 'square', 1250, 1250, 0.045, 0.4); this.burst(o, 0.09, 'bandpass', 2200, 2000, 1.5, 0.35, 0.05); }
+  /** Synthesised human-ish vocal (formant filtered saw). Works even when the browser has no speech voices. */
+  vocal(kind: 'shout' | 'pain' | 'die' | 'whimper' | 'yes', pitch: number, dist: number, pan: number) {
+    if (!this.ctx) return; const c = this.ctx, t = c.currentTime, g = this.out(pan, 0.9 / (1 + dist * 0.14));
+    const P = { shout: [1.25, 1.0, 0.38, 800, 1250], pain: [1.5, 0.8, 0.22, 650, 1700], die: [1.1, 0.5, 0.75, 600, 1000], whimper: [1.9, 1.5, 0.45, 400, 2100], yes: [1.0, 1.15, 0.16, 500, 1500] }[kind];
+    const f0 = 120 * pitch, o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(f0 * P[0], t); o.frequency.exponentialRampToValueAtTime(f0 * P[1], t + P[2]);
+    const vib = c.createOscillator(), vg = c.createGain(); vib.frequency.value = kind === 'whimper' ? 9 : 5.5; vg.gain.value = f0 * (kind === 'whimper' ? 0.06 : 0.02); vib.connect(vg); vg.connect(o.frequency);
+    const env = c.createGain(); env.gain.setValueAtTime(0.0001, t); env.gain.exponentialRampToValueAtTime(0.9, t + 0.03); env.gain.exponentialRampToValueAtTime(0.001, t + P[2]);
+    for (const [f, q, lvl] of [[P[3], 7, 1], [P[4], 9, 0.6], [2700, 10, 0.25]]) { const b = c.createBiquadFilter(); b.type = 'bandpass'; b.frequency.value = f; b.Q.value = q; const l = c.createGain(); l.gain.value = lvl * 2.2; o.connect(b); b.connect(l); l.connect(env); }
+    env.connect(g); o.start(t); vib.start(t); o.stop(t + P[2] + 0.05); vib.stop(t + P[2] + 0.05);
+    this.burst(g, P[2] * 0.6, 'bandpass', 2500, 1800, 1, 0.08);
+  }
   ui() { if (!this.ctx) return; const o = this.out(0, 0.25, false); this.tone(o, 'triangle', 700, 900, 0.05, 0.5); }
   ok() { if (!this.ctx) return; const o = this.out(0, 0.25, false); this.tone(o, 'triangle', 660, 660, 0.07, 0.5); this.tone(o, 'triangle', 990, 990, 0.1, 0.5, 0.08); }
   fail() { if (!this.ctx) return; const o = this.out(0, 0.25, false); this.tone(o, 'sawtooth', 220, 150, 0.2, 0.4); }
@@ -56,17 +67,25 @@ export class Speech {
   constructor() { if ('speechSynthesis' in window) { const load = () => { this.voices = speechSynthesis.getVoices(); }; load(); speechSynthesis.onvoiceschanged = load; } }
   /** True while the team is (estimated to be) talking. Uses our own timer – speechSynthesis.speaking can get stuck in some browsers. */
   get speaking() { return performance.now() < this.until; }
-  say(text: string, pitch = 1, rate = 1.15, vol = 0.9) {
-    if (!this.enabled || !('speechSynthesis' in window)) return;
-    if (this.queue > 1) return;
+  private keep = new Set<SpeechSynthesisUtterance>(); // Chrome drops utterances that get garbage collected
+  get voiceCount() { return this.voices.length; }
+  private pick() {
+    if (!this.voices.length && 'speechSynthesis' in window) this.voices = speechSynthesis.getVoices();
+    const pre = this.lang.slice(0, 2), V = this.voices;
+    return V.find(x => x.lang.replace('_', '-') === this.lang) ?? V.find(x => x.lang.toLowerCase().startsWith(pre)) ?? null;
+  }
+  get hasLangVoice() { return !!this.pick(); }
+  say(text: string, pitch = 1, rate = 1.15, vol = 0.9, force = false) {
+    if ((!this.enabled && !force) || !('speechSynthesis' in window)) return;
+    if (this.queue > 1 && !force) return;
     const clean = text.replace(/^Team ([AB]): /, '');
-    const u = new SpeechSynthesisUtterance(clean); const pre = this.lang.slice(0, 2);
-    const v = this.voices.find(x => x.lang === this.lang) ?? this.voices.find(x => x.lang.startsWith(pre)); if (v) u.voice = v; u.lang = this.lang;
-    u.pitch = pitch; u.rate = rate; u.volume = vol; this.queue++;
+    const u = new SpeechSynthesisUtterance(clean), v = this.pick();
+    if (v) { u.voice = v; u.lang = v.lang; } // no matching voice: let the browser use its default voice instead of staying silent
+    u.pitch = pitch; u.rate = rate; u.volume = vol; this.queue++; this.keep.add(u);
     const est = 500 + clean.length * 75; this.until = Math.max(this.until, performance.now()) + est;
-    let done = false; const end = () => { if (done) return; done = true; this.queue = Math.max(0, this.queue - 1); if (this.queue === 0) this.until = Math.min(this.until, performance.now() + 350); };
+    let done = false; const end = () => { if (done) return; done = true; this.keep.delete(u); this.queue = Math.max(0, this.queue - 1); if (this.queue === 0) this.until = Math.min(this.until, performance.now() + 350); };
     u.onend = u.onerror = end; setTimeout(end, est + 2500);
-    try { speechSynthesis.resume(); speechSynthesis.speak(u); } catch { end(); }
+    try { if (speechSynthesis.paused) speechSynthesis.resume(); speechSynthesis.speak(u); } catch { end(); }
   }
   stop() { if ('speechSynthesis' in window) speechSynthesis.cancel(); this.queue = 0; this.until = 0; }
 }

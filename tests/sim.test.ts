@@ -2,6 +2,7 @@ import { Sim, yawTo, fwd } from '../src/sim/sim';
 import { parseCommand } from '../src/sim/commands';
 import { findPath } from '../src/sim/nav';
 import { MISSIONS } from '../src/sim/level';
+import { encodeSnap, applySnap, encodeEv, decodeEv } from '../src/sim/netstate';
 
 let fails = 0;
 const ok = (c: boolean, msg: string) => { if (!c) { fails++; console.log('  FAIL', msg); } };
@@ -58,6 +59,27 @@ function play(mission: number, seed: number, verbose = false) {
   console.log(`mission ${mission} "${MISSIONS[mission].name}" seed ${seed}: ${sim.over ? (sim.over.win ? 'WIN' : 'LOSE') : 'timeout'} t=${t.toFixed(0)}s remaining=${JSON.stringify(r)} score=${sc.total} stats=${JSON.stringify(sim.stats)} playerHp=${p.hp.toFixed(0)} officers=${sim.officers.map(o => o.hp.toFixed(0)).join('/')}`);
   if (verbose) console.log([...new Set(says)].join(' | '));
   return sim;
+}
+// ---- co-op: host sim + mirrored client sim ----
+{
+  const host = new Sim(0, 7, 1, 3), mir = new Sim(0, 7, 1, 3); const me = mir.players[1]; mir.player = me;
+  ok(host.actors.length === mir.actors.length && host.players.length === 3, 'coop actor count');
+  const solo = new Sim(0, 7, 1, 1); ok(solo.suspects.every((x, i) => x.x === host.suspects[i].x && x.id === host.suspects[i].id), 'extra players must not change the level');
+  host.command({ team: 'A', action: 'follow' }, null, host.players[1]); host.command({ team: 'B', action: 'breach' }, null, host.players[0]);
+  let evs = 0;
+  for (let i = 0; i < 400; i++) {
+    const rp = host.players[1]; rp.z -= 0.02; host.pushTrail(rp); // remote player walks north
+    host.update(1 / 30);
+    const wire = JSON.parse(JSON.stringify({ s: encodeSnap(host), e: host.events.map(encodeEv) })); host.events.length = 0;
+    applySnap(mir, wire.s, me); for (const e of wire.e) { const d = decodeEv(mir, e); evs++; if ('a' in d) ok(d.a === mir.actors[(d.a as any).id], 'event actor decode'); }
+  }
+  ok(mir.officers.every((o, i) => Math.abs(o.x - host.officers[i].x) < 0.02 && Math.abs(o.z - host.officers[i].z) < 0.02), 'mirror positions');
+  ok(mir.teams.A.order.type === host.teams.A.order.type && mir.level.doors.every((d, i) => Math.abs(d.open - host.level.doors[i].open) < 0.02), 'mirror orders/doors');
+  const a1 = host.officers[0], rp = host.players[1]; ok(Math.hypot(a1.x - rp.x, a1.z - rp.z) < 5, 'team A follows the remote player: ' + Math.hypot(a1.x - rp.x, a1.z - rp.z).toFixed(1));
+  ok(evs > 0, 'events forwarded');
+  host.damage(host.players[0], 9999, host.suspects[0], false); ok(!host.over, 'mission continues while a player is alive');
+  host.damage(host.players[1], 9999, host.suspects[0], false); host.damage(host.players[2], 9999, host.suspects[0], false); ok(!!host.over && !host.over.win, 'mission fails when all players are down');
+  console.log('co-op mirror test done');
 }
 let wins = 0, n = 0;
 for (let m = 0; m < 3; m++) for (let s = 1; s <= 4; s++) { const sim = play(m, s, m === 0 && s === 1); n++; if (sim.over?.win) wins++; }

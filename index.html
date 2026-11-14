@@ -14,6 +14,7 @@
   <div id="hitmark"></div>
   <div id="dmg"></div><div id="flash"></div>
   <div id="objective"></div>
+  <div id="vc" class="hidden"></div>
   <canvas id="minimap"></canvas>
   <div id="team"></div>
   <div id="voice"><div id="microw"><span id="micdot"></span><span id="micstate">MIK AV</span></div><div id="heard"></div><div id="parsed"></div></div>
@@ -31,6 +32,11 @@
     <div class="logo">TEAM<span>Ai</span></div>
     <div class="tag">Röststyrd taktisk insatsstyrka</div>
     <div id="missions"></div>
+    <div class="mp">
+      <h3>Spela tillsammans online</h3>
+      <div class="mprow"><input id="mpName" maxlength="12" placeholder="Ditt namn" /><button id="btnHost">Skapa rum</button><span>eller</span><input id="mpCode" maxlength="5" placeholder="Rumskod" /><button id="btnJoin">Gå med</button></div>
+      <div id="mpErr" class="note warn"></div>
+    </div>
     <div class="row">
       <button id="btnHelp">Kontroller &amp; röstkommandon</button>
       <button id="btnSettings">Inställningar</button>
@@ -39,6 +45,15 @@
     <div class="ver">v0.1 – tidig prototyp</div>
   </div>
 </div>
+
+<div id="lobby" class="screen hidden"><div class="panel">
+  <h2>Rum för samarbete</h2>
+  <div class="codebox">Rumskod <b id="lobbyCode"></b></div>
+  <ul id="lobbyPlayers"></ul>
+  <label class="lobbysel">Uppdrag <select id="lobbyMission"></select></label>
+  <div id="lobbyInfo" class="note"></div>
+  <div class="row"><button id="btnLeave">Lämna</button><button id="btnLobbyStart" class="primary">Starta uppdraget</button></div>
+</div></div>
 
 <div id="brief" class="screen hidden"><div class="panel">
   <h2 id="briefTitle"></h2><p id="briefText"></p>
@@ -64,6 +79,7 @@
     <div><kbd>Mus</kbd> Sikta · <kbd>Vänsterklick</kbd> Skjut</div><div><kbd>R</kbd> Ladda om · <kbd>1</kbd>/<kbd>2</kbd> Vapen</div>
     <div><kbd>F</kbd> Öppna dörr / sätt handfängsel</div><div><kbd>G</kbd> Kasta chockgranat</div>
     <div><kbd>V</kbd> (håll in) Prata med teamet · <kbd>Q</kbd> Ropa «Polis! Ge upp!»</div><div><kbd>T</kbd> Ficklampa · <kbd>M</kbd> Karta</div>
+    <div><kbd>B</kbd> Röstchatt: mikrofon av/på (online)</div><div></div>
     <div><kbd>Enter</kbd> Skriv en order (om mikrofon saknas)</div><div><kbd>Tab</kbd> Välj team för snabbtangenter</div>
   </div>
   <div class="note">Snabbtangenter (valt team): <kbd>3</kbd> Följ <kbd>4</kbd> Håll <kbd>5</kbd> Gå dit jag siktar <kbd>6</kbd> Skydda mig <kbd>7</kbd> Ställ upp <kbd>8</kbd> Storma <kbd>9</kbd> Granat+storma <kbd>0</kbd> Säkra</div>
@@ -98,6 +114,8 @@
     <label>Mikrofonläge <select id="sPtt"><option value="1">Håll V för att prata</option><option value="0">Alltid på</option></select></label>
     <label>Språk för röstkommandon <select id="sLang"><option value="sv-SE">Svenska</option><option value="en-US">English</option></select></label>
     <label>Teamet svarar med röst <select id="sTts"><option value="1">På</option><option value="0">Av</option></select></label>
+    <label>Talröst <span><button id="btnTts" type="button">Testa teamets röst</button></span></label>
+    <div id="ttsInfo" class="note"></div>
     <label>Jag använder hörlurar <select id="sHead"><option value="0">Nej (ignorera mikrofonen medan teamet pratar)</option><option value="1">Ja</option></select></label>
     <label>Grafik <select id="sQual"><option value="0">Låg</option><option value="1">Medel</option><option value="2">Hög</option></select></label>
     <label>Svårighetsgrad <select id="sDiff"><option value="0">Lätt</option><option value="1">Normal</option><option value="2">Svår</option></select></label>
@@ -107,6 +125,7 @@
     <p><b>three.js</b> – 3D-motor · MIT-licens · © three.js authors</p>
     <p><b>Vite</b> – byggverktyg · MIT-licens · © VoidZero Inc. och Vite-bidragsgivare</p>
     <p><b>TypeScript</b> – Apache-2.0 · © Microsoft</p>
+    <p><b>PeerJS</b> – nätverk och röstchatt mellan spelare (WebRTC) · MIT-licens · © PeerJS-bidragsgivare</p>
     <p><b>Web Speech API</b> – röstigenkänning och talsyntes sker via din webbläsares inbyggda tjänster.</p>
     <p><b>Grafik, 3D-figurer, texturer och ljud</b> – allt genereras av spelets egen kod (procedurellt). Inga tredjepartsfiler används, så inga ytterligare licenser eller erkännanden krävs.</p>
   </div>

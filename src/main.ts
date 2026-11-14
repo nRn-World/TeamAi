@@ -5,6 +5,9 @@ import { parseCommand, ACTION_LABEL, DIR_LABEL } from './sim/commands';
 import { LevelView, ActorView, FX, makeViewModel, TEAM_COLOR } from './game/world';
 import { GameAudio, Speech } from './game/audio';
 import { Voice } from './game/voice';
+import { Net, Msg } from './game/net';
+import { encodeSnap, applySnap, encodeEv, decodeEv } from './sim/netstate';
+import type { DataConnection } from 'peerjs';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (id: string, on: boolean) => $(id).classList.toggle('hidden', !on);
@@ -12,7 +15,7 @@ const params = new URLSearchParams(location.search);
 const AUTO = params.has('auto');
 
 // ---------------- settings ----------------
-const defaults = { sens: 1, vol: 0.8, mic: 1, ptt: 1, lang: 'sv-SE', tts: 1, head: 0, qual: 1, diff: 1 };
+const defaults = { sens: 1, vol: 0.8, mic: 1, ptt: 1, lang: 'sv-SE', tts: 1, head: 0, qual: 1, diff: 1, name: '' };
 type Settings = typeof defaults;
 const S: Settings = { ...defaults, ...JSON.parse(localStorage.getItem('teamai.settings') || '{}') };
 const best: Record<string, number> = JSON.parse(localStorage.getItem('teamai.best') || '{}');
@@ -31,6 +34,7 @@ class Game {
   torch = new THREE.SpotLight(0xfff0d6, 22, 32, 0.5, 0.6, 1.2);
   sim: Sim | null = null; level: LevelView | null = null; views = new Map<Actor, ActorView>(); fx = new FX();
   audio = new GameAudio(); speech = new Speech(); voice = new Voice();
+  net = new Net(); connIdx = new Map<DataConnection, number>(); connName = new Map<DataConnection, string>(); snapT = 0; inT = 0; stepPh = new Map<Actor, number>(); lobbyMission = 0; lobbyNames: string[] = [];
   state: 'menu' | 'play' | 'pause' | 'end' = 'menu'; mission = 0; seed = 1;
   yaw = 0; pitch = 0; keys = new Set<string>(); mouseDown = false; eye = 1.62; bob = 0; stepAcc = 0; recoil = 0; vmKick = 0; sway = new THREE.Vector2();
   weapon = 0; ammo = [30, 15]; reserve = [150, 60]; fireCd = 0; reloadT = 0; semiLock = false; torchOn = true; mapOn = true;
@@ -80,38 +84,110 @@ class Game {
     click('btnBack', () => { show('brief', false); show('menu', true); });
     click('btnGo', () => { show('brief', false); this.start(this.mission, (Math.random() * 1e6) | 0); this.lock(); });
     click('btnResume', () => this.resume());
-    click('btnRestart', () => { show('pause', false); this.start(this.mission, (Math.random() * 1e6) | 0); this.lock(); });
+    click('btnRestart', () => { show('pause', false); this.newRound(this.mission); });
     click('btnMicRetry', () => { if (!S.mic) { S.mic = 1; saveSettings(); this.applySettings(); } this.voice.stop(); this.voice.start(); });
     click('btnNewTab', () => { window.open(location.href.split('?')[0], '_blank'); });
     click('btnQuit', () => this.toMenu()); click('btnMenu', () => this.toMenu());
-    click('btnAgain', () => { show('debrief', false); this.start(this.mission, (Math.random() * 1e6) | 0); this.lock(); });
-    click('btnNext', () => { show('debrief', false); this.start((this.mission + 1) % MISSIONS.length, (Math.random() * 1e6) | 0); this.lock(); });
+    click('btnAgain', () => { show('debrief', false); this.newRound(this.mission); });
+    click('btnNext', () => { show('debrief', false); this.newRound((this.mission + 1) % MISSIONS.length); });
+    this.bindNet();
     for (const id of ['btnHelp', 'btnHelp2']) click(id, () => show('help', true));
     for (const id of ['btnSettings', 'btnSettings2']) click(id, () => show('settings', true));
     document.querySelectorAll<HTMLElement>('.close').forEach(b => b.onclick = () => { b.closest('.screen')!.classList.add('hidden'); this.audio.ui(); });
     const bind = (id: string, k: keyof Settings, num = true) => $(id).addEventListener('input', e => { (S as any)[k] = num ? +(e.target as HTMLInputElement).value : (e.target as HTMLInputElement).value; saveSettings(); this.applySettings(); });
     bind('sSens', 'sens'); bind('sVol', 'vol'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff');
   }
-  toMenu() { this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief']) show(id, false); this.buildMenu(); show('menu', true); if (document.pointerLockElement) document.exitPointerLock(); }
+  toMenu() { this.net.close(); show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief']) show(id, false); this.buildMenu(); show('menu', true); if (document.pointerLockElement) document.exitPointerLock(); }
+  // ---------------- online co-op ----------------
+  newRound(mission: number) {
+    if (this.net.role === 'client') return;
+    const seed = (Math.random() * 1e6) | 0;
+    if (this.net.role === 'host') {
+      const conns = this.net.conns.slice(0, 3), names = [S.name || 'Värd', ...conns.map((c, i) => this.connName.get(c) || 'Spelare ' + (i + 2))];
+      this.connIdx.clear(); conns.forEach((c, i) => { this.connIdx.set(c, i + 1); c.send({ t: 'start', mission, seed, diff: S.diff, n: names.length, you: i + 1, names }); });
+      this.start(mission, seed, names.length, 0, S.diff, names);
+    } else this.start(mission, seed);
+    this.lock();
+  }
+  bindNet() {
+    const err = (e: any) => { $('mpErr').textContent = 'Kunde inte ansluta: ' + (e?.message || e?.type || e) + '. Kontrollera rumskoden och internetanslutningen.'; };
+    const name = $<HTMLInputElement>('mpName'); name.value = S.name; name.addEventListener('input', () => { S.name = name.value.trim().slice(0, 12); saveSettings(); });
+    const busy = (on: boolean) => { for (const id of ['btnHost', 'btnJoin']) ($(id) as HTMLButtonElement).disabled = on; if (on) $('mpErr').textContent = 'Ansluter…'; };
+    $('btnHost').onclick = async () => { this.audio.init(); busy(true); try { await this.net.host(); $('mpErr').textContent = ''; show('menu', false); show('lobby', true); this.lobby(); } catch (e) { err(e); } busy(false); };
+    $('btnJoin').onclick = async () => {
+      const code = $<HTMLInputElement>('mpCode').value.trim(); if (code.length < 4) { $('mpErr').textContent = 'Skriv in rumskoden du fått av värden.'; return; }
+      this.audio.init(); busy(true);
+      try { await this.net.join(code); this.net.send({ t: 'hello', name: S.name || 'Spelare' }); $('mpErr').textContent = ''; show('menu', false); show('lobby', true); this.lobby(); } catch (e) { err(e); this.net.close(); }
+      busy(false);
+    };
+    $('btnLeave').onclick = () => this.toMenu();
+    $('btnLobbyStart').onclick = () => { this.audio.init(); this.newRound(+($('lobbyMission') as HTMLSelectElement).value); };
+    const sel = $('lobbyMission') as HTMLSelectElement; sel.innerHTML = MISSIONS.map((m, i) => `<option value="${i}">Uppdrag ${i + 1}: ${m.name}</option>`).join(''); sel.onchange = () => this.lobby();
+    this.net.onPeers = () => {
+      if (this.net.role !== 'host') return;
+      if (this.sim && (this.state === 'play' || this.state === 'pause')) for (const [c, i] of this.connIdx) if (!this.net.conns.includes(c)) { const pa = this.sim.players[i]; this.connIdx.delete(c); if (pa?.alive) { pa.alive = false; pa.hp = 0; this.log(`${pa.name} lämnade spelet.`, 'warn'); this.sim.checkPlayers(); } }
+      this.lobby();
+    };
+    this.net.onClosed = why => { if (!this.net.online) return; this.toMenu(); $('mpErr').textContent = why; };
+    this.net.onMsg = (c, m) => { if (this.net.role === 'host') this.fromClient(c, m); else this.fromHost(m); };
+    $('btnTts').onclick = () => { this.audio.init(); const n = this.speech.voiceCount; this.speech.say(S.lang.startsWith('sv') ? 'Team A, uppfattat. Vi följer dig.' : 'Team A, copy. Following you.', 1, 1.1, 1, true); $('ttsInfo').textContent = n === 0 ? 'Webbläsaren hittar inga talröster – teamet kan då inte prata med ord. Installera en röst i operativsystemets tal-inställningar eller använd Chrome/Edge.' : this.speech.hasLangVoice ? `${n} röster hittades. Hör du inget? Kontrollera volymen och att fliken inte är tystad.` : `${n} röster hittades, men ingen på valt språk – webbläsarens standardröst används.`; };
+  }
+  lobby() {
+    const host = this.net.role === 'host';
+    if (host) {
+      this.lobbyNames = [S.name || 'Värd', ...this.net.conns.map((c, i) => this.connName.get(c) || 'Spelare ' + (i + 2))]; this.lobbyMission = +($('lobbyMission') as HTMLSelectElement).value;
+      this.net.broadcast({ t: 'lobby', names: this.lobbyNames, ids: [this.net.id, ...this.net.conns.map(c => c.peer)], mission: this.lobbyMission });
+    }
+    $('lobbyCode').textContent = this.net.code;
+    $('lobbyPlayers').innerHTML = (this.lobbyNames.length ? this.lobbyNames : ['Ansluter…']).map((n, i) => `<li>${n.replace(/[<>&]/g, '')}${i === 0 ? ' <em>värd</em>' : ''}</li>`).join('');
+    ($('lobbyMission') as HTMLSelectElement).disabled = !host; if (!host) ($('lobbyMission') as HTMLSelectElement).value = String(this.lobbyMission);
+    $('btnLobbyStart').classList.toggle('hidden', !host);
+    $('lobbyInfo').textContent = (host ? 'Ge rumskoden till dina medspelare. Upp till 4 spelare. Starta när alla är inne.' : 'Väntar på att värden startar uppdraget…') + (this.net.micOk ? ' Röstchatten är på – ni hör varandra direkt.' : ' Din mikrofon är inte tillgänglig – du hör de andra men de hör inte dig.');
+  }
+  fromHost(m: Msg) {
+    const sim = this.sim;
+    if (m.t === 'lobby') { this.lobbyNames = m.names; this.lobbyMission = m.mission; this.net.callPeers(m.ids); if (!$('lobby').classList.contains('hidden')) this.lobby(); }
+    else if (m.t === 'start') { this.start(m.mission, m.seed, m.n, m.you, m.diff, m.names); }
+    else if (m.t === 'snap' && sim && (this.state === 'play' || this.state === 'pause')) applySnap(sim, m.s, sim.player);
+    else if (m.t === 'ev' && sim && (this.state === 'play' || this.state === 'pause')) for (const e of m.e) this.handle(decodeEv(sim, e));
+  }
+  fromClient(c: DataConnection, m: Msg) {
+    if (m.t === 'hello') { this.connName.set(c, String(m.name || 'Spelare').slice(0, 12)); this.lobby(); return; }
+    const sim = this.sim, i = this.connIdx.get(c); if (!sim || !i || sim.over) return; const pa = sim.players[i]; if (!pa || !pa.alive) return;
+    const num = (v: any) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+    switch (m.t) {
+      case 'in': { const x = num(m.x), z = num(m.z), d = Math.hypot(x - pa.x, z - pa.z); if (d < 3 && !sim.solidCell(Math.floor(x), Math.floor(z))) { pa.x = x; pa.z = z; pa.walk += d * 2.4; sim.pushTrail(pa); } pa.yaw = num(m.yaw); pa.pitch = num(m.pitch); pa.crouch = !!m.cr; pa.moving = !!m.mv; break; }
+      case 'fire': sim.fire(pa, num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), Math.min(34, num(m.dmg))); break;
+      case 'use': sim.playerUse(pa); break;
+      case 'shout': sim.playerShout(pa); break;
+      case 'bang': if (pa.bangs > 0) { pa.bangs--; sim.throwBang(num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2])); } break;
+      case 'cmd': sim.command(m.cmd, m.aim ?? null, pa); break;
+    }
+  }
+  get mirror() { return this.net.role === 'client'; }
   lock() { if (!AUTO) { const p: any = $('c').requestPointerLock(); if (p?.catch) p.catch(() => { }); } }
   resume() { show('pause', false); this.state = 'play'; this.lock(); if (S.mic) this.voice.start(); this.last = performance.now(); }
   pause() { if (this.state !== 'play') return; this.state = 'pause'; show('pause', true); this.keys.clear(); this.mouseDown = false; }
 
   // ---------------- mission start ----------------
-  start(mission: number, seed: number) {
+  start(mission: number, seed: number, n = 1, me = 0, diff: number = S.diff, names: string[] = []) {
     this.mission = mission; this.seed = seed; this.audio.init();
-    const sim = this.sim = new Sim(mission, seed, S.diff);
+    const sim = this.sim = new Sim(mission, seed, diff, n); if (me) sim.player = sim.players[me];
+    sim.players.forEach((pl, i) => { if (names[i]) pl.name = names[i]; }); this.stepPh.clear();
+    for (const id of ['lobby', 'debrief', 'pause', 'brief']) show(id, false);
+    const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
     this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x070a10); this.scene.fog = new THREE.FogExp2(0x070a10, 0.028);
     this.scene.add(new THREE.AmbientLight(0x9fb0c8, S.qual ? 0.45 : 1.1), new THREE.HemisphereLight(0xb8c8ff, 0x2a241c, 0.55));
     const moon = new THREE.DirectionalLight(0xa8c0ff, 0.7); moon.position.set(-8, 14, 6); this.scene.add(moon);
     this.level = new LevelView(sim, S.qual); this.scene.add(this.level.group);
     this.fx = new FX(); this.scene.add(this.fx.group);
-    this.views.clear(); for (const a of sim.actors) { if (a.kind === 'player') continue; const v = new ActorView(a); this.views.set(a, v); this.scene.add(v.root); }
+    this.views.clear(); for (const a of sim.actors) { if (a === sim.player) continue; const v = new ActorView(a); this.views.set(a, v); this.scene.add(v.root); }
     this.scene.add(this.camera); this.camera.add(this.torch); this.torch.position.set(0.15, -0.1, 0); this.camera.add(this.torch.target); this.torch.target.position.set(0, 0, -1);
     this.yaw = sim.player.yaw; this.pitch = 0; this.weapon = 0; this.ammo = [30, 15]; this.reserve = [150, 60]; this.reloadT = 0; this.fireCd = 0; this.recoil = 0; this.dmgFx = 0; this.endT = 0;
     this.selTeam = this.lastTeam = 'ALL'; this.state = 'play'; this.last = performance.now(); $('log').innerHTML = ''; $('heard').textContent = ''; $('parsed').textContent = '';
     this.buildMap(); show('menu', false); show('hud', true); this.updateHud(true);
     if (S.mic && !AUTO) this.voice.start();
+    if (mp && !document.pointerLockElement) this.log('Klicka i spelet för att ta kontroll över musen.', 'warn');
     this.log('Insatsledning: ' + MISSIONS[mission].name + '. Ge order med rösten – lycka till.', 'me');
   }
 
@@ -142,7 +218,8 @@ class Game {
     const sim = this.sim!; if (sim.over) return;
     const quick: Record<string, Command['action'] | 'there'> = { Digit3: 'follow', Digit4: 'hold', Digit5: 'there', Digit6: 'cover', Digit7: 'stack', Digit8: 'breach', Digit9: 'bang', Digit0: 'restrain' };
     switch (code) {
-      case 'KeyF': sim.playerUse(); break;
+      case 'KeyF': if (this.mirror) this.net.send({ t: 'use' }); else sim.playerUse(); break;
+      case 'KeyB': if (this.net.online) { this.net.setMuted(!this.net.muted); this.audio.ui(); } break;
       case 'KeyR': this.reload(); break;
       case 'KeyG': this.throwBang(); break;
       case 'KeyV': if (S.ptt && S.mic) { if (this.voice.state === 'off') this.voice.start(); this.voice.press(); $('heard').textContent = ''; } else this.shout(true); break;
@@ -176,20 +253,21 @@ class Game {
     const tname = cmd.team === 'ALL' ? 'ALLA' : 'TEAM ' + cmd.team;
     p.textContent = `${tname} › ${ACTION_LABEL[cmd.action]}${cmd.action === 'move' && cmd.dir ? ' ' + DIR_LABEL[cmd.dir] : ''}`;
     this.lastTeam = cmd.team; this.selTeam = cmd.team;
-    const ok = sim.command(cmd, this.aimPoint()); if (ok) this.audio.ok(); else { this.audio.fail(); this.log('Ingen i det teamet kan svara.', 'warn'); }
+    if (this.mirror) this.net.send({ t: 'cmd', cmd, aim: this.aimPoint() });
+    const ok = this.mirror ? true : sim.command(cmd, this.aimPoint()); if (ok) this.audio.ok(); else { this.audio.fail(); this.log('Ingen i det teamet kan svara.', 'warn'); }
     this.updateHud(true);
   }
   aimDir() { const cp = Math.cos(this.pitch); return new THREE.Vector3(-Math.sin(this.yaw) * cp, Math.sin(this.pitch), -Math.cos(this.yaw) * cp); }
   aimPoint() { const sim = this.sim!, p = sim.player, d = this.aimDir(); const h = sim.ray(p.x, this.eye, p.z, d.x, d.y, d.z, 40, p); return h.kind === 'none' ? null : { x: h.x - d.x * 0.4, z: h.z - d.z * 0.4 }; }
   shout(tts: boolean) {
-    const sim = this.sim!; if (!sim.player.alive) return; sim.playerShout();
+    const sim = this.sim!; if (!sim.player.alive) return; if (this.mirror) this.net.send({ t: 'shout' }); else sim.playerShout();
     if (tts) this.speech.say(S.lang.startsWith('sv') ? 'Polis! Ner på marken!' : 'Police! Get down!', 0.7, 1.3, 1);
     this.log('DU: Polis! Lägg ner vapnet!', 'me');
   }
   reload() { const w = WEAPONS[this.weapon]; if (this.reloadT > 0 || this.ammo[this.weapon] >= w.mag || this.reserve[this.weapon] <= 0) return; this.reloadT = w.reload; this.audio.reload(); }
   throwBang() {
-    const sim = this.sim!; if (sim.bangs <= 0 || !sim.player.alive) return; sim.bangs--; const d = this.aimDir(), p = sim.player;
-    sim.throwBang(p.x + d.x * 0.4, this.eye - 0.1, p.z + d.z * 0.4, d.x, d.y, d.z); this.vmKick = -0.6;
+    const sim = this.sim!, p = sim.player; if (p.bangs <= 0 || !p.alive) return; const d = this.aimDir(), o = [p.x + d.x * 0.4, this.eye - 0.1, p.z + d.z * 0.4];
+    if (this.mirror) this.net.send({ t: 'bang', o, d: [d.x, d.y, d.z] }); else { p.bangs--; sim.throwBang(o[0], o[1], o[2], d.x, d.y, d.z); } this.vmKick = -0.6;
   }
   fire() {
     const sim = this.sim!, w = WEAPONS[this.weapon], p = sim.player;
@@ -198,7 +276,7 @@ class Game {
     const moving = this.keys.has('KeyW') || this.keys.has('KeyA') || this.keys.has('KeyS') || this.keys.has('KeyD');
     const sp = w.spread * (moving ? 3.5 : 1) * (p.crouch ? 0.6 : 1) + this.recoil * 0.25, d = this.aimDir();
     d.x += (Math.random() - 0.5) * sp * 2; d.y += (Math.random() - 0.5) * sp * 2; d.z += (Math.random() - 0.5) * sp * 2; d.normalize();
-    sim.fire(p, p.x, this.eye, p.z, d.x, d.y, d.z, w.dmg);
+    if (this.mirror) { this.net.send({ t: 'fire', o: [p.x, this.eye, p.z], d: [d.x, d.y, d.z], dmg: w.dmg }); this.audio.shot(0, 0, true, this.weapon === 0); } else sim.fire(p, p.x, this.eye, p.z, d.x, d.y, d.z, w.dmg);
     this.recoil = Math.min(0.09, this.recoil + w.kick); this.pitch = Math.min(1.45, this.pitch + w.kick * 0.55); this.yaw += (Math.random() - 0.5) * w.kick * 0.5; this.vmKick = 1;
     this.vm.flash.visible = true; this.vm.flash.material.rotation = Math.random() * 6; setTimeout(() => { this.vm.flash.visible = false; }, 45);
   }
@@ -212,7 +290,7 @@ class Game {
       case 'shot': {
         const own = e.by === p, a = new THREE.Vector3(e.x, e.y, e.z), b = new THREE.Vector3(e.x2, e.y2, e.z2);
         if (own) { const r = fwd(this.yaw); a.set(p.x + r.x * 0.5 - r.z * 0.12, this.eye - 0.12, p.z + r.z * 0.5 + r.x * 0.12); } else this.views.get(e.by)?.muzzle();
-        fx.tracer(a, b); const pn = this.pan(e.x, e.z); this.audio.shot(pn.d, pn.pan, own, own ? this.weapon === 0 : true); fx.flashAt(a.x, a.y, a.z, own ? 14 : 22);
+        fx.tracer(a, b); const pn = this.pan(e.x, e.z); if (!(own && this.mirror)) this.audio.shot(pn.d, pn.pan, own, own ? this.weapon === 0 : true); fx.flashAt(a.x, a.y, a.z, own ? 14 : 22);
         if (e.hit === 'wall') { fx.burst(e.x2, e.y2, e.z2, 7, 0xb8b0a0, 2.2, 6, 0.35); fx.burst(e.x2, e.y2, e.z2, 2, 0xffd080, 4, 9, 0.15); fx.hole(e.x2 - (e.x2 - e.x) * 0.002, e.y2, e.z2 - (e.z2 - e.z) * 0.002); const q = this.pan(e.x2, e.z2); if (q.d < 12) this.audio.impact(q.d, q.pan); }
         else if (e.hit === 'actor') fx.burst(e.x2, e.y2, e.z2, 12, 0x8a0f0f, 2.4, 7, 0.5);
         break;
@@ -227,6 +305,22 @@ class Game {
       }
       case 'bang': { const q = this.pan(e.x, e.z); this.audio.bang(q.d, q.pan, p.flash); fx.flashAt(e.x, 1, e.z, 900, 0.12, 0xffffff); fx.burst(e.x, 0.3, e.z, 60, 0xffffff, 7, 3, 0.5); fx.burst(e.x, 0.3, e.z, 30, 0x999999, 2, -0.5, 1.6); break; }
       case 'throw': this.audio.step(0.3); break;
+      case 'shout': if (e.a !== p) { this.log(`${e.a.name}: Polis! Lägg ner vapnet!`, ''); const q = this.pan(e.a.x, e.a.z); this.audio.vocal('shout', 0.9, q.d, q.pan); } break;
+      case 'bark': {
+        const a = e.a, q = this.pan(a.x, a.z); if (q.d > 22) break;
+        const near = sim.los(p.x, p.z, a.x, a.z) ? 1 : 0.45, pitch = (a.kind === 'civ' ? 1.25 : 0.85) + (a.variant % 3) * 0.12, sv = S.lang.startsWith('sv');
+        const d2 = q.d / near; // muffled through walls
+        const pick = (l: string[]) => l[(a.id + Math.floor(sim.time)) % l.length];
+        let line = '';
+        if (e.kind === 'pain') this.audio.vocal('pain', pitch, d2, q.pan);
+        else if (e.kind === 'die') this.audio.vocal('die', pitch, d2, q.pan);
+        else if (e.kind === 'spot') { this.audio.vocal('shout', pitch, d2, q.pan); line = sv ? pick(['Snuten!', 'Polisen är här!', 'De kommer in!', 'Skjut dem!']) : pick(['Cops!', 'They are here!', 'Shoot them!']); }
+        else if (e.kind === 'unrest') { this.audio.vocal('shout', pitch, d2, q.pan); line = sv ? 'Nu sticker jag!' : 'I am out of here!'; }
+        else if (e.kind === 'panic') { this.audio.vocal('whimper', pitch, d2, q.pan); line = sv ? pick(['Hjälp!', 'Nej, nej!', 'Skjut inte!']) : pick(['Help!', 'No, no!']); }
+        else if (e.kind === 'surrender') { this.audio.vocal(a.kind === 'civ' ? 'whimper' : 'yes', pitch, d2, q.pan); line = a.kind === 'civ' ? (sv ? pick(['Skjut inte, snälla!', 'Jag gör som ni säger!', 'Hjälp mig!']) : pick(['Please do not shoot!', 'Help me!'])) : (sv ? pick(['Skjut inte! Jag ger upp!', 'Okej, okej! Jag ger mig!', 'Jag släpper vapnet!']) : pick(['Do not shoot! I give up!', 'Okay, okay!'])); }
+        if (line && q.d < 16) { this.log(`${a.kind === 'civ' ? 'Civil' : 'Misstänkt'}: ${line}`, ''); this.speech.say(line, Math.min(2, pitch * 1.1), 1.25, Math.max(0.15, near * (1 - q.d / 20))); }
+        break;
+      }
       case 'cuff': { const q = this.pan(e.a.x, e.a.z); if (q.d < 10) this.audio.cuff(); if (e.by === p) this.log(e.a.kind === 'suspect' ? 'Du säkrade en misstänkt.' : 'Du säkrade en civil.', 'me'); break; }
       case 'surrender': { const q = this.pan(e.a.x, e.a.z); if (q.d < 14 && sim.los(p.x, p.z, e.a.x, e.a.z)) this.log(e.a.kind === 'suspect' ? 'Misstänkt ger upp – sätt handfängsel!' : 'Civil lyder – säkra personen.', ''); break; }
       case 'marker': fx.marker(e.x, e.z, TEAM_COLOR[e.team]); break;
@@ -284,7 +378,7 @@ class Game {
     const p = sim.player, r = sim.remaining();
     ($('hpbar').firstElementChild as HTMLElement).style.width = Math.max(0, p.hp) + '%'; $('hptxt').textContent = String(Math.ceil(Math.max(0, p.hp)));
     $('wname').textContent = WEAPONS[this.weapon].name + (this.reloadT > 0 ? ' – LADDAR OM' : ''); const ac = $('acount'); ac.innerHTML = `<b>${this.ammo[this.weapon]}</b> / ${this.reserve[this.weapon]}`; ac.className = this.ammo[this.weapon] <= 5 ? 'low' : '';
-    $('bangs').textContent = 'CHOCKGRANAT ' + '◉'.repeat(sim.bangs) + '○'.repeat(3 - sim.bangs);
+    $('bangs').textContent = 'CHOCKGRANAT ' + '◉'.repeat(p.bangs) + '○'.repeat(Math.max(0, 3 - p.bangs));
     $('objective').innerHTML = `MISSTÄNKTA KVAR <b>${r.suspects}</b> &nbsp;·&nbsp; CIVILA ATT SÄKRA <b>${r.civs}</b>`;
     let html = '';
     for (const t of ['A', 'B'] as Team[]) {
@@ -295,7 +389,7 @@ class Game {
     $('team').innerHTML = html;
     $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALLA' : 'TEAM ' + this.selTeam}</b> &nbsp; <kbd>3</kbd> Följ <kbd>4</kbd> Håll <kbd>5</kbd> Dit <kbd>6</kbd> Skydda <kbd>7</kbd> Ställ upp <kbd>8</kbd> Storma <kbd>9</kbd> Granat <kbd>0</kbd> Säkra &nbsp; <kbd>Enter</kbd> Skriv order`;
     const it = sim.interactTarget(), pr = $('prompt');
-    if (sim.playerCuff) { pr.style.opacity = '1'; pr.textContent = 'Sätter handfängsel…'; $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = (sim.playerCuffT / 1.6) * 100 + '%'; }
+    if (p.cuff) { pr.style.opacity = '1'; pr.textContent = 'Sätter handfängsel…'; $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = (p.cuffT / 1.6) * 100 + '%'; }
     else { $('progress').style.opacity = '0'; if (it?.actor) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Sätt handfängsel'; } else if (it?.door) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> ${it.door.target ? 'Stäng' : 'Öppna'} dörr`; } else pr.style.opacity = '0'; }
   }
 
@@ -303,7 +397,7 @@ class Game {
   frame() {
     requestAnimationFrame(() => this.frame());
     const now = performance.now(), dt = Math.min(0.05, (now - this.last) / 1000); this.last = now;
-    if (this.state === 'play' && this.sim) this.tick(dt);
+    if ((this.state === 'play' || (this.state === 'pause' && this.net.online)) && this.sim) this.tick(dt);
     this.render();
   }
   tick(dt: number) {
@@ -321,8 +415,23 @@ class Game {
       if (this.reloadT > 0) { this.reloadT -= dt; if (this.reloadT <= 0) { const w = WEAPONS[this.weapon], n = Math.min(w.mag - this.ammo[this.weapon], this.reserve[this.weapon]); this.ammo[this.weapon] += n; this.reserve[this.weapon] -= n; } }
       else if (this.mouseDown && this.fireCd <= 0 && (WEAPONS[this.weapon].auto || !this.semiLock)) { this.fire(); if (!WEAPONS[this.weapon].auto) this.semiLock = true; }
     }
-    sim.update(dt);
-    for (const e of sim.events) this.handle(e); sim.events.length = 0;
+    if (this.mirror) {
+      this.inT -= dt; if (this.inT <= 0) { this.inT = 0.05; this.net.send({ t: 'in', x: p.x, z: p.z, yaw: this.yaw, pitch: this.pitch, cr: p.crouch, mv: K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD') }); }
+      sim.events.length = 0;
+    } else {
+      sim.update(dt);
+      if (this.net.role === 'host') {
+        if (sim.events.length) this.net.broadcast({ t: 'ev', e: sim.events.map(encodeEv) });
+        this.snapT -= dt; if (this.snapT <= 0) { this.snapT = 1 / 15; this.net.broadcast({ t: 'snap', s: encodeSnap(sim) }); }
+      }
+      for (const e of sim.events) this.handle(e); sim.events.length = 0;
+    }
+    // footsteps of everyone nearby
+    for (const a of sim.actors) {
+      if (a === p || !a.alive || !a.moving) continue; const ph = Math.floor(a.walk / Math.PI), last = this.stepPh.get(a); this.stepPh.set(a, ph);
+      if (last !== undefined && ph !== last) { const q = this.pan(a.x, a.z); if (q.d < 14) this.audio.step((a.kind === 'officer' || a.kind === 'player' ? 0.2 : 0.14) / (1 + q.d * 0.25), q.pan); }
+    }
+    if (this.net.online) { const vc = $('vc'); vc.textContent = this.net.micOk ? (this.net.muted ? 'RÖSTCHATT: DIN MIK ÄR AV (B)' : `RÖSTCHATT PÅ · ${this.net.voiceCount} ansluten${this.net.voiceCount === 1 ? '' : 'a'} · B = stäng av mik`) : 'RÖSTCHATT: ingen mikrofon – du hör bara de andra'; vc.className = this.net.muted || !this.net.micOk ? 'off' : ''; }
     this.level!.update(); for (const v of this.views.values()) v.update(dt, sim.time); this.fx.update(dt, sim);
     // camera
     this.recoil = Math.max(0, this.recoil - dt * 0.22); this.dmgFx = Math.max(0, this.dmgFx - dt * 1.4); this.hitFx = Math.max(0, this.hitFx - dt * 5);
