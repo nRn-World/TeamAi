@@ -81,6 +81,8 @@ class Game {
     click('btnGo', () => { show('brief', false); this.start(this.mission, (Math.random() * 1e6) | 0); this.lock(); });
     click('btnResume', () => this.resume());
     click('btnRestart', () => { show('pause', false); this.start(this.mission, (Math.random() * 1e6) | 0); this.lock(); });
+    click('btnMicRetry', () => { if (!S.mic) { S.mic = 1; saveSettings(); this.applySettings(); } this.voice.stop(); this.voice.start(); });
+    click('btnNewTab', () => { window.open(location.href.split('?')[0], '_blank'); });
     click('btnQuit', () => this.toMenu()); click('btnMenu', () => this.toMenu());
     click('btnAgain', () => { show('debrief', false); this.start(this.mission, (Math.random() * 1e6) | 0); this.lock(); });
     click('btnNext', () => { show('debrief', false); this.start((this.mission + 1) % MISSIONS.length, (Math.random() * 1e6) | 0); this.lock(); });
@@ -243,7 +245,21 @@ class Game {
   // ---------------- HUD ----------------
   micState(s: string, detail?: string) {
     const dot = $('micdot'), txt = $('micstate'); dot.className = s === 'listening' ? 'on' : s === 'denied' || s === 'error' || s === 'unsupported' ? 'err' : '';
-    txt.textContent = ({ listening: 'MIKROFON PÅ – LYSSNAR', starting: 'STARTAR MIKROFON…', off: 'MIKROFON AV – tryck Enter för att skriva order', denied: 'MIKROFON BLOCKERAD – tillåt i webbläsaren / öppna i egen flik', unsupported: 'RÖSTSTYRNING STÖDS EJ HÄR – använd Chrome/Edge eller Enter', error: 'MIKROFONFEL' + (detail ? ' (' + detail + ')' : '') } as Record<string, string>)[s] ?? s;
+    const why: Record<string, [string, string]> = {
+      iframe: ['MIKROFON BLOCKERAD AV FÖRHANDSVISNINGEN – pausa (Esc) och välj «Öppna i egen flik»', 'Spelet visas inbäddat i en annan sida, och den sidan släpper inte fram mikrofonen. Det hjälper inte att tillåta mikrofonen i webbläsaren – öppna spelet i en egen flik med knappen nedan.'],
+      mic: ['MIKROFON NEKAD – pausa (Esc) för hjälp', 'Webbläsaren nekar mikrofonen för den här sidan. Klicka på ikonen till vänster om adressen, sätt Mikrofon till «Tillåt», ladda om sidan och försök igen. Kontrollera också att operativsystemet tillåter webbläsaren att använda mikrofonen.'],
+      service: ['TALTJÄNSTEN NEKAS AV WEBBLÄSAREN – pausa (Esc) för hjälp', 'Mikrofonen fungerar, men webbläsaren tillåter inte sin taligenkänningstjänst. Det händer i bl.a. Brave, Opera och ibland Edge. Använd Google Chrome, och stäng av VPN/annonsblockerare för sidan.'],
+      nomic: ['INGEN MIKROFON HITTADES', 'Ingen mikrofon hittades. Anslut en mikrofon och välj den som inspelningsenhet i systemets ljudinställningar.'],
+      busy: ['MIKROFONEN ÄR UPPTAGEN', 'Mikrofonen används av ett annat program eller kan inte läsas. Stäng andra program som använder den och försök igen.'],
+      network: ['TALTJÄNSTEN NÅS INTE (NÄTVERK)', 'Webbläsarens taligenkänning når inte sin molntjänst. Kontrollera internet, VPN, brandvägg och annonsblockerare.'],
+      lang: ['SPRÅKET STÖDS INTE AV TALTJÄNSTEN', 'Det valda språket för röstkommandon stöds inte av webbläsarens taltjänst. Byt språk under Inställningar.'],
+    };
+    const base: Record<string, [string, string]> = {
+      listening: ['MIKROFON PÅ – LYSSNAR', 'Mikrofonen är på och lyssnar.'], starting: ['STARTAR MIKROFON…', 'Startar mikrofonen…'],
+      off: ['MIKROFON AV – tryck Enter för att skriva order', 'Mikrofonen är av.'], unsupported: ['RÖSTSTYRNING STÖDS EJ HÄR – använd Chrome', 'Den här webbläsaren saknar röstigenkänning. Använd Google Chrome.'],
+    };
+    const m = (detail && why[detail]) || base[s] || ['MIKROFONFEL' + (detail ? ' (' + detail + ')' : ''), 'Okänt mikrofonfel' + (detail ? ': ' + detail : '') + '.'];
+    txt.textContent = m[0]; $('micHelp').textContent = m[1]; $('micHelp').className = 'note' + (dot.className === 'err' ? ' warn' : '');
   }
   buildMap() {
     const sim = this.sim!, l = sim.level, k = 4, c = document.createElement('canvas'); c.width = l.w * k; c.height = l.h * k; const g = c.getContext('2d')!;
