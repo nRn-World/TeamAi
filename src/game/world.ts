@@ -100,6 +100,7 @@ export class ActorView {
   root = new THREE.Group(); body = new THREE.Group(); torso = new THREE.Group();
   legs: { hip: THREE.Group; knee: THREE.Group }[] = []; arms: { sh: THREE.Group; el: THREE.Group }[] = [];
   head = new THREE.Group(); gun = new THREE.Group(); label?: THREE.Sprite; fall = 0; flashT = 0; flash: THREE.Sprite;
+  pool?: THREE.Mesh; poolT = 0; dropped?: THREE.Group; wounds = 0;
   model?: ModelInstance; private mw = [1, 0, 0];
   constructor(public a: Actor) {
     const v = a.variant, off = a.kind === 'officer' || a.kind === 'player', tcol = a.kind === 'player' ? 0x4fd07a : TEAM_COLOR[a.team];
@@ -134,15 +135,24 @@ export class ActorView {
     else if (a.kind === 'suspect') { const mask = v % 3 !== 2; h.add(box(0.2, 0.22, 0.21, mask ? black : skin, 0, 0.16, 0)); if (mask) h.add(box(0.15, 0.04, 0.02, skin, 0, 0.19, -0.105)); else h.add(box(0.21, 0.07, 0.22, std({ color: 0x20242c }), 0, 0.26, -0.01), box(0.2, 0.02, 0.1, std({ color: 0x20242c }), 0, 0.235, -0.15)); }
     else { h.add(box(0.2, 0.22, 0.21, skin, 0, 0.16, 0)); const hair = std({ color: HAIR[v] }); h.add(box(0.215, 0.09, 0.225, hair, 0, 0.245, 0.005)); if (v % 2 === 0) h.add(box(0.215, 0.2, 0.06, hair, 0, 0.14, 0.09)); h.add(box(0.03, 0.03, 0.01, black, -0.05, 0.18, -0.106), box(0.03, 0.03, 0.01, black, 0.05, 0.18, -0.106)); }
     if (a.kind !== 'civ') {
-      const gm = std({ color: 0x23262b, roughness: 0.5, metalness: 0.2 }), g = this.gun;
-      g.add(box(0.05, 0.08, 0.42, gm, 0, 0, -0.1), box(0.03, 0.03, 0.26, gm, 0, 0.01, -0.42), box(0.04, 0.14, 0.06, gm, 0, -0.1, -0.08), box(0.045, 0.07, 0.2, a.kind === 'suspect' ? std({ color: 0x5a3a20 }) : gm, 0, -0.01, 0.2), box(0.035, 0.1, 0.05, gm, 0, -0.08, 0.06));
-      g.position.set(0.1, 0.42, -0.3); t.add(g);
+      const sus = a.kind === 'suspect', gm = std({ color: sus ? 0x3b4048 : 0x23262b, roughness: 0.45, metalness: 0.3 }), wood = std({ color: 0x7a4a22, roughness: 0.8 }), g = this.gun;
+      g.add(box(0.05, 0.08, 0.42, gm, 0, 0, -0.1), box(0.03, 0.03, 0.3, gm, 0, 0.01, -0.44), box(0.04, 0.14, 0.06, gm, 0, -0.1, -0.08), box(0.045, 0.07, 0.2, sus ? wood : gm, 0, -0.01, 0.2), box(0.035, 0.1, 0.05, sus ? wood : gm, 0, -0.08, 0.06));
+      if (sus) { g.add(box(0.055, 0.06, 0.16, wood, 0, -0.005, -0.3)); const mag = box(0.036, 0.16, 0.06, gm, 0, -0.12, -0.13); mag.rotation.x = 0.3; g.add(mag); g.scale.setScalar(1.2); }
+      // the weapon sits in the right hand, so it follows the arm in every pose
+      g.rotation.x = -Math.PI / 2; g.position.set(0, -0.23, -0.1); this.arms[1].el.add(g);
+      if (sus) { const d = g.clone(); d.rotation.set(0, 0.9 + a.id, Math.PI / 2); d.position.set(0.45, 0.04, -0.25); d.visible = false; this.root.add(d); this.dropped = d; }
     }
     this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glowTex(), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })); this.flash.scale.setScalar(0.5); this.flash.position.set(0.1, 0.43, -0.9); this.flash.visible = false; t.add(this.flash);
     if (off) { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.labelTex(a.name.slice(0, 7), '#' + tcol.toString(16)), transparent: true, depthWrite: false })); sp.scale.set(0.34, 0.17, 1); sp.position.y = 2.0; this.root.add(sp); this.label = sp; }
     this.root.position.set(a.x, 0, a.z); this.root.rotation.y = a.yaw;
   }
   muzzle() { this.flashT = 0.05; }
+  /** Visible bullet wound on the clothes. */
+  wound() {
+    if (this.wounds >= 6) return; this.wounds++;
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.1 + Math.random() * 0.08, 0.1 + Math.random() * 0.1), new THREE.MeshBasicMaterial({ map: T.bloodTex(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 }));
+    const front = Math.random() < 0.7; m.position.set((Math.random() - 0.5) * 0.3, 0.2 + Math.random() * 0.36, front ? -0.156 : 0.156); if (front) m.rotation.y = Math.PI; this.torso.add(m);
+  }
   update(dt: number, time: number) {
     const a = this.a, k = Math.min(1, dt * 12), r = this.root;
     if (!this.model && MODELS.officer && (a.kind === 'officer' || a.kind === 'player')) {
@@ -180,7 +190,12 @@ export class ActorView {
     const [L, R] = this.legs; L.hip.rotation.x = lerp(L.hip.rotation.x, hipL, k); R.hip.rotation.x = lerp(R.hip.rotation.x, hipR, k); L.knee.rotation.x = lerp(L.knee.rotation.x, -kneeL, k); R.knee.rotation.x = lerp(R.knee.rotation.x, -kneeR, k);
     const [AL, AR] = this.arms; AL.sh.rotation.x = lerp(AL.sh.rotation.x, aL, k); AR.sh.rotation.x = lerp(AR.sh.rotation.x, aR, k); AL.sh.rotation.z = lerp(AL.sh.rotation.z, zL, k); AR.sh.rotation.z = lerp(AR.sh.rotation.z, zR, k);
     AL.el.rotation.x = lerp(AL.el.rotation.x, eL, k); AR.el.rotation.x = lerp(AR.el.rotation.x, eR, k);
-    this.gun.visible = gun; if (this.label) this.label.visible = a.alive;
+    this.gun.visible = gun || (armed && a.alive && !a.down); if (this.label) this.label.visible = a.alive;
+    if (this.dropped) this.dropped.visible = !a.armed || !a.alive; // weapon lies on the floor after surrender or death
+    if (!a.alive) {
+      if (!this.pool) { const pm = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: T.bloodTex(), transparent: true, depthWrite: false, opacity: 0.92 })); pm.rotation.x = -Math.PI / 2; pm.rotation.z = a.id * 1.7; pm.position.set(0, 0.016 + (a.id % 7) * 0.0006, (a.id % 2 ? 1 : -1) * 0.25); this.root.add(pm); this.pool = pm; while (this.wounds < 2) this.wound(); }
+      this.poolT = Math.min(1, this.poolT + dt / 5); const e = 1 - (1 - this.poolT) * (1 - this.poolT); this.pool.scale.setScalar(0.35 + e * (1.25 + (a.id % 3) * 0.2));
+    }
   }
 }
 
