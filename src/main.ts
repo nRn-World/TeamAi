@@ -1,3 +1,4 @@
+import { loadModels, MODELS, modelStatus } from './game/models';
 import * as THREE from 'three';
 import { Sim, Actor, Command, Team, Ev, fwd } from './sim/sim';
 import { MISSIONS, WALL, DOOR, LOW, HIGH } from './sim/level';
@@ -473,4 +474,5 @@ class Game {
 }
 
 const game = new Game();
+loadModels().then(() => { const c = MODELS.officer?.credit; $('modelStatus').textContent = modelStatus; if (c) { $('modelCredit').classList.remove('hidden'); $('modelCredit').innerHTML = '<b>3D-figur (poliser):</b> '; $('modelCredit').append(c); } });
 (window as any).__ta = game;

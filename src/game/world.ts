@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Sim, Actor } from '../sim/sim';
 import { WALL, OUT, Door } from '../sim/level';
 import * as T from './textures';
+import { MODELS, instance, ModelInstance } from './models';
 
 const BOX = new THREE.BoxGeometry(1, 1, 1);
 const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...o });
@@ -99,6 +100,7 @@ export class ActorView {
   root = new THREE.Group(); body = new THREE.Group(); torso = new THREE.Group();
   legs: { hip: THREE.Group; knee: THREE.Group }[] = []; arms: { sh: THREE.Group; el: THREE.Group }[] = [];
   head = new THREE.Group(); gun = new THREE.Group(); label?: THREE.Sprite; fall = 0; flashT = 0; flash: THREE.Sprite;
+  model?: ModelInstance; private mw = [1, 0, 0];
   constructor(public a: Actor) {
     const v = a.variant, off = a.kind === 'officer' || a.kind === 'player', tcol = a.kind === 'player' ? 0x4fd07a : TEAM_COLOR[a.team];
     const cloth = std({ color: off ? 0x1b2434 : a.kind === 'suspect' ? HOOD[v] : SHIRT[v] });
@@ -143,6 +145,18 @@ export class ActorView {
   muzzle() { this.flashT = 0.05; }
   update(dt: number, time: number) {
     const a = this.a, k = Math.min(1, dt * 12), r = this.root;
+    if (!this.model && MODELS.officer && (a.kind === 'officer' || a.kind === 'player')) {
+      this.model = instance(MODELS.officer); for (const l of this.legs) l.hip.visible = false; this.torso.visible = false;
+      this.body.add(this.model.obj); this.body.add(this.flash); this.flash.position.set(0.12, 1.3, -0.75);
+    }
+    if (this.model) {
+      const m = this.model, sp = !a.alive ? 0 : a.moving ? 1 : 0, want = [sp ? 0 : 1, sp && !(a as any).running ? 1 : 0, sp && (a as any).running ? 1 : 0];
+      if (m.mixer) {
+        const acts = [m.idle, m.walk, m.run]; if (m.walk === m.run) { want[1] = sp; want[2] = sp; }
+        for (let i = 0; i < 3; i++) { this.mw[i] = lerp(this.mw[i], want[i], Math.min(1, dt * 8)); acts[i]?.setEffectiveWeight(this.mw[i]); }
+        if (a.alive) m.mixer.update(dt);
+      } else if (a.alive) { m.obj.position.y = a.moving ? Math.abs(Math.sin(a.walk)) * 0.035 : 0; m.obj.rotation.z = a.moving ? Math.sin(a.walk) * 0.03 : 0; m.obj.rotation.x = a.moving ? -0.05 : 0; }
+    }
     r.position.x = lerp(r.position.x, a.x, Math.min(1, dt * 25)); r.position.z = lerp(r.position.z, a.z, Math.min(1, dt * 25));
     let dy = a.yaw - r.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); r.rotation.y += dy * Math.min(1, dt * 14);
     this.flashT -= dt; this.flash.visible = this.flashT > 0; if (this.flash.visible) this.flash.material.rotation = time * 50;
