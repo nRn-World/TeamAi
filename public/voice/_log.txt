@@ -1,11 +1,1 @@
-Traceback (most recent call last):
-  File "/home/runner/work/TeamAiGoogle/TeamAiGoogle/voice/make.py", line 37, in <module>
-    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', str(wav), '-af',
-  File "/opt/hostedtoolcache/Python/3.11.18/x64/lib/python3.11/subprocess.py", line 548, in run
-    with Popen(*popenargs, **kwargs) as process:
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.18/x64/lib/python3.11/subprocess.py", line 1026, in __init__
-    self._execute_child(args, executable, preexec_fn, close_fds,
-  File "/opt/hostedtoolcache/Python/3.11.18/x64/lib/python3.11/subprocess.py", line 1955, in _execute_child
-    raise child_exception_type(errno_num, err_msg, err_filename)
-FileNotFoundError: [Errno 2] No such file or directory: 'ffmpeg'
+ok
