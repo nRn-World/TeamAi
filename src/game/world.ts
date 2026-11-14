@@ -4,6 +4,7 @@ import { Sim, Actor } from '../sim/sim';
 import { WALL, OUT, Door } from '../sim/level';
 import * as T from './textures';
 import { modelsReady, Rig, droppedPistol } from './models';
+import { weaponModel } from './weapons';
 
 const BOX = new THREE.BoxGeometry(1, 1, 1);
 const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...o });
@@ -211,6 +212,7 @@ export class ActorView {
       if (hand && (a.kind === 'officer' || a.kind === 'player')) { // officers carry the carbine instead of the model's pistol
         if (this.rig.gun) { this.rig.gun.visible = false; this.rig.gun = null; }
         const G = (window as any).__gun ?? GUNPOSE; this.gun.position.set(G.p[0], G.p[1], G.p[2]); this.gun.rotation.set(G.r[0], G.r[1], G.r[2]); this.gun.scale.setScalar(G.s); hand.add(this.gun); this.rifle = true;
+        const real = weaponModel('rifle'); if (real) { this.gun.clear(); real.scale.setScalar(0.9); real.position.set(0, -0.03, -0.08); this.gun.add(real); }
       }
     }
     if (this.rig) { this.updateRig(dt, time); return; }
@@ -302,7 +304,18 @@ export function makeViewModel() {
   const hl = new THREE.Group(); hl.add(box(0.07, 0.07, 0.1, glove, 0, 0, 0), box(0.075, 0.075, 0.3, sleeve, 0.03, -0.03, 0.2)); hl.position.set(-0.01, -0.07, -0.3); hl.rotation.set(0.2, -0.5, 0); rifle.add(hl);
   const hr = new THREE.Group(); hr.add(box(0.07, 0.09, 0.08, glove, 0, 0, 0), box(0.08, 0.08, 0.3, sleeve, 0.02, -0.05, 0.19)); hr.position.set(0.005, -0.09, 0.11); rifle.add(hr);
   pistol.add(box(0.035, 0.05, 0.2, gm, 0, 0, -0.05), box(0.034, 0.12, 0.05, gm2, 0, -0.07, 0.02), box(0.07, 0.09, 0.09, glove, 0, -0.07, 0.03), box(0.08, 0.08, 0.3, sleeve, 0.02, -0.11, 0.2), box(0.07, 0.07, 0.09, glove, -0.04, -0.09, 0.03));
+  pistol.children.slice(2).forEach(c => { c.userData.hand = true; });
   pistol.visible = false; g.add(rifle, pistol);
   const flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glowTex(), blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, transparent: true })); flash.scale.setScalar(0.28); flash.position.set(0, 0.02, -0.78); flash.visible = false; g.add(flash);
   return { group: g, rifle, pistol, flash };
+}
+/** Swap the box weapons of the first-person view for the real models (hands and sleeves stay). */
+export function upgradeViewModel(vm: ReturnType<typeof makeViewModel>) {
+  const V = (window as any).__vm ?? { r: [0, 0, 0.11, 1], p: [0, -0.005, 0.03, 1.1] };
+  for (const [grp, kind, keep] of [[vm.rifle, 'rifle', V.r], [vm.pistol, 'pistol', V.p]] as const) {
+    const m = weaponModel(kind); if (!m) continue;
+    for (const c of [...grp.children]) if ((c as THREE.Mesh).isMesh && !c.userData.hand) grp.remove(c);
+    m.position.set(keep[0], keep[1], keep[2]); m.scale.setScalar(keep[3]); m.traverse(o => { o.castShadow = false; }); grp.add(m);
+  }
+  vm.flash.position.set(0, 0.03, -0.66);
 }

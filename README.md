@@ -49,3 +49,7 @@ Insatspoliserna i huvudmenyn är «S.W.A.T. Operator» av Mateusz Woliński (CC 
 ## Vapenljud
 
 Skott, omladdning, klick och chockgranat bygger på inspelningar av riktiga vapen i `public/sfx/` (alla CC0, källor i `public/sfx/LICENSE.txt` och under Inställningar → Tack & licenser). Karbinen är en AR-15, pistolen en Walther PPQ och de misstänktas vapen en Carl Gustav m/45. På avstånd tonas ljudet över till en inspelning av samma vapen på håll. Om filerna inte kan laddas används de syntetiska ljuden.
+
+## Vapenmodeller
+
+Karbinen är «Low-Poly M4a1» av TastyTony och pistolen «Glock17» av sigmuuus (båda CC BY 4.0, källa och licens i `public/models/weapons/*/license.txt`). Upphovspersonerna nämns under Inställningar → Tack & licenser. `src/game/weapons.ts` laddar och normaliserar modellerna; om de inte kan laddas används de inbyggda lådvapnen.
