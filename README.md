@@ -57,3 +57,7 @@ Karbinen är «Low-Poly M4a1» av TastyTony och pistolen «Glock17» av sigmuuus
 ## Armar i förstaperson
 
 I förstaperson visas animerade armar med handskar ur «Animated FPS hands (rifle animation pack)» av Cransh (CC BY 4.0, `public/models/fpsarms/license.txt`). Paketets egna animationer används för vila, gång, språng, skott, omladdning och vapenbyte. I karbinläge hålls paketets gevär med rödpunktssikte, i pistolläge hålls Glocken i höger hand. Armarna laddas bara vid grafiknivå över Låg; annars, eller om filerna inte kan hämtas, används den enklare vapenmodellen.
+
+## Sikte och civila
+
+Håll höger musknapp för att zooma in och sikta: synfältet smalnar, vapnet lyfts till ögat, musen blir långsammare och spridningen mindre. Civila som ser polisen på nära håll går själva ner på knä med händerna upp. Utan handbojor reser de sig och springer iväg när ingen polis har sett dem på ungefär sju sekunder. Teamen sätter därför handbojor på alla som gett upp i närheten utan särskild order.

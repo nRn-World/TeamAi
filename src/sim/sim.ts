@@ -28,7 +28,7 @@ export class Actor {
   stun = 0; surrendered = false; restrained = false; armed = false; morale = 0.5; rolls = 0; lastRoll = -9;
   target: Actor | null = null; aimT = 0; fireCd = 0; burst = 0; ammo = 30; reloadT = 0; lastShotT = -9;
   hostile = false; hasFired = false; react = -1; alertT = 0; lastSeen: Pt | null = null; hunter = false; timer = 0; lostT = 0;
-  challengeT = -9; firstChallengeT = Infinity; unwatchedT = 0; panicT = 0; room = -1;
+  challengeT = -9; firstChallengeT = Infinity; unwatchedT = 0; panicT = 0; seeT = 0; room = -1;
   team: Team = 'A'; ti = 0; slot = 0; cuff: Actor | null = null; cuffT = 0; claimedBy: Actor | null = null;
   prone = false; jumpY = 0; /** footstep-noise bookkeeping */ nx = 0; nz = 0; nd = 0; nt = 0;
   percT = 0; deadT = 0; crouch = false; variant = 0; flash = 0; pitch = 0; trail: Pt[] = []; bangs = 3; pi = 0;
@@ -48,7 +48,7 @@ export interface Stats { shotsFired: number; suspectsKilled: number; suspectsArr
 export class Sim {
   level: Level; rng: () => number; actors: Actor[] = []; player: Actor; officers: Actor[] = []; suspects: Actor[] = []; civs: Actor[] = [];
   events: Ev[] = []; time = 0; trail: Pt[] = []; over: { win: boolean } | null = null;
-  teams: Record<Team, { order: Order; fire: 'free' | 'hold' }>;
+  teams: Record<Team, { order: Order; fire: 'free' | 'hold'; cuffSay?: number }>;
   grenades: { x: number; y: number; z: number; vx: number; vy: number; vz: number; t: number }[] = [];
   stats: Stats = { shotsFired: 0, suspectsKilled: 0, suspectsArrested: 0, civsSecured: 0, civsKilled: 0, civsKilledByPolice: 0, officersDown: 0, unauthorized: 0 };
   players: Actor[] = []; private checkT = 0;
@@ -461,6 +461,10 @@ export class Sim {
   private updateTeam(team: Team, dt: number) {
     const T = this.teams[team], o = T.order, mem = this.members(team); if (!mem.length) return;
     o.t += dt;
+    // officers cuff anyone who has given up nearby without being told (otherwise civilians run off again)
+    if ((o.type === 'follow' || o.type === 'hold' || o.type === 'cover' || o.type === 'move') && Math.floor(this.time * 2) !== Math.floor((this.time - dt) * 2) && !mem.some(m => m.target)) {
+      const had = mem.filter(m => m.cuff).length; if (this.assignCuffs(team, 7) > had && this.time - (T.cuffSay ?? -99) > 6) { T.cuffSay = this.time; this.say(mem[0], `Team ${team}: Säkrar personer.`); }
+    }
     const arrived = () => mem.every(m => dist(m, o.pts![m.ti] ?? m) < 0.7);
     if (o.type === 'door') {
       if (arrived() || o.t > 6) { this.setDoor(o.door!, !!o.open); T.order = { type: 'stack', phase: 0, t: 0, pts: o.pts, door: o.door, side: o.side }; }
@@ -577,7 +581,12 @@ export class Sim {
   }
   private updateCiv(c: Actor, dt: number) {
     if (c.stun > 0) { c.stun -= dt; c.moving = false; return; }
-    if (c.surrendered) return;
+    const police = (r: number) => this.actors.some(o => (o.kind === 'player' || o.kind === 'officer') && o.alive && dist(o, c) < r && this.los(o.x, o.z, c.x, c.z));
+    if (c.surrendered) { // on the knees, hands up – but without handcuffs they get up and run once nobody is watching
+      c.unwatchedT = c.claimedBy || this.players.some(pl => pl.cuff === c) || police(11) ? 0 : c.unwatchedT + dt;
+      if (c.unwatchedT > 7) { c.surrendered = false; c.unwatchedT = 0; c.seeT = -4; c.panicT = 6 + this.rng() * 4; c.lastSeen = this.randomRoomPoint(Math.floor(this.rng() * this.level.rooms.length)); this.events.push({ t: 'bark', a: c, kind: 'panic' }); this.events.push({ t: 'info', text: 'En civil utan handbojor sprang iväg.' }); }
+      return;
+    }
     if (c.panicT > 0) {
       c.panicT -= dt;
       if (!c.lastSeen) c.lastSeen = this.randomRoomPoint(c.room);
@@ -585,6 +594,8 @@ export class Sim {
       return;
     }
     c.moving = false; c.path = null;
+    // a civilian who sees the police close by gives up on their own: down on the knees, hands up
+    c.seeT = police(8) ? c.seeT + dt : Math.min(0, c.seeT); if (c.seeT > 0.9) { c.seeT = 0; this.surrender(c); }
   }
 
   // ---------- player interaction ----------
