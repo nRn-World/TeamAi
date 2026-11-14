@@ -51,6 +51,10 @@ class Game {
     this.bindInput(); this.bindUI(); this.buildMenu();
     this.voice.onFinal = t => this.heard(t, true); this.voice.onInterim = t => { $('heard').textContent = '« ' + t + ' … »'; this.parsedT = Math.max(this.parsedT, 3); };
     this.voice.onState = (s, d) => this.micState(s, d);
+    this.voice.onIgnored = t => { // heard an order while V was not held: tell the player instead of silently dropping it
+      if (this.state !== 'play' || !t || !parseCommand(t, this.lastTeam)) return;
+      $('heard').textContent = '« ' + t + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'HÅLL V INTRYCKT MEDAN DU PRATAR – ordern skickades inte'; this.parsedT = 5; this.audio.fail();
+    };
     this.applySettings();
     requestAnimationFrame(() => this.frame());
     if (AUTO) this.start(+(params.get('auto') || 0), +(params.get('seed') || 1));
@@ -182,7 +186,7 @@ class Game {
   get mirror() { return this.net.role === 'client'; }
   lock() { if (!AUTO) { const p: any = $('c').requestPointerLock(); if (p?.catch) p.catch(() => { }); } }
   resume() { show('pause', false); this.state = 'play'; this.lock(); if (S.mic) this.voice.start(); this.last = performance.now(); }
-  pause() { if (this.state !== 'play') return; this.state = 'pause'; show('pause', true); this.keys.clear(); this.mouseDown = false; }
+  pause() { if (this.state !== 'play') return; this.state = 'pause'; show('pause', true); this.micState(this.voice.state); this.keys.clear(); this.mouseDown = false; }
 
   // ---------------- mission start ----------------
   start(mission: number, seed: number, n = 1, me = 0, diff: number = S.diff, names: string[] = []) {
@@ -237,7 +241,7 @@ class Game {
       case 'KeyB': if (this.net.online) { this.net.setMuted(!this.net.muted); this.audio.ui(); } break;
       case 'KeyR': this.reload(); break;
       case 'KeyG': this.throwBang(); break;
-      case 'KeyV': if (S.ptt && S.mic) { if (this.voice.state === 'off') this.voice.start(); this.voice.press(); $('heard').textContent = ''; } else this.shout(true); break;
+      case 'KeyV': if (S.ptt && S.mic) { if (this.voice.state !== 'listening' && this.voice.state !== 'starting') { this.voice.stop(); this.voice.start(); } if (!this.voice.held) $('heard').textContent = ''; this.voice.press(); } else this.shout(true); break;
       case 'KeyQ': this.shout(true); break;
       case 'KeyT': this.torchOn = !this.torchOn; this.audio.dry(); break;
       case 'KeyM': this.mapOn = !this.mapOn; break;
@@ -250,6 +254,7 @@ class Game {
   }
 
   // ---------------- commands ----------------
+  lastSay = ''; lastSayT = 0; micS = ''; micD: string | undefined;
   heard(text: string, fromMic: boolean) {
     if (this.state !== 'play' || !this.sim) return;
     if (fromMic && !S.head && !S.ptt && this.speech.speaking) { // don't let the team's own radio voice trigger orders
@@ -314,7 +319,11 @@ class Game {
       case 'death': if (e.a.kind === 'officer') this.log(`${e.a.name} har stupat.`, 'warn'); break;
       case 'door': { const q = this.pan(e.door.cx + 0.5, e.door.cz + 0.5); this.audio.door(q.d, q.pan); break; }
       case 'say': {
-        const o = e.a; this.log(`${o.name}: ${e.text.replace(/^Team [AB]: /, '')}`, o.team); this.audio.radio();
+        const o = e.a; this.log(`${o.name}: ${e.text.replace(/^Team [AB]: /, '')}`, o.team);
+        // an order to both teams gives one spoken reply, not the same sentence twice
+        const key = e.text.replace(/^Team [AB]: /, ''), now = performance.now(), dup = !e.shout && key === this.lastSay && now - this.lastSayT < 2500; this.lastSay = key; this.lastSayT = now;
+        if (dup) break;
+        this.audio.radio();
         if (!e.shout || Math.random() < 0.6) this.speech.say(e.text, [0.85, 1.25, 0.65, 1.05][o.slot] ?? 1, e.shout ? 1.35 : 1.2, e.shout ? 1 : 0.85);
         break;
       }
@@ -354,6 +363,7 @@ class Game {
 
   // ---------------- HUD ----------------
   micState(s: string, detail?: string) {
+    if (detail === undefined && s === this.micS) detail = this.micD; this.micS = s; this.micD = detail;
     const ptt = !!S.ptt, held = this.voice.held;
     const dot = $('micdot'), txt = $('micstate'); dot.className = s === 'listening' && (!ptt || held) ? 'on' : s === 'denied' || s === 'error' || s === 'unsupported' ? 'err' : '';
     const why: Record<string, [string, string]> = {
@@ -371,7 +381,7 @@ class Game {
       off: ['MIKROFON AV – tryck Enter för att skriva order', 'Mikrofonen är av.'], unsupported: ['RÖSTSTYRNING STÖDS EJ HÄR – använd Chrome', 'Den här webbläsaren saknar röstigenkänning. Använd Google Chrome.'],
     };
     const m = (detail && why[detail]) || base[s] || ['MIKROFONFEL' + (detail ? ' (' + detail + ')' : ''), 'Okänt mikrofonfel' + (detail ? ': ' + detail : '') + '.'];
-    txt.textContent = m[0]; $('micHelp').textContent = m[1]; $('micHelp').className = 'note' + (dot.className === 'err' ? ' warn' : '');
+    txt.textContent = m[0]; $('micHelp').textContent = m[1] + (this.voice.lastHeard ? ` Senast uppfattat av mikrofonen: «${this.voice.lastHeard}».` : ' Mikrofonen har inte uppfattat några ord ännu.') + (this.voice.lastError ? ` Senaste fel från taltjänsten: ${this.voice.lastError}.` : ''); $('micHelp').className = 'note' + (dot.className === 'err' ? ' warn' : '');
   }
   buildMap() {
     const sim = this.sim!, l = sim.level, k = 4, c = document.createElement('canvas'); c.width = l.w * k; c.height = l.h * k; const g = c.getContext('2d')!;
