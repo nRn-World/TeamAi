@@ -1,7 +1,7 @@
 // Natural-language (Swedish + English) voice command parser. Pure function, unit-tested.
 import type { Command, Action, Dir, Team } from './sim';
 
-const norm = (s: string) => ' ' + s.toLowerCase().replace(/[.,!?;:"]/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
+const norm = (s: string) => ' ' + s.toLowerCase().replace(/[.,!?;:"\-–]/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
 
 const fix = (re: RegExp) => new RegExp(re.source.replace(/\\b\(/g, '(?<= )(').replace(/\)\\b/g, ')(?= )'));
 
@@ -15,20 +15,21 @@ const RULES: [Action, RegExp, Dir?][] = ([
   ['fireHold', /\b(eld upphör|skjut inte|håll elden|vapenvila|hold fire|hold your fire|cease fire|don't shoot)\b/],
   ['fireFree', /\b(fri eld|eld fritt|eld tillåten|öppna eld|weapons free|fire at will|open fire)\b/],
   ['bang', /\b(chockgranat|chock granat|distraktionsgranat|flashbang|flash bang|bang and clear|granat|grenade|blända)\b/],
-  ['breach', /\b(storma|stormar|stormning|breach|breacha|spräng|slå in|sparka in|rensa|rensar|clear|gå in|in i rummet|ta rummet|inbrytning|move in|go in|enter)\b/],
-  ['stack', /\b(ställ upp|ställ er|stack up|stack|stapla|vid dörren|till dörren|on the door|at the door)\b/],
-  ['close', /\b(stäng|stänga|close)\b/],
-  ['open', /\b(öppna|open)\b/],
-  ['restrain', /\b(säkra|säkrar|handfängsel|handbojor|bojor|boja|grip|gripa|arrestera|fängsla|restrain|cuff|handcuff|arrest|secure|zip ?tie)\b/],
-  ['cover', /\b(skydda|skyddar|täck|täcker|täcka|bevaka|bevakar|cover|protect|watch my|vakta|ryggen)\b/],
+  ['breach', /\b(storma|stormar|stormade|stormning|stormen|storm|breach|breacha|spräng|slå in|sparka in|rensa|rensar|clear|gå in|in i rummet|ta rummet|inbrytning|move in|go in|enter)\b/],
+  ['stack', /\b(ställ upp|ställer upp|ställa upp|ställ er|ställ dig|stack up|stack|stapla|vid dörren|till dörren|on the door|at the door)\b/],
+  ['close', /\b(stäng|stänga|stänger|stängd|stängt|stängde|close|shut)\b/],
+  ['open', /\b(öppna|öppnar|öppnas|öppnade|öppen|öppet|öppnat|open|opens)\b/],
+  ['restrain', /\b(säkra|säkrar|säkrade|säkrat|säker|handfängsel|handbojor|bojor|boja|grip|gripa|arrestera|fängsla|restrain|cuff|handcuff|arrest|secure|zip ?tie)\b/],
+  ['cover', /\b(skydda|skyddar|skyddade|skydd|täck|täcker|täcka|bevaka|bevakar|cover|protect|watch my|vakta|ryggen)\b/],
   ['report', /\b(rapport|rapportera|status|läget|report|sitrep)\b/],
   ['move', /\b(dit|där borta|ditåt|over there|there|den positionen|that position)\b/, 'there'],
   ['move', /\b(vänster|vänstra|left)\b/, 'left'],
   ['move', /\b(höger|högra|right)\b/, 'right'],
   ['move', /\b(bakåt|backa|tillbaka|retirera|dra er tillbaka|back|fall back|retreat)\b/, 'back'],
-  ['follow', /\b(följ|följer|följa|kom hit|kom med|kom|efter mig|med mig|till mig|samling|återsamla|fall in|follow|on me|regroup|with me|come)\b/],
+  ['follow', /\b(följ|följer|följa|följde|följd|kom hit|kom med|kom|efter mig|med mig|till mig|samling|återsamla|fall in|follow|on me|regroup|with me|come)\b/],
   ['move', /\b(framåt|fram|rakt fram|avancera|forward|advance|move up|push)\b/, 'forward'],
-  ['hold', /\b(stanna|stannar|håll|håller|vänta|väntar|stopp|halt|stå kvar|hold|stop|stay|wait|freeze)\b/],
+  ['hold', /\b(stanna|stannar|stannade|stann|håll|håller|vänta|väntar|stopp|halt|stå kvar|hold|stop|stay|wait|freeze)\b/],
+  ['stack', /\b(dörr|dörren|dörrn|door)\b/],
 ] as [Action, RegExp, Dir?][]).map(([a, re, d]) => [a, fix(re), d]);
 
 export function parseCommand(text: string, lastTeam: Team | 'ALL' = 'ALL'): Command | null {

@@ -44,7 +44,7 @@ class Game {
     this.viewScene.add(new THREE.AmbientLight(0xffffff, 1.1)); const vl = new THREE.DirectionalLight(0xffffff, 1.6); vl.position.set(0.5, 1, 0.6); this.viewScene.add(vl);
     window.addEventListener('resize', () => this.resize()); this.resize();
     this.bindInput(); this.bindUI(); this.buildMenu();
-    this.voice.onFinal = t => this.heard(t, true); this.voice.onInterim = t => { $('heard').textContent = '« ' + t + ' »'; };
+    this.voice.onFinal = t => this.heard(t, true); this.voice.onInterim = t => { $('heard').textContent = '« ' + t + ' … »'; this.parsedT = Math.max(this.parsedT, 3); };
     this.voice.onState = (s, d) => this.micState(s, d);
     this.applySettings();
     requestAnimationFrame(() => this.frame());
@@ -157,12 +157,14 @@ class Game {
   // ---------------- commands ----------------
   heard(text: string, fromMic: boolean) {
     if (this.state !== 'play' || !this.sim) return;
-    if (fromMic && !S.head && this.speech.speaking) return; // don't let the team's own radio voice trigger orders
+    if (fromMic && !S.head && this.speech.speaking) { // don't let the team's own radio voice trigger orders
+      $('heard').textContent = '« ' + text.split('|')[0].trim() + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'Ignorerat – teamet pratade samtidigt (säg det igen)'; this.parsedT = 4; return;
+    }
     const alts = text.split('|').map(s => s.trim()).filter(Boolean); let cmd: Command | null = null;
     for (const a of alts) { cmd = parseCommand(a, this.lastTeam); if (cmd) break; }
     $('heard').textContent = '« ' + alts[0] + ' »'; this.parsedT = 4;
     const p = $('parsed');
-    if (!cmd) { p.className = 'bad'; p.textContent = 'Uppfattade ingen order'; return; }
+    if (!cmd) { p.className = 'bad'; p.textContent = 'Uppfattade ingen order'; this.audio.fail(); return; }
     this.exec(cmd, !fromMic);
   }
   exec(cmd: Command, byKey: boolean) {

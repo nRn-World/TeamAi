@@ -52,17 +52,21 @@ export class GameAudio {
 
 /** Radio chatter through the browser's built-in speech synthesis (free, offline on most systems). */
 export class Speech {
-  enabled = true; lang = 'sv-SE'; private voices: SpeechSynthesisVoice[] = []; lastEnd = 0; private queue = 0;
+  enabled = true; lang = 'sv-SE'; private voices: SpeechSynthesisVoice[] = []; private until = 0; private queue = 0;
   constructor() { if ('speechSynthesis' in window) { const load = () => { this.voices = speechSynthesis.getVoices(); }; load(); speechSynthesis.onvoiceschanged = load; } }
-  get speaking() { return 'speechSynthesis' in window && (speechSynthesis.speaking || performance.now() - this.lastEnd < 500); }
+  /** True while the team is (estimated to be) talking. Uses our own timer – speechSynthesis.speaking can get stuck in some browsers. */
+  get speaking() { return performance.now() < this.until; }
   say(text: string, pitch = 1, rate = 1.15, vol = 0.9) {
     if (!this.enabled || !('speechSynthesis' in window)) return;
-    if (this.queue > 2) return;
-    const u = new SpeechSynthesisUtterance(text.replace(/^Team ([AB]): /, '')); const pre = this.lang.slice(0, 2);
+    if (this.queue > 1) return;
+    const clean = text.replace(/^Team ([AB]): /, '');
+    const u = new SpeechSynthesisUtterance(clean); const pre = this.lang.slice(0, 2);
     const v = this.voices.find(x => x.lang === this.lang) ?? this.voices.find(x => x.lang.startsWith(pre)); if (v) u.voice = v; u.lang = this.lang;
     u.pitch = pitch; u.rate = rate; u.volume = vol; this.queue++;
-    u.onend = u.onerror = () => { this.queue = Math.max(0, this.queue - 1); this.lastEnd = performance.now(); };
-    speechSynthesis.speak(u);
+    const est = 500 + clean.length * 75; this.until = Math.max(this.until, performance.now()) + est;
+    let done = false; const end = () => { if (done) return; done = true; this.queue = Math.max(0, this.queue - 1); if (this.queue === 0) this.until = Math.min(this.until, performance.now() + 350); };
+    u.onend = u.onerror = end; setTimeout(end, est + 2500);
+    try { speechSynthesis.resume(); speechSynthesis.speak(u); } catch { end(); }
   }
-  stop() { if ('speechSynthesis' in window) speechSynthesis.cancel(); this.queue = 0; }
+  stop() { if ('speechSynthesis' in window) speechSynthesis.cancel(); this.queue = 0; this.until = 0; }
 }
