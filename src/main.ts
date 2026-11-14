@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Sim, Actor, Command, Team, Ev, fwd } from './sim/sim';
 import { MISSIONS, WALL, DOOR, LOW, HIGH, buildLevel } from './sim/level';
 import { MenuScene } from './game/menuscene';
-import { loadWeapons, weaponsReady } from './game/weapons';
+import { loadWeapons, weaponsReady, FpsArms, studioEnv } from './game/weapons';
 import { upgradeViewModel } from './game/world';
 import '@fontsource/barlow-condensed/500.css'; import '@fontsource/barlow-condensed/600.css'; import '@fontsource/barlow-condensed/700.css'; import '@fontsource/barlow/400.css'; import '@fontsource/barlow/600.css';
 import { parseCommand, ACTION_LABEL, DIR_LABEL } from './sim/commands';
@@ -269,7 +269,7 @@ class Game {
       case 'KeyZ': sim.player.prone = !sim.player.prone; sim.player.crouch = false; break;
       case 'KeyX': this.slow = !this.slow; this.audio.ui(); break;
       case 'Space': { const pl = sim.player; if (pl.prone || pl.crouch) { pl.prone = false; pl.crouch = false; } else if (pl.jumpY <= 0 && pl.alive) this.jumpV = 3.4; break; }
-      case 'Digit1': case 'Digit2': { const w = code === 'Digit1' ? 0 : 1; if (w !== this.weapon) { this.weapon = w; this.reloadT = 0; this.fireCd = 0.35; this.vmKick = -0.5; this.audio.draw(); } break; }
+      case 'Digit1': case 'Digit2': { const w = code === 'Digit1' ? 0 : 1; if (w !== this.weapon) { this.weapon = w; this.reloadT = 0; this.fireCd = 0.35; this.vmKick = -0.5; this.audio.draw(); if (w === 0) this.arms.draw(); } break; }
       case 'Tab': this.selTeam = this.selTeam === 'ALL' ? 'A' : this.selTeam === 'A' ? 'B' : 'ALL'; this.audio.ui(); this.updateHud(true); break;
       case 'Enter': this.setTyping(true); break;
       default: if (quick[code]) { const q = quick[code]; this.exec(q === 'there' ? { team: this.selTeam, action: 'move', dir: 'there' } : { team: this.selTeam, action: q }, true); }
@@ -319,12 +319,12 @@ class Game {
     if (tts) this.speak(S.lang.startsWith('sv') ? 'Polis! Ner på marken!' : 'Police! Get down!', null, { pitch: 0.7, rate: 1.3, gain: 1 });
     this.log('DU: Polis! Lägg ner vapnet!', 'me');
   }
-  reload() { const w = WEAPONS[this.weapon]; if (this.reloadT > 0 || this.ammo[this.weapon] >= w.mag || this.reserve[this.weapon] <= 0) return; this.reloadT = w.reload; this.audio.reload(this.weapon === 0 ? 'rifle' : 'pistol', w.reload); }
+  reload() { const w = WEAPONS[this.weapon]; if (this.reloadT > 0 || this.ammo[this.weapon] >= w.mag || this.reserve[this.weapon] <= 0) return; this.reloadT = w.reload; if (this.weapon === 0) this.arms.reload(w.reload); this.audio.reload(this.weapon === 0 ? 'rifle' : 'pistol', w.reload); }
   throwBang() {
     const sim = this.sim!, p = sim.player; if (p.bangs <= 0 || !p.alive) return; const d = this.aimDir(), o = [p.x + d.x * 0.4, this.eye - 0.1, p.z + d.z * 0.4];
     if (this.mirror) this.net.send({ t: 'bang', o, d: [d.x, d.y, d.z] }); else { p.bangs--; sim.throwBang(o[0], o[1], o[2], d.x, d.y, d.z); } this.vmKick = -0.6;
   }
-  menu = new MenuScene(); menuT = 0;
+  menu = new MenuScene(); menuT = 0; arms = new FpsArms();
   slow = false; jumpV = 0; // sneak toggle, vertical jump speed
   preShot = false; // own shot sound already played in the mouse click
   fire() {
@@ -335,7 +335,7 @@ class Game {
     const sp = w.spread * (moving ? 3.5 : 1) * (p.crouch ? 0.6 : 1) + this.recoil * 0.25, d = this.aimDir();
     d.x += (Math.random() - 0.5) * sp * 2; d.y += (Math.random() - 0.5) * sp * 2; d.z += (Math.random() - 0.5) * sp * 2; d.normalize();
     if (this.mirror) { this.net.send({ t: 'fire', o: [p.x, this.eye, p.z], d: [d.x, d.y, d.z], dmg: w.dmg }); if (!this.preShot) this.audio.shot(0, 0, true, this.weapon === 0 ? 'rifle' : 'pistol'); this.preShot = false; } else sim.fire(p, p.x, this.eye, p.z, d.x, d.y, d.z, w.dmg);
-    this.recoil = Math.min(0.09, this.recoil + w.kick); this.pitch = Math.min(1.45, this.pitch + w.kick * 0.55); this.yaw += (Math.random() - 0.5) * w.kick * 0.5; this.vmKick = 1;
+    this.recoil = Math.min(0.09, this.recoil + w.kick); this.pitch = Math.min(1.45, this.pitch + w.kick * 0.55); this.yaw += (Math.random() - 0.5) * w.kick * 0.5; this.vmKick = 1; if (this.weapon === 0) this.arms.fire();
     this.vm.flash.visible = true; this.vm.flash.material.rotation = Math.random() * 6; setTimeout(() => { this.vm.flash.visible = false; }, 45);
   }
 
@@ -514,6 +514,12 @@ class Game {
     g.position.set(0.17 - this.sway.x + Math.sin(this.bob) * 0.006, -0.16 + this.sway.y - rl * 0.16 + Math.abs(Math.cos(this.bob)) * 0.006 + Math.min(0, this.vmKick) * 0.2, -0.5 + Math.max(0, this.vmKick) * 0.05);
     g.rotation.set(Math.max(0, this.vmKick) * 0.07 - rl * 0.7, 0.03 + this.sway.x * 2, rl * 0.5);
     this.vm.rifle.visible = this.weapon === 0; this.vm.pistol.visible = this.weapon === 1; g.visible = p.alive;
+    if (this.arms.ready) { // animated arms: the clips do the reloading and walking, the code only adds sway and recoil
+      const a = this.arms.root, rf = this.weapon === 0, dip = rf ? 0 : rl, mv = !p.alive || this.typing || !(K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD')) ? 0 : (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.crouch && !p.prone ? 2 : 1;
+      a.position.set(-this.sway.x, this.sway.y + Math.min(0, this.vmKick) * 0.2 - dip * 0.16, Math.max(0, this.vmKick) * 0.035);
+      a.rotation.set(Math.max(0, this.vmKick) * 0.035 - dip * 0.7, this.sway.x * 2, dip * 0.5); a.visible = p.alive;
+      this.arms.update(dt, this.weapon, mv); a.updateMatrixWorld(true); this.vm.flash.position.copy(g.worldToLocal(this.arms.muzzle.getWorldPosition(new THREE.Vector3())));
+    }
     // overlays
     $('dmg').style.opacity = String(Math.max(this.dmgFx, p.hp < 35 && p.alive ? 0.35 : 0, p.alive ? 0 : 0.8)); $('flash').style.opacity = String(Math.min(1, p.flash * 1.6));
     const hm = $('hitmark'); hm.style.opacity = String(this.hitFx);
@@ -530,6 +536,11 @@ class Game {
 }
 
 const game = new Game();
-loadWeapons().then(() => { if (weaponsReady) upgradeViewModel(game.vm); });
+loadWeapons().then(async () => {
+  if (weaponsReady) upgradeViewModel(game.vm);
+  if (S.qual > 0 && await game.arms.load()) { // animated arms replace the static weapon (not on the lowest graphics setting)
+    game.vm.rifle.clear(); game.vm.pistol.clear(); game.viewCam.add(game.arms.root); game.viewScene.environment = studioEnv(game.renderer); game.viewScene.environmentIntensity = 0.5;
+  }
+});
 loadModels().then(() => { game.menu.squad(); if (S.qual > 0) { game.menu.env(game.renderer); game.menu.hero('./models/operator/scene.gltf', 3); } $('modelStatus').textContent = modelsReady ? '' : '3D-figurerna kunde inte laddas – inbyggda figurer används.'; });
 (window as any).__ta = game;

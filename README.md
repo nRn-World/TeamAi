@@ -53,3 +53,7 @@ Skott, omladdning, klick och chockgranat bygger på inspelningar av riktiga vape
 ## Vapenmodeller
 
 Karbinen är «Low-Poly M4a1» av TastyTony och pistolen «Glock17» av sigmuuus (båda CC BY 4.0, källa och licens i `public/models/weapons/*/license.txt`). Upphovspersonerna nämns under Inställningar → Tack & licenser. `src/game/weapons.ts` laddar och normaliserar modellerna; om de inte kan laddas används de inbyggda lådvapnen.
+
+## Armar i förstaperson
+
+I förstaperson visas animerade armar med handskar ur «Animated FPS hands (rifle animation pack)» av Cransh (CC BY 4.0, `public/models/fpsarms/license.txt`). Paketets egna animationer används för vila, gång, språng, skott, omladdning och vapenbyte. I karbinläge hålls paketets gevär med rödpunktssikte, i pistolläge hålls Glocken i höger hand. Armarna laddas bara vid grafiknivå över Låg; annars, eller om filerna inte kan hämtas, används den enklare vapenmodellen.
