@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { Sim, Actor, Command, Team, Ev, fwd } from './sim/sim';
 import { MISSIONS, WALL, DOOR, LOW, HIGH, buildLevel } from './sim/level';
 import { MenuScene } from './game/menuscene';
+import { loadWeapons, weaponsReady } from './game/weapons';
+import { upgradeViewModel } from './game/world';
 import '@fontsource/barlow-condensed/500.css'; import '@fontsource/barlow-condensed/600.css'; import '@fontsource/barlow-condensed/700.css'; import '@fontsource/barlow/400.css'; import '@fontsource/barlow/600.css';
 import { parseCommand, ACTION_LABEL, DIR_LABEL } from './sim/commands';
 import { LevelView, ActorView, FX, makeViewModel, TEAM_COLOR } from './game/world';
@@ -509,7 +511,7 @@ class Game {
     // view model
     const g = this.vm.group; this.vmKick += (0 - this.vmKick) * Math.min(1, dt * 14); this.sway.multiplyScalar(Math.max(0, 1 - dt * 9));
     const rl = this.reloadT > 0 ? Math.sin(Math.min(1, this.reloadT / WEAPONS[this.weapon].reload) * Math.PI) : 0;
-    g.position.set(0.2 - this.sway.x + Math.sin(this.bob) * 0.006, -0.2 + this.sway.y - rl * 0.16 + Math.abs(Math.cos(this.bob)) * 0.006 + Math.min(0, this.vmKick) * 0.2, -0.5 + Math.max(0, this.vmKick) * 0.05);
+    g.position.set(0.17 - this.sway.x + Math.sin(this.bob) * 0.006, -0.16 + this.sway.y - rl * 0.16 + Math.abs(Math.cos(this.bob)) * 0.006 + Math.min(0, this.vmKick) * 0.2, -0.5 + Math.max(0, this.vmKick) * 0.05);
     g.rotation.set(Math.max(0, this.vmKick) * 0.07 - rl * 0.7, 0.03 + this.sway.x * 2, rl * 0.5);
     this.vm.rifle.visible = this.weapon === 0; this.vm.pistol.visible = this.weapon === 1; g.visible = p.alive;
     // overlays
@@ -528,5 +530,6 @@ class Game {
 }
 
 const game = new Game();
+loadWeapons().then(() => { if (weaponsReady) upgradeViewModel(game.vm); });
 loadModels().then(() => { game.menu.squad(); if (S.qual > 0) { game.menu.env(game.renderer); game.menu.hero('./models/operator/scene.gltf', 3); } $('modelStatus').textContent = modelsReady ? '' : '3D-figurerna kunde inte laddas – inbyggda figurer används.'; });
 (window as any).__ta = game;
