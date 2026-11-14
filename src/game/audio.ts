@@ -1,4 +1,8 @@
-// Fully synthesized audio (WebAudio) – no sound files, so no licensing concerns.
+// Weapon sounds are real recordings (public/sfx, CC0 – see public/sfx/LICENSE.txt); everything else is synthesized with WebAudio.
+export type Gun = 'rifle' | 'pistol' | 'smg';
+const SFX = ['shot-m4a1-1', 'shot-m4a1-2', 'shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3', 'shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3', 'shot-m1014-1', 'far-rifle', 'far-pistol', 'far-smg', 'far-sniper',
+  'foley-mag-out', 'foley-mag-in', 'foley-charge', 'foley-pistol-out', 'foley-pistol-in', 'foley-slide', 'foley-click', 'foley-bolt'];
+const NEAR: Record<Gun, string[]> = { rifle: ['shot-m4a1-1', 'shot-m4a1-2'], pistol: ['shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3'], smg: ['shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3'] };
 export class GameAudio {
   ctx: AudioContext | null = null; master!: GainNode; private noise!: AudioBuffer; private verb!: ConvolverNode; private wet!: GainNode; volume = 0.8;
   init() {
@@ -12,7 +16,7 @@ export class GameAudio {
     for (let ch = 0; ch < 2; ch++) { const b = ir.getChannelData(ch); for (let i = 0; i < b.length; i++) b[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / b.length, 3.2); }
     this.verb = c.createConvolver(); this.verb.buffer = ir; this.wet = c.createGain(); this.wet.gain.value = 0.3; this.verb.connect(this.wet); this.wet.connect(this.master);
     // room tone
-    void this.loadLines();
+    void this.loadLines(); void this.loadSfx();
     const hum = c.createBufferSource(); hum.buffer = this.noise; hum.loop = true; const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 140; const hg = c.createGain(); hg.gain.value = 0.05; hum.connect(lp); lp.connect(hg); hg.connect(this.master); hum.start();
   }
   // ---- recorded voice lines (public/voice, generated with the CC0 NST Swedish Piper voice) ----
@@ -59,19 +63,55 @@ export class GameAudio {
     const c = this.ctx!, t = c.currentTime + delay, o = c.createOscillator(); o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
     const g = c.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur); o.connect(g); g.connect(dst); o.start(t); o.stop(t + dur + 0.02);
   }
-  shot(dist: number, pan: number, own: boolean, heavy = true) {
-    if (!this.ctx) return; const att = own ? 0.9 : 1 / (1 + dist * 0.12), o = this.out(pan, att);
+  // ---- recorded weapon sounds ----
+  private sfx = new Map<string, AudioBuffer>(); private sfxReq = false; private lastTake = '';
+  private async loadSfx() {
+    if (this.sfxReq || !this.ctx) return; this.sfxReq = true; const c = this.ctx;
+    await Promise.all(SFX.map(async n => { try { this.sfx.set(n, await c.decodeAudioData(await (await fetch(`./sfx/${n}.mp3`)).arrayBuffer())); } catch { /* the synthesized fallback is used */ } }));
+  }
+  /** Plays a recording into dst. Returns false if it is not loaded. */
+  private sample(name: string, dst: AudioNode, vol = 1, rate = 1, delay = 0, lowpass = 0) {
+    const b = this.sfx.get(name); if (!b) return false; const c = this.ctx!, s = c.createBufferSource(); s.buffer = b; s.playbackRate.value = rate;
+    const g = c.createGain(); g.gain.value = vol; let last: AudioNode = s;
+    if (lowpass) { const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lowpass; f.Q.value = 0.4; last.connect(f); last = f; }
+    last.connect(g); g.connect(dst); s.start(c.currentTime + delay); return true;
+  }
+  shot(dist: number, pan: number, own: boolean, gun: Gun = 'rifle') {
+    if (!this.ctx) return;
+    const takes = NEAR[gun].filter(n => this.sfx.has(n));
+    if (takes.length) {
+      // never the same take twice in a row, and a slight pitch drift, so automatic fire does not sound like a loop
+      let take = takes[(Math.random() * takes.length) | 0]; if (take === this.lastTake && takes.length > 1) take = takes[(takes.indexOf(take) + 1) % takes.length]; this.lastTake = take;
+      const rate = 0.97 + Math.random() * 0.06, far = Math.max(0, Math.min(1, (dist - 6) / 16)), o = this.out(pan, own ? 1.15 : 1.5 / (1 + dist * 0.1));
+      // close: the dry report; further away it is duller and gives way to the distant recording of the same weapon
+      if (far < 1) this.sample(take, o, 1 - far * 0.8, rate, 0, own ? 0 : Math.max(1400, 16000 - dist * 800));
+      if (far > 0 && !own) this.sample('far-' + gun, o, far * 1.3, rate);
+      if (own) this.tone(o, 'sine', gun === 'rifle' ? 95 : 120, 40, 0.09, 0.5); // chest thump the microphone does not capture
+      return;
+    }
+    const heavy = gun !== 'pistol', att = own ? 0.9 : 1 / (1 + dist * 0.12), o = this.out(pan, att);
     const top = Math.max(900, 7000 - dist * 220);
     this.burst(o, heavy ? 0.16 : 0.11, 'lowpass', top, 300, 0.7, 1.1); this.burst(o, 0.035, 'highpass', 2500, 1500, 0.5, own ? 0.7 : 0.3);
     this.tone(o, 'sine', heavy ? 170 : 240, 45, 0.11, 0.9); if (own) this.burst(o, 0.05, 'bandpass', 5200, 4200, 6, 0.2, 0.09);
   }
-  dry() { if (!this.ctx) return; const o = this.out(0, 0.5, false); this.tone(o, 'square', 1800, 900, 0.03, 0.25); }
-  reload() { if (!this.ctx) return; const o = this.out(0.2, 0.5, false); this.burst(o, 0.05, 'bandpass', 2400, 1800, 4, 0.7); this.burst(o, 0.06, 'bandpass', 1500, 1100, 4, 0.8, 0.55); this.tone(o, 'square', 500, 200, 0.04, 0.15, 1.1); this.burst(o, 0.05, 'bandpass', 3000, 2000, 3, 0.9, 1.12); }
+  dry() { if (!this.ctx) return; const o = this.out(0, 0.9, false); if (!this.sample('foley-click', o)) this.tone(o, 'square', 1800, 900, 0.03, 0.14); }
+  /** Magazine out, magazine in, charging handle / slide – spread over the reload time (seconds). */
+  reload(gun: Gun = 'rifle', dur = 2) {
+    if (!this.ctx) return; const o = this.out(0.15, 0.9, false), r = gun === 'rifle';
+    const ok = this.sample(r ? 'foley-mag-out' : 'foley-pistol-out', o, 1, 1, dur * 0.06);
+    this.sample(r ? 'foley-mag-in' : 'foley-pistol-in', o, 1, 1, dur * 0.52); this.sample(r ? 'foley-charge' : 'foley-slide', o, 1, 1, dur * 0.8);
+    if (!ok) { this.burst(o, 0.05, 'bandpass', 2400, 1800, 4, 0.4); this.burst(o, 0.06, 'bandpass', 1500, 1100, 4, 0.45, 0.55); this.burst(o, 0.05, 'bandpass', 3000, 2000, 3, 0.5, 1.12); }
+  }
+  /** Weapon raised after switching. */
+  draw() { if (!this.ctx) return; this.sample('foley-bolt', this.out(0.1, 0.7, false)); }
   step(vol = 0.25, pan = 0) { if (!this.ctx) return; const o = this.out(pan, vol * 1.8, false); this.burst(o, 0.07, 'lowpass', 500 + Math.random() * 200, 120, 1, 0.9); this.burst(o, 0.03, 'bandpass', 1800, 900, 1.5, 0.25); }
   door(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 1.2 / (1 + dist * 0.12)); this.tone(o, 'sawtooth', 95, 150, 0.32, 0.12); this.burst(o, 0.12, 'lowpass', 600, 90, 1, 0.9, 0.3); }
   cuff() { if (!this.ctx) return; const o = this.out(0, 0.5, false); for (let i = 0; i < 6; i++) this.burst(o, 0.02, 'bandpass', 3500 + i * 250, 3000, 8, 0.6, i * 0.04); }
   bang(dist: number, pan: number, deaf: number) {
-    if (!this.ctx) return; const o = this.out(pan, 1.6 / (1 + dist * 0.06)); this.burst(o, 0.5, 'lowpass', 9000, 120, 0.5, 1.5); this.tone(o, 'sine', 120, 30, 0.4, 1.2);
+    if (!this.ctx) return; const o = this.out(pan, 1.6 / (1 + dist * 0.06));
+    // built from real reports: a shotgun blast slowed down for the body and a distant rifle for the tail
+    if (this.sample('shot-m1014-1', o, 1.5, 0.55)) { this.sample('far-sniper', o, 1.2, 0.7, 0.02); this.tone(o, 'sine', 90, 28, 0.35, 0.9); }
+    else { this.burst(o, 0.5, 'lowpass', 9000, 120, 0.5, 1.5); this.tone(o, 'sine', 120, 30, 0.4, 1.2); }
     if (deaf > 0.15) { const r = this.out(0, deaf * 0.25, false); this.tone(r, 'sine', 3900, 3850, 3 + deaf * 3, 1); }
   }
   hurt() { if (!this.ctx) return; const o = this.out(0, 0.7, false); this.tone(o, 'sine', 140, 50, 0.18, 1); this.burst(o, 0.08, 'lowpass', 900, 200, 1, 0.6); }
