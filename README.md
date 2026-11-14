@@ -41,3 +41,7 @@ Poliser, misstänkta och civila är animerade figurer ur «Ultimate Modular Men�
 | Mellanslag | Hoppa (reser dig om du hukar/kryper) | landningen hörs ca 7 m |
 
 Fiender kan fortfarande *se* dig även när du är tyst.
+
+## Modell i huvudmenyn
+
+Insatspoliserna i huvudmenyn är «S.W.A.T. Operator» av Mateusz Woliński (CC BY 4.0, källa och licens i `public/models/operator/license.txt`). Upphovspersonen nämns under Inställningar → Tack & licenser, vilket licensen kräver. `tools/pack_operator.py` förminskar texturerna från originalnedladdningen.

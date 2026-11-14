@@ -2,11 +2,16 @@ import * as THREE from 'three';
 import * as T from './textures';
 import { ActorView } from './world';
 import { Actor } from '../sim/sim';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clone as skinnedClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
+const HERO = [[0.75, 2.2, -0.1], [1.75, 1.0, -0.4], [-0.45, 0.6, 0.2]]; // x, z, yaw
 /** Live 3D backdrop for the main menu: the squad waiting in a parking garage, lit by a patrol car's light bar. */
 export class MenuScene {
   scene = new THREE.Scene(); cam = new THREE.PerspectiveCamera(30, 1, 0.1, 80);
   private views: ActorView[] = []; private t = 0; private blue: THREE.PointLight; private red: THREE.PointLight; private dust: THREE.Points;
+  private heroes: THREE.Group[] = []; private mixers: THREE.AnimationMixer[] = [];
   private mx = 0; private my = 0; private cx = 0; private cy = 0;
   constructor() {
     const s = this.scene; s.background = new THREE.Color(0x07090d); s.fog = new THREE.Fog(0x07090d, 12, 34);
@@ -21,17 +26,17 @@ export class MenuScene {
     for (let i = -4; i <= 4; i++) box(0.12, 0.012, 3.6, std({ color: 0xb9bec4, roughness: 0.6 }), i * 2.6, 0.006, -7);                           // parking lines
     // ceiling strip lights
     for (const x of [-4, 3.2]) { const tube = box(1.6, 0.06, 0.16, new THREE.MeshBasicMaterial({ color: 0xdfeaff }), x, 4.15, -2.5); tube.castShadow = false; }
-    // unmarked van silhouette behind the squad
-    const vanM = std({ color: 0x1c232c, roughness: 0.4, metalness: 0.3 }), glass = std({ color: 0x1b2836, roughness: 0.1, metalness: 0.9 });
-    box(5.2, 1.9, 2.2, vanM, 3.4, 1.3, -4.2); box(1.5, 1.2, 2.2, vanM, 0.2, 0.95, -4.2); box(0.06, 0.7, 1.8, glass, 0.82, 1.85, -4.2);
-    for (const x of [0.4, 4.8]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 2.3, 18), std({ color: 0x08090b, roughness: 0.9 })); w.rotation.x = Math.PI / 2; w.position.set(x, 0.42, -4.2); s.add(w); }
-    const bar = box(0.3, 0.1, 1.2, new THREE.MeshBasicMaterial({ color: 0x223355 }), 1.6, 2.3, -4.2); bar.castShadow = false;
+    // concrete barriers and a steel shutter in the back wall give the room some depth
+    const steel = std({ color: 0x3a4149, roughness: 0.45, metalness: 0.7 });
+    for (let i = 0; i < 14; i++) box(6.4, 0.2, 0.08, steel, 3.2, 0.3 + i * 0.24, -8.75);
+    box(6.8, 0.25, 0.3, yellow, 3.2, 3.75, -8.7);
+    for (const [x, z, r] of [[-3.4, -2.6, 0.25], [5.6, -2.2, -0.3]]) { const b = box(2.4, 0.85, 0.5, std({ color: 0x7c8087, roughness: 0.95 }), x, 0.425, z); b.rotation.y = r; }
     // lights
     s.add(new THREE.HemisphereLight(0xa9c0e0, 0x1a1d22, 1.1));
     const key = new THREE.SpotLight(0xffe2bd, 250, 30, 0.6, 0.6, 1.6); key.position.set(-2.5, 4.1, 6); key.target.position.set(1.6, 1, 0); key.castShadow = true; key.shadow.mapSize.set(1024, 1024); key.shadow.bias = -0.002; s.add(key, key.target);
     const rim = new THREE.SpotLight(0x6fb6ff, 420, 30, 0.7, 0.7, 1.5); rim.position.set(6.5, 3.6, -5); rim.target.position.set(1.5, 1.2, 0.5); s.add(rim, rim.target);
-    this.blue = new THREE.PointLight(0x2a6bff, 0, 16, 1.6); this.blue.position.set(1.6, 2.6, -3.4); this.red = new THREE.PointLight(0xff2a2a, 0, 16, 1.6); this.red.position.set(1.6, 2.6, -5); s.add(this.blue, this.red);
-    for (const x of [-6, 0, 6]) { const w = new THREE.SpotLight(0xbfd4ff, 60, 14, 0.9, 0.8, 1.4); w.position.set(x, 4, -6.5); w.target.position.set(x, 1.5, -9); s.add(w, w.target); }
+    this.blue = new THREE.PointLight(0x2a6bff, 0, 16, 1.6); this.blue.position.set(5.5, 2.2, 1.5); this.red = new THREE.PointLight(0xff2a2a, 0, 16, 1.6); this.red.position.set(6.5, 2.2, 0); s.add(this.blue, this.red);
+    for (const x of [-6, 0, 6]) { const w = new THREE.SpotLight(0xbfd4ff, 32, 14, 0.9, 0.8, 1.4); w.position.set(x, 4, -6.5); w.target.position.set(x, 1.5, -9); s.add(w, w.target); }
     // drifting dust in the light
     const n = 260, pos = new Float32Array(n * 3); for (let i = 0; i < n; i++) { pos[i * 3] = (Math.random() - 0.5) * 14; pos[i * 3 + 1] = Math.random() * 4; pos[i * 3 + 2] = (Math.random() - 0.5) * 10; }
     const dg = new THREE.BufferGeometry(); dg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -40,6 +45,7 @@ export class MenuScene {
   }
   /** Put the squad in the scene (call once the character models are loaded; safe to call again). */
   squad() {
+    if (this.heroes.length) return;
     for (const v of this.views) this.scene.remove(v.root); this.views = [];
     //            x     z     yaw   aiming
     const spots = [[1.5, 1.5, -0.25, 0], [2.7, 0.7, -0.6, 1], [0.4, 0.5, 0.1, 0], [3.8, -0.3, -0.45, 0], [-0.6, -0.5, 0.3, 0]];
@@ -49,9 +55,28 @@ export class MenuScene {
       for (let k = 0; k < 40 + i * 7; k++) v.update(0.033, k); // settle into pose, each at a different phase of the idle
     });
   }
+  /** Replace the stand-in squad with the detailed operator model (CC BY, see credits). Keeps the stand-ins if it cannot be loaded. */
+  async hero(url: string, count: number) {
+    try {
+      const g = await new GLTFLoader().loadAsync(url), tpl = g.scene;
+      tpl.updateMatrixWorld(true); const bb = new THREE.Box3().setFromObject(tpl), k = 1.84 / (bb.max.y - bb.min.y);
+      tpl.traverse((o: any) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; if (o.material) { o.material.envMapIntensity = 0.6; if (o.material.name === 'eyes') o.material.color.setScalar(0.5); } } });
+      for (const v of this.views) this.scene.remove(v.root); this.views = [];
+      for (const h of this.heroes) this.scene.remove(h); this.heroes = []; this.mixers = [];
+      const spots = (window as any).__spots ?? HERO;
+      for (let i = 0; i < Math.min(count, spots.length); i++) {
+        const [x, z, yaw] = spots[i], o = skinnedClone(tpl), w = new THREE.Group(); o.scale.setScalar(k); o.position.y = -bb.min.y * k; w.add(o); w.position.set(x, 0, z); w.rotation.y = yaw; this.scene.add(w); this.heroes.push(w);
+        if (g.animations[0]) { const m = new THREE.AnimationMixer(o); m.clipAction(g.animations[0]).play(); m.setTime(i * 2.3); this.mixers.push(m); }
+      }
+      return true;
+    } catch (e) { console.warn('operator model', e); return false; }
+  }
+  /** Soft studio reflections so the metal and fabric of the detailed model read properly. */
+  env(r: THREE.WebGLRenderer) { if (this.scene.environment) return; const pm = new THREE.PMREMGenerator(r); this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; this.scene.environmentIntensity = 0.35; pm.dispose(); }
   resize(aspect: number) { this.cam.aspect = aspect; this.cam.fov = aspect < 1.3 ? 44 : 30; this.cam.updateProjectionMatrix(); }
   update(dt: number) {
     this.t += dt; const t = this.t;
+    for (const m of this.mixers) m.update(dt);
     for (const v of this.views) { v.a.x = v.root.position.x; v.a.z = v.root.position.z; v.update(dt, t); }
     // light bar: alternating double flashes
     const ph = (t * 1.3) % 1, fl = (p: number) => (p < 0.08 || (p > 0.14 && p < 0.22) ? 1 : 0);
@@ -59,7 +84,7 @@ export class MenuScene {
     this.dust.rotation.y = t * 0.012; this.dust.position.y = Math.sin(t * 0.2) * 0.1;
     this.cx += (this.mx - this.cx) * Math.min(1, dt * 2); this.cy += (this.my - this.cy) * Math.min(1, dt * 2);
     const wide = this.cam.aspect >= 1.3;
-    this.cam.position.set((wide ? -1.3 : 1.2) + Math.sin(t * 0.13) * 0.35 + this.cx * 0.5, 1.5 - this.cy * 0.25 + Math.sin(t * 0.21) * 0.04, 7.4 + Math.cos(t * 0.11) * 0.25);
-    this.cam.lookAt(wide ? -0.1 : 1.4, 0.98, 0);
+    this.cam.position.set((wide ? -1.3 : 1.2) + Math.sin(t * 0.13) * 0.35 + this.cx * 0.5, 1.5 - this.cy * 0.25 + Math.sin(t * 0.21) * 0.04, (this.heroes.length ? 6.6 : 7.4) + Math.cos(t * 0.11) * 0.25);
+    this.cam.lookAt(wide ? -0.1 : 1.4, this.heroes.length ? 1.22 : 0.98, 0);
   }
 }
