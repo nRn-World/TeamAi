@@ -12,7 +12,7 @@ const params = new URLSearchParams(location.search);
 const AUTO = params.has('auto');
 
 // ---------------- settings ----------------
-const defaults = { sens: 1, vol: 0.8, mic: 1, lang: 'sv-SE', tts: 1, head: 0, qual: 1, diff: 1 };
+const defaults = { sens: 1, vol: 0.8, mic: 1, ptt: 1, lang: 'sv-SE', tts: 1, head: 0, qual: 1, diff: 1 };
 type Settings = typeof defaults;
 const S: Settings = { ...defaults, ...JSON.parse(localStorage.getItem('teamai.settings') || '{}') };
 const best: Record<string, number> = JSON.parse(localStorage.getItem('teamai.best') || '{}');
@@ -55,9 +55,9 @@ class Game {
     this.camera.aspect = this.viewCam.aspect = w / h; this.camera.updateProjectionMatrix(); this.viewCam.updateProjectionMatrix();
   }
   applySettings() {
-    this.audio.setVolume(S.vol); this.speech.enabled = !!S.tts; this.speech.lang = S.lang; this.voice.setLang(S.lang);
+    this.audio.setVolume(S.vol); this.speech.enabled = !!S.tts; this.speech.lang = S.lang; this.voice.setLang(S.lang); this.voice.ptt = !!S.ptt; this.micState(this.voice.state);
     ($('sSens') as HTMLInputElement).value = String(S.sens); ($('sVol') as HTMLInputElement).value = String(S.vol);
-    for (const [id, k] of [['sMic', 'mic'], ['sLang', 'lang'], ['sTts', 'tts'], ['sHead', 'head'], ['sQual', 'qual'], ['sDiff', 'diff']] as const) ($(id) as HTMLSelectElement).value = String(S[k]);
+    for (const [id, k] of [['sMic', 'mic'], ['sPtt', 'ptt'], ['sLang', 'lang'], ['sTts', 'tts'], ['sHead', 'head'], ['sQual', 'qual'], ['sDiff', 'diff']] as const) ($(id) as HTMLSelectElement).value = String(S[k]);
     if (!S.mic) this.voice.stop(); else if (this.state === 'play') this.voice.start();
     this.resize();
   }
@@ -90,7 +90,7 @@ class Game {
     for (const id of ['btnSettings', 'btnSettings2']) click(id, () => show('settings', true));
     document.querySelectorAll<HTMLElement>('.close').forEach(b => b.onclick = () => { b.closest('.screen')!.classList.add('hidden'); this.audio.ui(); });
     const bind = (id: string, k: keyof Settings, num = true) => $(id).addEventListener('input', e => { (S as any)[k] = num ? +(e.target as HTMLInputElement).value : (e.target as HTMLInputElement).value; saveSettings(); this.applySettings(); });
-    bind('sSens', 'sens'); bind('sVol', 'vol'); bind('sMic', 'mic'); bind('sLang', 'lang', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff');
+    bind('sSens', 'sens'); bind('sVol', 'vol'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff');
   }
   toMenu() { this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief']) show(id, false); this.buildMenu(); show('menu', true); if (document.pointerLockElement) document.exitPointerLock(); }
   lock() { if (!AUTO) { const p: any = $('c').requestPointerLock(); if (p?.catch) p.catch(() => { }); } }
@@ -134,8 +134,8 @@ class Game {
       if (e.code === 'Tab' || e.code === 'Space') e.preventDefault();
       if (e.repeat) return; this.keys.add(e.code); this.onKey(e.code);
     });
-    document.addEventListener('keyup', e => this.keys.delete(e.code));
-    window.addEventListener('blur', () => { this.keys.clear(); this.mouseDown = false; });
+    document.addEventListener('keyup', e => { this.keys.delete(e.code); if (e.code === 'KeyV') this.voice.release(); });
+    window.addEventListener('blur', () => { this.voice.release(); this.keys.clear(); this.mouseDown = false; });
   }
   setTyping(on: boolean) { this.typing = on; show('cmdbox', on); const inp = $<HTMLInputElement>('cmdinput'); if (on) { this.keys.clear(); inp.focus(); } else inp.blur(); }
   onKey(code: string) {
@@ -145,7 +145,8 @@ class Game {
       case 'KeyF': sim.playerUse(); break;
       case 'KeyR': this.reload(); break;
       case 'KeyG': this.throwBang(); break;
-      case 'KeyV': case 'KeyQ': this.shout(true); break;
+      case 'KeyV': if (S.ptt && S.mic) { if (this.voice.state === 'off') this.voice.start(); this.voice.press(); $('heard').textContent = ''; } else this.shout(true); break;
+      case 'KeyQ': this.shout(true); break;
       case 'KeyT': this.torchOn = !this.torchOn; this.audio.dry(); break;
       case 'KeyM': this.mapOn = !this.mapOn; break;
       case 'KeyC': sim.player.crouch = !sim.player.crouch; break;
@@ -159,7 +160,7 @@ class Game {
   // ---------------- commands ----------------
   heard(text: string, fromMic: boolean) {
     if (this.state !== 'play' || !this.sim) return;
-    if (fromMic && !S.head && this.speech.speaking) { // don't let the team's own radio voice trigger orders
+    if (fromMic && !S.head && !S.ptt && this.speech.speaking) { // don't let the team's own radio voice trigger orders
       $('heard').textContent = '« ' + text.split('|')[0].trim() + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'Ignorerat – teamet pratade samtidigt (säg det igen)'; this.parsedT = 4; return;
     }
     const alts = text.split('|').map(s => s.trim()).filter(Boolean); let cmd: Command | null = null;
@@ -244,7 +245,8 @@ class Game {
 
   // ---------------- HUD ----------------
   micState(s: string, detail?: string) {
-    const dot = $('micdot'), txt = $('micstate'); dot.className = s === 'listening' ? 'on' : s === 'denied' || s === 'error' || s === 'unsupported' ? 'err' : '';
+    const ptt = !!S.ptt, held = this.voice.held;
+    const dot = $('micdot'), txt = $('micstate'); dot.className = s === 'listening' && (!ptt || held) ? 'on' : s === 'denied' || s === 'error' || s === 'unsupported' ? 'err' : '';
     const why: Record<string, [string, string]> = {
       iframe: ['MIKROFON BLOCKERAD AV FÖRHANDSVISNINGEN – pausa (Esc) och välj «Öppna i egen flik»', 'Spelet visas inbäddat i en annan sida, och den sidan släpper inte fram mikrofonen. Det hjälper inte att tillåta mikrofonen i webbläsaren – öppna spelet i en egen flik med knappen nedan.'],
       mic: ['MIKROFON NEKAD – pausa (Esc) för hjälp', 'Webbläsaren nekar mikrofonen för den här sidan. Klicka på ikonen till vänster om adressen, sätt Mikrofon till «Tillåt», ladda om sidan och försök igen. Kontrollera också att operativsystemet tillåter webbläsaren att använda mikrofonen.'],
@@ -255,7 +257,8 @@ class Game {
       lang: ['SPRÅKET STÖDS INTE AV TALTJÄNSTEN', 'Det valda språket för röstkommandon stöds inte av webbläsarens taltjänst. Byt språk under Inställningar.'],
     };
     const base: Record<string, [string, string]> = {
-      listening: ['MIKROFON PÅ – LYSSNAR', 'Mikrofonen är på och lyssnar.'], starting: ['STARTAR MIKROFON…', 'Startar mikrofonen…'],
+      listening: ptt ? [held ? 'LYSSNAR – släpp V när du är klar' : 'HÅLL V FÖR ATT PRATA', 'Håll ner V medan du ger en order och släpp när du är klar.'] : ['MIKROFON PÅ – LYSSNAR', 'Mikrofonen är på och lyssnar.'],
+      starting: ptt && held ? ['STARTAR MIKROFON – vänta en sekund och säg det igen', 'Startar mikrofonen…'] : ptt ? ['HÅLL V FÖR ATT PRATA', 'Håll ner V medan du ger en order och släpp när du är klar.'] : ['STARTAR MIKROFON…', 'Startar mikrofonen…'],
       off: ['MIKROFON AV – tryck Enter för att skriva order', 'Mikrofonen är av.'], unsupported: ['RÖSTSTYRNING STÖDS EJ HÄR – använd Chrome', 'Den här webbläsaren saknar röstigenkänning. Använd Google Chrome.'],
     };
     const m = (detail && why[detail]) || base[s] || ['MIKROFONFEL' + (detail ? ' (' + detail + ')' : ''), 'Okänt mikrofonfel' + (detail ? ': ' + detail : '') + '.'];
