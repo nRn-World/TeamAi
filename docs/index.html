@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TeamAi – röststyrd taktisk insats</title>
+  <script type="module" crossorigin src="./assets/index-Cmo_FJHR.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-DMf8xd-h.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud" class="hidden">
+  <div id="cross"><i></i><i></i><i></i><i></i><b></b></div>
+  <div id="hitmark"></div>
+  <div id="dmg"></div><div id="flash"></div>
+  <div id="objective"></div>
+  <canvas id="minimap"></canvas>
+  <div id="team"></div>
+  <div id="voice"><div id="microw"><span id="micdot"></span><span id="micstate">MIK AV</span></div><div id="heard"></div><div id="parsed"></div></div>
+  <div id="log"></div>
+  <div id="prompt"></div>
+  <div id="progress"><div></div></div>
+  <div id="status"><div id="hpbar"><div></div></div><div id="hptxt">100</div></div>
+  <div id="ammo"><div id="wname">KARBIN</div><div id="acount"><b>30</b> / 150</div><div id="bangs">◉◉◉</div></div>
+  <div id="quick"></div>
+  <div id="cmdbox" class="hidden"><span>ORDER ›</span><input id="cmdinput" autocomplete="off" spellcheck="false" placeholder="t.ex. team a gå till vänster" /></div>
+</div>
+
+<div id="menu" class="screen">
+  <div class="panel wide">
+    <div class="logo">TEAM<span>Ai</span></div>
+    <div class="tag">Röststyrd taktisk insatsstyrka</div>
+    <div id="missions"></div>
+    <div class="row">
+      <button id="btnHelp">Kontroller &amp; röstkommandon</button>
+      <button id="btnSettings">Inställningar</button>
+    </div>
+    <div id="micwarn" class="note"></div>
+    <div class="ver">v0.1 – tidig prototyp</div>
+  </div>
+</div>
+
+<div id="brief" class="screen hidden"><div class="panel">
+  <h2 id="briefTitle"></h2><p id="briefText"></p>
+  <div class="tips"><b>Säg till exempel:</b> «Team A gå till vänster» · «Team B du skyddar mig» · «Alla ställ upp vid dörren» · «Bravo chockgranat och storma» · «Polis! Lägg ner vapnet!» · «Team A säkra dem»</div>
+  <div class="row"><button id="btnBack">Tillbaka</button><button id="btnGo" class="primary">Påbörja insats</button></div>
+</div></div>
+
+<div id="pause" class="screen hidden"><div class="panel">
+  <h2>Pausat</h2>
+  <div class="col"><button id="btnResume" class="primary">Fortsätt</button><button id="btnHelp2">Kontroller &amp; röstkommandon</button><button id="btnSettings2">Inställningar</button><button id="btnRestart">Starta om uppdraget</button><button id="btnQuit">Avbryt till huvudmeny</button></div>
+</div></div>
+
+<div id="debrief" class="screen hidden"><div class="panel">
+  <h2 id="debTitle"></h2><div id="debRank"></div><table id="debTable"></table>
+  <div class="row"><button id="btnMenu">Huvudmeny</button><button id="btnAgain">Spela igen</button><button id="btnNext" class="primary">Nästa uppdrag</button></div>
+</div></div>
+
+<div id="help" class="screen hidden"><div class="panel wide scroll">
+  <h2>Kontroller</h2>
+  <div class="grid2">
+    <div><kbd>W A S D</kbd> Gå</div><div><kbd>Shift</kbd> Spring · <kbd>C</kbd> Huka</div>
+    <div><kbd>Mus</kbd> Sikta · <kbd>Vänsterklick</kbd> Skjut</div><div><kbd>R</kbd> Ladda om · <kbd>1</kbd>/<kbd>2</kbd> Vapen</div>
+    <div><kbd>F</kbd> Öppna dörr / sätt handfängsel</div><div><kbd>G</kbd> Kasta chockgranat</div>
+    <div><kbd>V</kbd> Ropa «Polis! Ge upp!»</div><div><kbd>T</kbd> Ficklampa · <kbd>M</kbd> Karta</div>
+    <div><kbd>Enter</kbd> Skriv en order (om mikrofon saknas)</div><div><kbd>Tab</kbd> Välj team för snabbtangenter</div>
+  </div>
+  <div class="note">Snabbtangenter (valt team): <kbd>3</kbd> Följ <kbd>4</kbd> Håll <kbd>5</kbd> Gå dit jag siktar <kbd>6</kbd> Skydda mig <kbd>7</kbd> Ställ upp <kbd>8</kbd> Storma <kbd>9</kbd> Granat+storma <kbd>0</kbd> Säkra</div>
+  <h2>Röstkommandon</h2>
+  <p>Mikrofonen är på hela tiden. Börja med vilket team du menar – <b>«Team A»</b> (även «Alfa», «röda laget»), <b>«Team B»</b> («Bravo», «blå laget») eller <b>«Alla»</b> – och säg sedan vad de ska göra. Utan teamnamn gäller ordern det team du senast pratade med. Engelska fungerar också.</p>
+  <table class="cmds">
+    <tr><td>«gå till vänster / höger / framåt / bakåt»</td><td>Förflyttar sig åt det hållet sett från dig</td></tr>
+    <tr><td>«gå dit»</td><td>Går till platsen du siktar på</td></tr>
+    <tr><td>«följ mig» · «kom hit»</td><td>Följer efter dig</td></tr>
+    <tr><td>«skydda mig» · «täck mig»</td><td>Håller sig tätt intill och bevakar din rygg</td></tr>
+    <tr><td>«stanna» · «håll position»</td><td>Står kvar och bevakar</td></tr>
+    <tr><td>«ställ upp vid dörren»</td><td>Ställer upp på var sida om dörren du tittar på</td></tr>
+    <tr><td>«storma» · «rensa rummet» · «gå in»</td><td>Öppnar dörren och rensar rummet</td></tr>
+    <tr><td>«chockgranat» · «flashbang»</td><td>Kastar chockgranat och stormar sedan</td></tr>
+    <tr><td>«öppna dörren» · «stäng dörren»</td><td>Hanterar dörren utan att gå in</td></tr>
+    <tr><td>«säkra dem» · «handfängsel»</td><td>Sätter handfängsel på alla som gett upp</td></tr>
+    <tr><td>«eld upphör» · «fri eld»</td><td>Bara besvara eld / skjuta på hot</td></tr>
+    <tr><td>«rapport»</td><td>Teamet rapporterar status</td></tr>
+    <tr><td>«Polis! Lägg ner vapnet!»</td><td>Du ropar själv – misstänkta och civila kan ge upp</td></tr>
+  </table>
+  <h2>Så vinner du</h2>
+  <p>Alla misstänkta ska vara gripna eller oskadliggjorda och alla civila säkrade med handfängsel. Gripanden ger mer poäng än dödande. Att skjuta någon som gett upp, eller utan förvarning, ger avdrag.</p>
+  <div class="row"><button class="close primary">Stäng</button></div>
+</div></div>
+
+<div id="settings" class="screen hidden"><div class="panel wide scroll">
+  <h2>Inställningar</h2>
+  <div class="form">
+    <label>Muskänslighet <input id="sSens" type="range" min="0.3" max="3" step="0.05" /></label>
+    <label>Ljudvolym <input id="sVol" type="range" min="0" max="1" step="0.05" /></label>
+    <label>Röstigenkänning <select id="sMic"><option value="1">På (mikrofon alltid på)</option><option value="0">Av</option></select></label>
+    <label>Språk för röstkommandon <select id="sLang"><option value="sv-SE">Svenska</option><option value="en-US">English</option></select></label>
+    <label>Teamet svarar med röst <select id="sTts"><option value="1">På</option><option value="0">Av</option></select></label>
+    <label>Jag använder hörlurar <select id="sHead"><option value="0">Nej (ignorera mikrofonen medan teamet pratar)</option><option value="1">Ja</option></select></label>
+    <label>Grafik <select id="sQual"><option value="0">Låg</option><option value="1">Medel</option><option value="2">Hög</option></select></label>
+    <label>Svårighetsgrad <select id="sDiff"><option value="0">Lätt</option><option value="1">Normal</option><option value="2">Svår</option></select></label>
+  </div>
+  <h2>Tack &amp; licenser</h2>
+  <div class="credits">
+    <p><b>three.js</b> – 3D-motor · MIT-licens · © three.js authors</p>
+    <p><b>Vite</b> – byggverktyg · MIT-licens · © VoidZero Inc. och Vite-bidragsgivare</p>
+    <p><b>TypeScript</b> – Apache-2.0 · © Microsoft</p>
+    <p><b>Web Speech API</b> – röstigenkänning och talsyntes sker via din webbläsares inbyggda tjänster.</p>
+    <p><b>Grafik, 3D-figurer, texturer och ljud</b> – allt genereras av spelets egen kod (procedurellt). Inga tredjepartsfiler används, så inga ytterligare licenser eller erkännanden krävs.</p>
+  </div>
+  <div class="row"><button class="close primary">Stäng</button></div>
+</div></div>
+
+</body>
+</html>
