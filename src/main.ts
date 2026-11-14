@@ -528,5 +528,5 @@ class Game {
 }
 
 const game = new Game();
-loadModels().then(() => { game.menu.squad(); $('modelStatus').textContent = modelsReady ? '' : '3D-figurerna kunde inte laddas – inbyggda figurer används.'; });
+loadModels().then(() => { game.menu.squad(); if (S.qual > 0) { game.menu.env(game.renderer); game.menu.hero('./models/operator/scene.gltf', 3); } $('modelStatus').textContent = modelsReady ? '' : '3D-figurerna kunde inte laddas – inbyggda figurer används.'; });
 (window as any).__ta = game;
