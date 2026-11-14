@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
-      - run: pip install piper-tts==1.8.0
+      - run: pip install piper-tts==1.8.0 imageio-ffmpeg
       - run: python voice/make.py
       - name: Spara klippen i projektet
         if: always()

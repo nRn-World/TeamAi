@@ -2,6 +2,8 @@
 Run by .github/workflows/voices.yml (needs internet for the voice models). Output: <voice>/<index>.mp3 + manifest.json."""
 import json, os, subprocess, urllib.request, wave, pathlib
 from piper import PiperVoice, SynthesisConfig
+import imageio_ffmpeg
+FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / 'public' / 'voice'
@@ -34,7 +36,7 @@ try:
         for i, text in enumerate(lines):
             wav = tmp / f'{key}{i}.wav'
             with wave.open(str(wav), 'wb') as w: voice.synthesize_wav(spoken(text), w, syn_config=SynthesisConfig(length_scale=0.92, noise_scale=0.8, noise_w_scale=0.9))
-            subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', str(wav), '-af',
+            subprocess.run([FFMPEG, '-y', '-loglevel', 'error', '-i', str(wav), '-af',
                             'silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse,dynaudnorm=p=0.9',
                             '-ac', '1', '-ar', '22050', '-b:a', '48k', str(OUT / key / f'{i}.mp3')], check=True)
         (OUT / f'MODEL_CARD-{base}.txt').write_text(cards[key], encoding='utf-8')
