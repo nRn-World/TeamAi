@@ -45,3 +45,7 @@ Fiender kan fortfarande *se* dig även när du är tyst.
 ## Modell i huvudmenyn
 
 Insatspoliserna i huvudmenyn är «S.W.A.T. Operator» av Mateusz Woliński (CC BY 4.0, källa och licens i `public/models/operator/license.txt`). Upphovspersonen nämns under Inställningar → Tack & licenser, vilket licensen kräver. `tools/pack_operator.py` förminskar texturerna från originalnedladdningen.
+
+## Vapenljud
+
+Skott, omladdning, klick och chockgranat bygger på inspelningar av riktiga vapen i `public/sfx/` (alla CC0, källor i `public/sfx/LICENSE.txt` och under Inställningar → Tack & licenser). Karbinen är en AR-15, pistolen en Walther PPQ och de misstänktas vapen en Carl Gustav m/45. På avstånd tonas ljudet över till en inspelning av samma vapen på håll. Om filerna inte kan laddas används de syntetiska ljuden.
