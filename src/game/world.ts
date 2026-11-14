@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Sim, Actor } from '../sim/sim';
 import { WALL, OUT, Door } from '../sim/level';
 import * as T from './textures';
-import { MODELS, instance, ModelInstance } from './models';
+import { modelsReady, Rig } from './models';
 
 const BOX = new THREE.BoxGeometry(1, 1, 1);
 const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...o });
@@ -96,12 +96,15 @@ export const TEAM_COLOR = { A: 0xe04848, B: 0x3d8bf0 };
 const shadowGeo = new THREE.CircleGeometry(0.42, 16), shadowMat = new THREE.MeshBasicMaterial({ color: 0, transparent: true, opacity: 0.38, depthWrite: false });
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 
+// extra bone rotations (radians) for the kneeling poses; tuned by eye
+const POSE = { thigh: 0, shin: 1.7, drop: 0.42, up: [2.4, 0.4, 0, 0, 0.7], cuff: [-0.5, 0.5, 0, 0, 0.9], head: 0.4 };
+const P_DROP = () => ((window as any).__pose ?? POSE).drop;
 export class ActorView {
   root = new THREE.Group(); body = new THREE.Group(); torso = new THREE.Group();
   legs: { hip: THREE.Group; knee: THREE.Group }[] = []; arms: { sh: THREE.Group; el: THREE.Group }[] = [];
   head = new THREE.Group(); gun = new THREE.Group(); label?: THREE.Sprite; fall = 0; flashT = 0; flash: THREE.Sprite;
   pool?: THREE.Mesh; poolT = 0; dropped?: THREE.Group; wounds = 0;
-  model?: ModelInstance; private mw = [1, 0, 0];
+  rig?: Rig; private shootT = 0;
   constructor(public a: Actor) {
     const v = a.variant, off = a.kind === 'officer' || a.kind === 'player', tcol = a.kind === 'player' ? 0x4fd07a : TEAM_COLOR[a.team];
     const cloth = std({ color: off ? 0x1b2434 : a.kind === 'suspect' ? HOOD[v] : SHIRT[v] });
@@ -146,29 +149,53 @@ export class ActorView {
     if (off) { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.labelTex(a.name.slice(0, 7), '#' + tcol.toString(16)), transparent: true, depthWrite: false })); sp.scale.set(0.34, 0.17, 1); sp.position.y = 2.0; this.root.add(sp); this.label = sp; }
     this.root.position.set(a.x, 0, a.z); this.root.rotation.y = a.yaw;
   }
-  muzzle() { this.flashT = 0.05; }
+  muzzle() { this.flashT = 0.05; this.shootT = 0.35; }
+  /** Animated 3D character: pick the animation that matches what the actor is doing. */
+  private updateRig(dt: number, time: number) {
+    const a = this.a, g = this.rig!, armed = a.armed && a.kind !== 'civ';
+    this.flashT -= dt; this.shootT -= dt; this.flash.visible = this.flashT > 0 && a.alive; if (this.flash.visible) this.flash.material.rotation = time * 50;
+    const kneel = a.alive && a.down;
+    if (!a.alive) g.play('Death', 0.1, true);
+    else if (kneel) g.play('Idle', 0.25);
+    else if (a.stun > 0.3 && a.kind !== 'officer' && a.kind !== 'player') g.play('HitRecieve', 0.1, false, 0.8);
+    else if (a.moving) { if (armed) g.play(a.target || this.shootT > 0 ? 'Run_Shoot' : 'Run', 0.15, false, a.kind === 'suspect' ? 0.9 : 1.1); else g.play(a.kind === 'civ' ? 'Run' : 'Walk', 0.15); }
+    else if (armed) g.play(this.shootT > 0 ? 'Idle_Gun_Shoot' : a.target ? 'Idle_Gun_Pointing' : 'Idle_Gun', 0.12);
+    else g.play(a.kind === 'civ' ? 'Idle_Neutral' : 'Idle', 0.25);
+    g.mixer.update(dt);
+    this.kneelK = lerp(this.kneelK, kneel ? 1 : 0, Math.min(1, dt * 6));
+    if (this.kneelK > 0.01) { // kneeling with hands up (surrendered) or behind the back (cuffed): bend the animated skeleton
+      const k = this.kneelK, B = g.bones, P = (window as any).__pose ?? POSE, up = a.restrained ? P.cuff : P.up;
+      for (const s of ['L', 'R']) { const sg = s === 'L' ? 1 : -1;
+        B['UpperLeg' + s]?.rotateX(P.thigh * k); B['LowerLeg' + s]?.rotateX(P.shin * k);
+        const ua = B['UpperArm' + s], la = B['LowerArm' + s]; if (ua) { ua.rotateX(up[0] * k); ua.rotateZ(up[1] * k * sg); ua.rotateY(up[2] * k * sg); } if (la) { la.rotateX(up[3] * k); la.rotateZ(up[4] * k * sg); }
+      }
+      B['Head']?.rotateX((a.restrained ? P.head : 0) * k);
+    }
+    g.obj.position.y = -P_DROP() * this.kneelK - (a.kind === 'player' && a.crouch && a.alive ? 0.25 : 0);
+    if (g.gun) g.gun.visible = armed && a.alive && !a.down;
+    if (this.label) this.label.visible = a.alive;
+    if (this.dropped) this.dropped.visible = !a.armed || !a.alive;
+    if (!a.alive) {
+      if (!this.pool) { const pm = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: T.bloodTex(), transparent: true, depthWrite: false, opacity: 0.92 })); pm.rotation.x = -Math.PI / 2; pm.rotation.z = a.id * 1.7; pm.position.set(0, 0.016 + (a.id % 7) * 0.0006, 0.5); this.root.add(pm); this.pool = pm; }
+      this.poolT = Math.min(1, this.poolT + dt / 5); const e = 1 - (1 - this.poolT) * (1 - this.poolT); this.pool.scale.setScalar(0.35 + e * (1.25 + (a.id % 3) * 0.2));
+    }
+  }
+  private kneelK = 0;
   /** Visible bullet wound on the clothes. */
   wound() {
-    if (this.wounds >= 6) return; this.wounds++;
+    if (this.wounds >= 6 || this.rig) return; this.wounds++;
     const m = new THREE.Mesh(new THREE.PlaneGeometry(0.1 + Math.random() * 0.08, 0.1 + Math.random() * 0.1), new THREE.MeshBasicMaterial({ map: T.bloodTex(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 }));
     const front = Math.random() < 0.7; m.position.set((Math.random() - 0.5) * 0.3, 0.2 + Math.random() * 0.36, front ? -0.156 : 0.156); if (front) m.rotation.y = Math.PI; this.torso.add(m);
   }
   update(dt: number, time: number) {
     const a = this.a, k = Math.min(1, dt * 12), r = this.root;
-    if (!this.model && MODELS.officer && (a.kind === 'officer' || a.kind === 'player')) {
-      this.model = instance(MODELS.officer); for (const l of this.legs) l.hip.visible = false; this.torso.visible = false;
-      this.body.add(this.model.obj); this.body.add(this.flash); this.flash.position.set(0.12, 1.3, -0.75);
-    }
-    if (this.model) {
-      const m = this.model, sp = !a.alive ? 0 : a.moving ? 1 : 0, want = [sp ? 0 : 1, sp && !(a as any).running ? 1 : 0, sp && (a as any).running ? 1 : 0];
-      if (m.mixer) {
-        const acts = [m.idle, m.walk, m.run]; if (m.walk === m.run) { want[1] = sp; want[2] = sp; }
-        for (let i = 0; i < 3; i++) { this.mw[i] = lerp(this.mw[i], want[i], Math.min(1, dt * 8)); acts[i]?.setEffectiveWeight(this.mw[i]); }
-        if (a.alive) m.mixer.update(dt);
-      } else if (a.alive) { m.obj.position.y = a.moving ? Math.abs(Math.sin(a.walk)) * 0.035 : 0; m.obj.rotation.z = a.moving ? Math.sin(a.walk) * 0.03 : 0; m.obj.rotation.x = a.moving ? -0.05 : 0; }
-    }
     r.position.x = lerp(r.position.x, a.x, Math.min(1, dt * 25)); r.position.z = lerp(r.position.z, a.z, Math.min(1, dt * 25));
     let dy = a.yaw - r.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); r.rotation.y += dy * Math.min(1, dt * 14);
+    if (!this.rig && modelsReady) {
+      this.rig = new Rig(a.kind, a.id); for (const l of this.legs) l.hip.visible = false; this.torso.visible = false;
+      this.body.add(this.rig.obj); this.body.add(this.flash); this.flash.position.set(0.1, 1.28, -0.7); this.dropped?.scale.setScalar(0.55);
+    }
+    if (this.rig) { this.updateRig(dt, time); return; }
     this.flashT -= dt; this.flash.visible = this.flashT > 0; if (this.flash.visible) this.flash.material.rotation = time * 50;
     // target pose
     let by = 0, lean = 0, hipL = 0, hipR = 0, kneeL = 0, kneeR = 0, aL = 0.05, aR = 0.05, eL = 0.1, eR = 0.1, zL = 0, zR = 0, headX = 0, gun = false;

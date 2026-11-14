@@ -24,3 +24,7 @@ Kod-beroenden: three.js (MIT), Vite (MIT), TypeScript (Apache-2.0). All grafik, 
 ## Röster
 
 Replikerna i `voice/lines.json` spelas in av arbetsflödet `.github/workflows/voices.yml` (Piper + den svenska rösten NST, CC0) och sparas i `public/voice/`. Ändra eller lägg till rader i `voice/lines.json` och pusha, så skapas klippen om automatiskt. Spelet ger varje figur en egen röstprofil (tonläge, radiofilter för teamet, grövre röst för misstänkta). Rader utan klipp läses upp av webbläsarens talsyntes.
+
+## 3D-figurer
+
+Poliser, misstänkta och civila är animerade figurer ur «Ultimate Modular Men» av Quaternius (CC0). `tools/pack_models.py` packar originalfilerna (.gltf) till `public/models/*.glb` och behåller bara de animationer spelet använder. Går filerna inte att ladda används de inbyggda klossfigurerna.

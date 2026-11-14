@@ -1,36 +1,63 @@
-// Optional external 3D models (glTF). If public/models/<file> is missing the procedural figures are used.
+// Rigged, animated characters: Quaternius "Ultimate Modular Men" (CC0), packed by tools/pack_models.py into public/models/.
+// If the files cannot be loaded the game falls back to its built-in block figures.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as skinnedClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
-export interface ModelTemplate { scene: THREE.Object3D; clips: THREE.AnimationClip[]; skinned: boolean; credit: string }
-export interface ModelInstance { obj: THREE.Object3D; mixer?: THREE.AnimationMixer; idle?: THREE.AnimationAction; walk?: THREE.AnimationAction; run?: THREE.AnimationAction }
-export const MODELS: { officer?: ModelTemplate } = {};
-export let modelStatus = 'Inbyggda figurer används (ingen 3D-modell inlagd).';
+const FILES = ['swat', 'punk', 'hoodie', 'casual', 'suit', 'worker'] as const;
+type Name = typeof FILES[number];
+const TPL: Partial<Record<Name, THREE.Object3D>> = {};
+let clips: THREE.AnimationClip[] = [], pistol: { geo: THREE.BufferGeometry; mat: THREE.Material | THREE.Material[] }[] = [];
+export let modelsReady = false;
+export const HEIGHT = 1.8;
 
 export async function loadModels(base = './models/'): Promise<void> {
   try {
-    const cfg = await (await fetch(base + 'models.json', { cache: 'no-cache' })).json(); const o = cfg.officer; if (!o?.file) return;
-    const gltf = await new GLTFLoader().loadAsync(base + o.file);
-    const src = gltf.scene; src.updateMatrixWorld(true);
-    let skinned = false; src.traverse((m: any) => { if (m.isSkinnedMesh) skinned = true; if (m.isMesh) { for (const mt of Array.isArray(m.material) ? m.material : [m.material]) if (mt && 'metalness' in mt) { mt.metalness = Math.min(mt.metalness, 0.25); mt.metalnessMap = null; mt.roughness = Math.max(mt.roughness, 0.6); } m.castShadow = true; m.receiveShadow = false; m.frustumCulled = !m.isSkinnedMesh; } });
-    // normalise: feet on the ground, centred, requested height, facing the game's forward (-z)
-    const box = new THREE.Box3().setFromObject(src), size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
-    const k = (o.height || 1.85) / (size.y || 1);
-    const inner = new THREE.Group(); inner.add(src); src.position.set(-c.x, -box.min.y, -c.z); inner.scale.setScalar(k); inner.rotation.y = (o.yaw ?? 180) * Math.PI / 180;
-    const wrap = new THREE.Group(); wrap.add(inner);
-    MODELS.officer = { scene: wrap, clips: gltf.animations || [], skinned, credit: String(o.credit || '') };
-    modelStatus = `3D-modell laddad: ${o.file}` + (skinned && gltf.animations.length ? ` (animationer: ${gltf.animations.map(a => a.name).join(', ')})` : ' (utan animationer – figuren rör sig i fast pose)');
-  } catch (e) { /* missing or broken file → procedural figures */ }
+    const loader = new GLTFLoader();
+    const all = await Promise.all(FILES.map(f => loader.loadAsync(base + f + '.glb')));
+    all.forEach((gltf, i) => {
+      const src = gltf.scene; src.updateMatrixWorld(true);
+      src.traverse((m: any) => {
+        if (!m.isMesh) return; m.castShadow = true; m.receiveShadow = false; m.frustumCulled = false;
+        for (const mt of Array.isArray(m.material) ? m.material : [m.material]) { mt.metalness = 0; mt.roughness = 0.85; mt.flatShading = true; }
+        if (i === 0 && isPistol(m)) pistol.push({ geo: m.geometry, mat: m.material });
+      });
+      const box = new THREE.Box3().setFromObject(src), k = HEIGHT / (box.max.y - box.min.y || 1);
+      const inner = new THREE.Group(); inner.add(src); inner.scale.setScalar(k); inner.rotation.y = Math.PI; // models face +z, the game's forward is -z
+      const wrap = new THREE.Group(); wrap.add(inner); TPL[FILES[i]] = wrap;
+      if (i === 0) clips = gltf.animations;
+    });
+    modelsReady = clips.length > 0;
+  } catch { modelsReady = false; }
 }
 
-export function instance(t: ModelTemplate): ModelInstance {
-  const obj = t.skinned ? skinnedClone(t.scene) : t.scene.clone(true); const r: ModelInstance = { obj };
-  if (t.skinned && t.clips.length) {
-    r.mixer = new THREE.AnimationMixer(obj);
-    const find = (re: RegExp) => { const c = t.clips.find(c => re.test(c.name)); return c ? r.mixer!.clipAction(c) : undefined; };
-    r.idle = find(/idle|stand/i); r.walk = find(/walk/i); r.run = find(/run|sprint/i) || r.walk; r.walk = r.walk || r.run;
-    for (const a of new Set([r.idle, r.walk, r.run])) if (a) { a.play(); a.setEffectiveWeight(a === r.idle ? 1 : 0); }
+const isPistol = (o: THREE.Object3D) => o.name.startsWith('Pistol') || !!o.parent?.name.startsWith('Pistol');
+const TINT = new Set(['Purple', 'Red_Dark', 'LightBrown', 'Tie', 'Red']);
+export class Rig {
+  obj: THREE.Object3D; mixer: THREE.AnimationMixer; private act: Record<string, THREE.AnimationAction> = {}; cur = ''; bones: Record<string, THREE.Bone> = {}; gun: THREE.Object3D | null = null;
+  constructor(kind: string, id: number) {
+    const name: Name = kind === 'suspect' ? (['punk', 'hoodie'] as const)[id % 2] : kind === 'civ' ? (['suit', 'casual', 'worker'] as const)[id % 3] : 'swat';
+    this.obj = skinnedClone(TPL[name]!); let skinned: THREE.SkinnedMesh | null = null;
+    const mats = new Map<THREE.Material, THREE.Material>();
+    this.obj.traverse((o: any) => {
+      if (o.isBone) this.bones[o.name] = o;
+      if (o.name === 'Pistol') this.gun = o;
+      if (o.isSkinnedMesh && !isPistol(o)) skinned = skinned ?? o;
+      if (o.isMesh && name !== 'swat') { // give every suspect / civilian their own clothes and skin tone
+        const conv = (m: THREE.Material) => { let c = mats.get(m); if (!c) { c = m.clone(); const col = (c as THREE.MeshStandardMaterial).color; if (kind === 'suspect' && (TINT.has(m.name) || m.name === 'White')) col.multiplyScalar(m.name === 'White' ? 0.45 : 0.28); else if (kind === 'suspect' && m.name === 'Hair') col.setHex(0x0c0c0c); else if (kind === 'suspect' && m.name === 'LightBlue') col.multiplyScalar(0.5); else if (TINT.has(m.name)) col.offsetHSL(((id * 7) % 10) / 10, 0, 0.02); else if (m.name.startsWith('Skin')) col.multiplyScalar([1, 0.8, 0.6, 0.9][id % 4]); mats.set(m, c); } return c; };
+        o.material = Array.isArray(o.material) ? o.material.map(conv) : conv(o.material);
+      }
+    });
+    if (!this.gun && kind === 'suspect' && pistol.length && skinned) { // same skeleton in every file, so the pistol can be bound to it
+      const sm = skinned as THREE.SkinnedMesh, grp = new THREE.Group(); for (const p of pistol) { const g = new THREE.SkinnedMesh(p.geo, p.mat); g.frustumCulled = false; g.castShadow = true; grp.add(g); g.bind(sm.skeleton, sm.bindMatrix); } sm.parent!.add(grp); this.gun = grp;
+    }
+    this.mixer = new THREE.AnimationMixer(this.obj);
+    for (const c of clips) this.act[c.name] = this.mixer.clipAction(c);
+    this.play('Idle', 0);
   }
-  return r;
+  play(name: string, fade = 0.18, once = false, speed = 1) {
+    const next = this.act[name]; if (!next) return; next.timeScale = speed; if (name === this.cur) return;
+    const prev = this.act[this.cur]; next.reset(); next.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, once ? 1 : Infinity); next.clampWhenFinished = once;
+    next.setEffectiveWeight(1); if (prev && fade > 0) { next.crossFadeFrom(prev, fade, false); } else prev?.stop(); next.play(); this.cur = name;
+  }
 }
