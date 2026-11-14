@@ -81,3 +81,11 @@ export const labelTex = (text: string, color: string) => make('label' + text + c
 });
 export const polisTex = () => make('polis', 128, 64, (g, w, h) => { g.fillStyle = '#10141b'; g.fillRect(0, 0, w, h); g.fillStyle = '#e9edf2'; g.font = 'bold 34px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('POLIS', w / 2, h / 2 + 2); });
 export const glowTex = () => make('glow', 64, 64, (g, w, h) => { const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.3, 'rgba(255,220,150,0.7)'); gr.addColorStop(1, 'rgba(255,160,40,0)'); g.fillStyle = gr; g.fillRect(0, 0, w, h); });
+
+/** Irregular blood pool / splatter (transparent background). */
+export const bloodTex = () => make('blood', 128, 128, (g, w, h) => {
+  g.clearRect(0, 0, w, h); let seed = 7; const r = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const blob = (x: number, y: number, rad: number, a: number) => { const gr = g.createRadialGradient(x, y, 0, x, y, rad); gr.addColorStop(0, `rgba(70,3,3,${a})`); gr.addColorStop(0.75, `rgba(105,6,6,${a})`); gr.addColorStop(1, 'rgba(110,8,8,0)'); g.fillStyle = gr; g.beginPath(); g.arc(x, y, rad, 0, 6.3); g.fill(); };
+  blob(64, 64, 34, 0.95); for (let i = 0; i < 9; i++) { const an = r() * 6.3, d = 14 + r() * 20; blob(64 + Math.cos(an) * d, 64 + Math.sin(an) * d, 12 + r() * 14, 0.9); }
+  for (let i = 0; i < 16; i++) { const an = r() * 6.3, d = 44 + r() * 16; blob(64 + Math.cos(an) * d, 64 + Math.sin(an) * d, 1.5 + r() * 3.5, 0.9); }
+});
