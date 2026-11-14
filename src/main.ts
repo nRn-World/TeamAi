@@ -175,7 +175,7 @@ class Game {
     const sim = this.sim, i = this.connIdx.get(c); if (!sim || !i || sim.over) return; const pa = sim.players[i]; if (!pa || !pa.alive) return;
     const num = (v: any) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
     switch (m.t) {
-      case 'in': { const x = num(m.x), z = num(m.z), d = Math.hypot(x - pa.x, z - pa.z); if (d < 3 && !sim.solidCell(Math.floor(x), Math.floor(z))) { pa.x = x; pa.z = z; pa.walk += d * 2.4; sim.pushTrail(pa); } pa.yaw = num(m.yaw); pa.pitch = num(m.pitch); pa.crouch = !!m.cr; pa.moving = !!m.mv; break; }
+      case 'in': { const x = num(m.x), z = num(m.z), d = Math.hypot(x - pa.x, z - pa.z); if (d < 3 && !sim.solidCell(Math.floor(x), Math.floor(z))) { pa.x = x; pa.z = z; pa.walk += d * 2.4; sim.pushTrail(pa); } pa.yaw = num(m.yaw); pa.pitch = num(m.pitch); pa.crouch = !!m.cr; pa.prone = !!m.pr; pa.jumpY = Math.max(0, Math.min(0.8, num(m.jy))); pa.moving = !!m.mv; break; }
       case 'fire': sim.fire(pa, num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), Math.min(34, num(m.dmg))); break;
       case 'use': sim.playerUse(pa); break;
       case 'shout': sim.playerShout(pa); break;
@@ -245,7 +245,10 @@ class Game {
       case 'KeyQ': this.shout(true); break;
       case 'KeyT': this.torchOn = !this.torchOn; this.audio.dry(); break;
       case 'KeyM': this.mapOn = !this.mapOn; break;
-      case 'KeyC': sim.player.crouch = !sim.player.crouch; break;
+      case 'KeyC': if (sim.player.prone) { sim.player.prone = false; sim.player.crouch = true; } else sim.player.crouch = !sim.player.crouch; break;
+      case 'KeyZ': sim.player.prone = !sim.player.prone; sim.player.crouch = false; break;
+      case 'KeyX': this.slow = !this.slow; this.audio.ui(); break;
+      case 'Space': { const pl = sim.player; if (pl.prone || pl.crouch) { pl.prone = false; pl.crouch = false; } else if (pl.jumpY <= 0 && pl.alive) this.jumpV = 3.4; break; }
       case 'Digit1': case 'Digit2': { const w = code === 'Digit1' ? 0 : 1; if (w !== this.weapon) { this.weapon = w; this.reloadT = 0; this.fireCd = 0.35; this.vmKick = -0.5; this.audio.dry(); } break; }
       case 'Tab': this.selTeam = this.selTeam === 'ALL' ? 'A' : this.selTeam === 'A' ? 'B' : 'ALL'; this.audio.ui(); this.updateHud(true); break;
       case 'Enter': this.setTyping(true); break;
@@ -301,6 +304,7 @@ class Game {
     const sim = this.sim!, p = sim.player; if (p.bangs <= 0 || !p.alive) return; const d = this.aimDir(), o = [p.x + d.x * 0.4, this.eye - 0.1, p.z + d.z * 0.4];
     if (this.mirror) this.net.send({ t: 'bang', o, d: [d.x, d.y, d.z] }); else { p.bangs--; sim.throwBang(o[0], o[1], o[2], d.x, d.y, d.z); } this.vmKick = -0.6;
   }
+  slow = false; jumpV = 0; // sneak toggle, vertical jump speed
   preShot = false; // own shot sound already played in the mouse click
   fire() {
     const sim = this.sim!, w = WEAPONS[this.weapon], p = sim.player;
@@ -446,9 +450,13 @@ class Game {
       let mx = 0, mz = 0; if (K.has('KeyW')) mz += 1; if (K.has('KeyS')) mz -= 1; if (K.has('KeyD')) mx += 1; if (K.has('KeyA')) mx -= 1;
       const len = Math.hypot(mx, mz);
       if (len) {
-        const run = K.has('ShiftLeft') || K.has('ShiftRight'), sp = (p.crouch ? 1.9 : run ? 5.3 : 3.5) * dt / len, f = fwd(this.yaw);
+        const run = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch, quiet = p.prone || (this.slow && !run), sp = (p.prone ? 0.9 : p.crouch ? 1.9 : run ? 5.3 : this.slow ? 1.5 : 3.5) * dt / len, f = fwd(this.yaw);
         const bx = p.x, bz = p.z; sim.movePlayer((f.x * mz - f.z * mx) * sp, (f.z * mz + f.x * mx) * sp);
-        const moved = Math.hypot(p.x - bx, p.z - bz); this.bob += moved * 3.3; this.stepAcc += moved; if (this.stepAcc > (run ? 2.2 : 1.6)) { this.stepAcc = 0; this.audio.step(p.crouch ? 0.08 : run ? 0.32 : 0.18); }
+        const moved = Math.hypot(p.x - bx, p.z - bz); this.bob += moved * 3.3; this.stepAcc += moved; if (this.stepAcc > (run ? 2.2 : 1.6)) { this.stepAcc = 0; if (!quiet && p.jumpY <= 0) this.audio.step(p.crouch ? 0.06 : run ? 0.32 : 0.18); }
+      }
+      if (this.jumpV !== 0 || p.jumpY > 0) { // jump
+        p.jumpY += this.jumpV * dt; this.jumpV -= 9.8 * dt;
+        if (p.jumpY <= 0) { p.jumpY = 0; this.jumpV = 0; this.audio.step(0.4); if (!this.mirror) sim.playerNoise(p, 7); }
       }
       this.fireCd -= dt;
       if (this.reloadT > 0) { this.reloadT -= dt; if (this.reloadT <= 0) { const w = WEAPONS[this.weapon], n = Math.min(w.mag - this.ammo[this.weapon], this.reserve[this.weapon]); this.ammo[this.weapon] += n; this.reserve[this.weapon] -= n; } }
@@ -456,7 +464,7 @@ class Game {
       if (!this.mouseDown || this.fireCd > 0.25) this.preShot = false;
     }
     if (this.mirror) {
-      this.inT -= dt; if (this.inT <= 0) { this.inT = 0.05; this.net.send({ t: 'in', x: p.x, z: p.z, yaw: this.yaw, pitch: this.pitch, cr: p.crouch, mv: K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD') }); }
+      this.inT -= dt; if (this.inT <= 0) { this.inT = 0.05; this.net.send({ t: 'in', x: p.x, z: p.z, yaw: this.yaw, pitch: this.pitch, cr: p.crouch, pr: p.prone, jy: p.jumpY, mv: K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD') }); }
       sim.events.length = 0;
     } else {
       sim.update(dt);
@@ -469,13 +477,14 @@ class Game {
     // footsteps of everyone nearby
     for (const a of sim.actors) {
       if (a === p || !a.alive || !a.moving) continue; const ph = Math.floor(a.walk / Math.PI), last = this.stepPh.get(a); this.stepPh.set(a, ph);
-      if (last !== undefined && ph !== last) { const q = this.pan(a.x, a.z); if (q.d < 14) this.audio.step((a.kind === 'officer' || a.kind === 'player' ? 0.2 : 0.14) / (1 + q.d * 0.25), q.pan); }
+      if (last !== undefined && ph !== last && !a.prone) { const q = this.pan(a.x, a.z); if (q.d < 14) this.audio.step((a.kind === 'officer' || a.kind === 'player' ? 0.2 : 0.14) / (1 + q.d * 0.25), q.pan); }
     }
     if (this.net.online) { const vc = $('vc'); vc.textContent = this.net.micOk ? (this.net.muted ? 'RÖSTCHATT: DIN MIK ÄR AV (B)' : `RÖSTCHATT PÅ · ${this.net.voiceCount} ansluten${this.net.voiceCount === 1 ? '' : 'a'} · B = stäng av mik`) : 'RÖSTCHATT: ingen mikrofon – du hör bara de andra'; vc.className = this.net.muted || !this.net.micOk ? 'off' : ''; }
     this.level!.update(); for (const v of this.views.values()) v.update(dt, sim.time); this.fx.update(dt, sim);
     // camera
     this.recoil = Math.max(0, this.recoil - dt * 0.22); this.dmgFx = Math.max(0, this.dmgFx - dt * 1.4); this.hitFx = Math.max(0, this.hitFx - dt * 5);
-    const targetEye = !p.alive ? 0.35 : p.crouch ? 1.12 : 1.62; this.eye += (targetEye - this.eye) * Math.min(1, dt * 9);
+    const targetEye = (!p.alive ? 0.35 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive ? p.jumpY : 0); this.eye += (targetEye - this.eye) * Math.min(1, dt * (p.jumpY > 0 ? 30 : 9));
+    { const st = $('stance'), run = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch, t = !p.alive ? '' : p.prone ? 'KRYPER · TYST' : p.crouch ? 'HUKAR · TYST' : run ? 'SPRINGER · HÖRS LÅNGT' : this.slow ? 'SMYGER · TYST' : ''; if (st.textContent !== t) { st.textContent = t; st.className = run ? 'loud' : ''; } }
     this.camera.position.set(p.x, this.eye + Math.sin(this.bob * 2) * 0.022, p.z); this.camera.rotation.set(this.pitch, this.yaw, !p.alive ? 0.5 : Math.sin(this.bob) * 0.004);
     this.torch.intensity = this.torchOn ? 22 : 0;
     // view model

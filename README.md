@@ -27,4 +27,17 @@ Replikerna i `voice/lines.json` spelas in av arbetsflödet `.github/workflows/vo
 
 ## 3D-figurer
 
-Poliser, misstänkta och civila är animerade figurer ur «Ultimate Modular Men» av Quaternius (CC0). `tools/pack_models.py` packar originalfilerna (.gltf) till `public/models/*.glb` och behåller bara de animationer spelet använder. Går filerna inte att ladda används de inbyggda klossfigurerna.
+Poliser, misstänkta och civila är animerade figurer ur «Ultimate Modular Men» och «Ultimate Modular Women» av Quaternius (CC0). `tools/pack_models.py` packar originalfilerna (.gltf) till `public/models/*.glb` och behåller bara de animationer spelet använder. Går filerna inte att ladda används de inbyggda klossfigurerna.
+
+## Rörelse och ljud
+
+| Tangent | Rörelse | Hörs av fiender |
+|---|---|---|
+| W A S D | Gå (3,5 m/s) | ca 6 m |
+| Shift | Springa (5,3 m/s) | ca 12 m |
+| X (av/på) | Smyga / gå långsamt (1,5 m/s) | nej, inga fotsteg |
+| C (av/på) | Huka (1,9 m/s) | nej |
+| Z (av/på) | Krypa (0,9 m/s) | nej, inga fotsteg |
+| Mellanslag | Hoppa (reser dig om du hukar/kryper) | landningen hörs ca 7 m |
+
+Fiender kan fortfarande *se* dig även när du är tyst.

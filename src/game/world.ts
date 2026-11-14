@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Sim, Actor } from '../sim/sim';
 import { WALL, OUT, Door } from '../sim/level';
 import * as T from './textures';
-import { modelsReady, Rig } from './models';
+import { modelsReady, Rig, droppedPistol } from './models';
 
 const BOX = new THREE.BoxGeometry(1, 1, 1);
 const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...o });
@@ -96,6 +96,7 @@ export const TEAM_COLOR = { A: 0xe04848, B: 0x3d8bf0 };
 const shadowGeo = new THREE.CircleGeometry(0.42, 16), shadowMat = new THREE.MeshBasicMaterial({ color: 0, transparent: true, opacity: 0.38, depthWrite: false });
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 
+const GUNPOSE = { p: [0, 0.08, 0], r: [1.57, 0, 0], s: 1.15 }; // carbine in the right hand bone
 // extra bone rotations (radians) for the kneeling poses; tuned by eye
 const POSE = { thigh: 0, shin: 1.7, drop: 0.42, up: [2.4, 0.4, 0, 0, 0.7], cuff: [-0.5, 0.5, 0, 0, 0.9], head: 0.4 };
 const P_DROP = () => ((window as any).__pose ?? POSE).drop;
@@ -104,7 +105,7 @@ export class ActorView {
   legs: { hip: THREE.Group; knee: THREE.Group }[] = []; arms: { sh: THREE.Group; el: THREE.Group }[] = [];
   head = new THREE.Group(); gun = new THREE.Group(); label?: THREE.Sprite; fall = 0; flashT = 0; flash: THREE.Sprite;
   pool?: THREE.Mesh; poolT = 0; dropped?: THREE.Group; wounds = 0;
-  rig?: Rig; private shootT = 0;
+  rig?: Rig; private shootT = 0; private rifle = false;
   constructor(public a: Actor) {
     const v = a.variant, off = a.kind === 'officer' || a.kind === 'player', tcol = a.kind === 'player' ? 0x4fd07a : TEAM_COLOR[a.team];
     const cloth = std({ color: off ? 0x1b2434 : a.kind === 'suspect' ? HOOD[v] : SHIRT[v] });
@@ -171,8 +172,11 @@ export class ActorView {
       }
       B['Head']?.rotateX((a.restrained ? P.head : 0) * k);
     }
-    g.obj.position.y = -P_DROP() * this.kneelK - (a.kind === 'player' && a.crouch && a.alive ? 0.25 : 0);
+    this.proneK = lerp(this.proneK, a.alive && a.prone ? 1 : 0, Math.min(1, dt * 7));
+    g.obj.rotation.x = -this.proneK * Math.PI / 2; // crawling: lying face down
+    g.obj.position.y = -P_DROP() * this.kneelK - (a.kind === 'player' && a.crouch && a.alive ? 0.25 : 0) + this.proneK * 0.2 + (a.alive ? a.jumpY : 0); g.obj.position.z = this.proneK * 0.8;
     if (g.gun) g.gun.visible = armed && a.alive && !a.down;
+    if (this.rifle) { this.gun.visible = armed && a.alive; const G = (window as any).__gun; if (G) { this.gun.position.set(G.p[0], G.p[1], G.p[2]); this.gun.rotation.set(G.r[0], G.r[1], G.r[2]); this.gun.scale.setScalar(G.s); } }
     if (this.label) this.label.visible = a.alive;
     if (this.dropped) this.dropped.visible = !a.armed || !a.alive;
     if (!a.alive) {
@@ -180,10 +184,18 @@ export class ActorView {
       this.poolT = Math.min(1, this.poolT + dt / 5); const e = 1 - (1 - this.poolT) * (1 - this.poolT); this.pool.scale.setScalar(0.35 + e * (1.25 + (a.id % 3) * 0.2));
     }
   }
-  private kneelK = 0;
+  private kneelK = 0; private proneK = 0;
   /** Visible bullet wound on the clothes. */
   wound() {
-    if (this.wounds >= 6 || this.rig) return; this.wounds++;
+    if (this.wounds >= 6) return; this.wounds++;
+    if (this.rig) { // blood spots on the animated body: camera-facing sprites that follow the chest / belly bones
+      const bone = this.rig.bones['Torso'] ?? this.rig.bones['Abdomen']; if (!bone) return;
+      const ws = bone.getWorldScale(new THREE.Vector3()).x || 1, sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.bloodTex(), transparent: true, depthWrite: false }));
+      // place it on the chest/back surface in world space, then attach to the bone so it follows the animation
+      this.root.updateMatrixWorld(true); const yaw = this.root.rotation.y, fx = -Math.sin(yaw), fz = -Math.cos(yaw), side = (Math.random() - 0.5) * 0.24, out = (Math.random() < 0.7 ? 1 : -1) * 0.14;
+      const wp = bone.getWorldPosition(new THREE.Vector3()); wp.x += fx * out - fz * side; wp.z += fz * out + fx * side; wp.y += Math.random() * 0.3;
+      sp.position.copy(bone.worldToLocal(wp)); sp.scale.setScalar((0.11 + Math.random() * 0.07) / ws); bone.add(sp); return;
+    }
     const m = new THREE.Mesh(new THREE.PlaneGeometry(0.1 + Math.random() * 0.08, 0.1 + Math.random() * 0.1), new THREE.MeshBasicMaterial({ map: T.bloodTex(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 }));
     const front = Math.random() < 0.7; m.position.set((Math.random() - 0.5) * 0.3, 0.2 + Math.random() * 0.36, front ? -0.156 : 0.156); if (front) m.rotation.y = Math.PI; this.torso.add(m);
   }
@@ -193,7 +205,13 @@ export class ActorView {
     let dy = a.yaw - r.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); r.rotation.y += dy * Math.min(1, dt * 14);
     if (!this.rig && modelsReady) {
       this.rig = new Rig(a.kind, a.id); for (const l of this.legs) l.hip.visible = false; this.torso.visible = false;
-      this.body.add(this.rig.obj); this.body.add(this.flash); this.flash.position.set(0.1, 1.28, -0.7); this.dropped?.scale.setScalar(0.55);
+      this.body.add(this.rig.obj); this.body.add(this.flash); this.flash.position.set(0.1, 1.28, -0.7);
+      if (this.dropped) { this.root.remove(this.dropped); const d = droppedPistol(); d.position.set(0.4, 0.035, 0.15); d.rotation.y = a.id; d.visible = false; this.root.add(d); this.dropped = d; }
+      const hand = this.rig.bones['WristR'];
+      if (hand && (a.kind === 'officer' || a.kind === 'player')) { // officers carry the carbine instead of the model's pistol
+        if (this.rig.gun) { this.rig.gun.visible = false; this.rig.gun = null; }
+        const G = (window as any).__gun ?? GUNPOSE; this.gun.position.set(G.p[0], G.p[1], G.p[2]); this.gun.rotation.set(G.r[0], G.r[1], G.r[2]); this.gun.scale.setScalar(G.s); hand.add(this.gun); this.rifle = true;
+      }
     }
     if (this.rig) { this.updateRig(dt, time); return; }
     this.flashT -= dt; this.flash.visible = this.flashT > 0; if (this.flash.visible) this.flash.material.rotation = time * 50;

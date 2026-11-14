@@ -9,7 +9,7 @@ export interface Snap { a: number[][]; d: number[]; o: [string, string, number][
 export function encodeSnap(sim: Sim): Snap {
   return {
     a: sim.actors.map(a => [r2(a.x), r2(a.z), r2(a.yaw), Math.round(a.hp),
-      (a.alive ? 1 : 0) | (a.surrendered ? 2 : 0) | (a.restrained ? 4 : 0) | (a.armed ? 8 : 0) | (a.moving ? 16 : 0) | (a.target ? 32 : 0) | (a.crouch ? 64 : 0) | (a.hostile ? 128 : 0),
+      (a.alive ? 1 : 0) | (a.surrendered ? 2 : 0) | (a.restrained ? 4 : 0) | (a.armed ? 8 : 0) | (a.moving ? 16 : 0) | (a.target ? 32 : 0) | (a.crouch ? 64 : 0) | (a.hostile ? 128 : 0) | (a.prone ? 256 : 0),
       r2(a.walk % (Math.PI * 2)), r2(a.stun)]),
     d: sim.level.doors.map(d => Math.round(d.open * 100) + d.target * 1000),
     o: (['A', 'B'] as Team[]).map(t => [sim.teams[t].order.type, sim.teams[t].fire, sim.teams[t].order.leader?.id ?? -1]),
@@ -22,7 +22,7 @@ export function encodeSnap(sim: Sim): Snap {
 export function applySnap(sim: Sim, s: Snap, me: Actor) {
   s.a.forEach((v, i) => {
     const a = sim.actors[i]; if (!a) return; const f = v[4];
-    if (a !== me) { a.x = v[0]; a.z = v[1]; a.yaw = v[2]; a.crouch = !!(f & 64); a.moving = !!(f & 16); a.walk = v[5]; }
+    if (a !== me) { a.x = v[0]; a.z = v[1]; a.yaw = v[2]; a.crouch = !!(f & 64); a.prone = !!(f & 256); a.moving = !!(f & 16); a.walk = v[5]; }
     a.hp = v[3]; a.alive = !!(f & 1); a.surrendered = !!(f & 2); a.restrained = !!(f & 4); a.armed = !!(f & 8); a.target = f & 32 ? a : null; a.hostile = !!(f & 128); a.stun = v[6];
     if (!a.alive) a.moving = false;
   });

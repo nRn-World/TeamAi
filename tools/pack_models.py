@@ -7,8 +7,12 @@ CHARS = [('Swat', 'swat'), ('Punk', 'punk'), ('Casual_Hoodie', 'hoodie'), ('Casu
 KEEP = ['Death', 'HitRecieve', 'Idle', 'Idle_Gun', 'Idle_Gun_Pointing', 'Idle_Gun_Shoot', 'Run', 'Run_Shoot', 'Walk', 'Idle_Neutral', 'Interact']
 
 def pack(name, out, anims):
-    g = json.load(open(SRC / (name + '.gltf')))
-    bufs = [base64.b64decode(b['uri'].split(',', 1)[1]) for b in g['buffers']]
+    src = SRC / (name + '.gltf')
+    if src.exists():
+        g = json.load(open(src)); bufs = [base64.b64decode(b['uri'].split(',', 1)[1]) for b in g['buffers']]
+    else:  # binary .glb input (women pack)
+        raw = open(SRC / (name + '.glb'), 'rb').read(); n = struct.unpack('<I', raw[12:16])[0]
+        g = json.loads(raw[20:20 + n]); bufs = [raw[20 + n + 8:]]
     g['animations'] = [a for a in g.get('animations', []) if a['name'] in KEEP] if anims else []
     if not g['animations']: del g['animations']
     used = set()
@@ -43,7 +47,7 @@ def pack(name, out, anims):
         for s in a['samplers']: s['input'] = amap[s['input']]; s['output'] = amap[s['output']]
     while len(blob) % 4: blob.append(0)
     g['accessors'] = accs; g['bufferViews'] = views; g['buffers'] = [{'byteLength': len(blob)}]
-    g['asset']['copyright'] = 'Quaternius - CC0 1.0 (Ultimate Modular Men)'
+    g['asset']['copyright'] = 'Quaternius - CC0 1.0 (Ultimate Modular Men / Women)'
     js = json.dumps(g, separators=(',', ':')).encode(); js += b' ' * (-len(js) % 4)
     total = 12 + 8 + len(js) + 8 + len(blob)
     with open(OUT / (out + '.glb'), 'wb') as f:
@@ -51,4 +55,10 @@ def pack(name, out, anims):
     print(out, total // 1024, 'kB', [a['name'] for a in g.get('animations', [])])
 
 OUT.mkdir(parents=True, exist_ok=True)
-for i, (n, o) in enumerate(CHARS): pack(n, o, i == 0)
+# Men ("Ultimate Modular Men", .gltf) share the animations stored in swat.glb;
+# women ("Ultimate Modular Women", .glb: casual, formal) share the ones stored in wcasual.glb.
+WOMEN = [('casual', 'wcasual'), ('formal', 'wformal')]
+if (SRC / 'Swat.gltf').exists():
+    for i, (n, o) in enumerate(CHARS): pack(n, o, i == 0)
+else:
+    for i, (n, o) in enumerate(WOMEN): pack(n, o, i == 0)
