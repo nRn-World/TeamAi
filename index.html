@@ -104,6 +104,7 @@
   <div class="note">Quick keys (selected team): <kbd>3</kbd> Follow <kbd>4</kbd> Hold <kbd>5</kbd> Move where I aim <kbd>6</kbd> Cover me <kbd>7</kbd> Stack up <kbd>8</kbd> Breach <kbd>9</kbd> Bang and clear <kbd>0</kbd> Secure</div>
   <h2>Voice commands</h2>
   <p>Hold <kbd>V</kbd> while you speak and release it when you are done (can be changed to «always on» in Settings). Start with the team you mean – <b>«Team A»</b> (also «Alpha», «red team»), <b>«Team B»</b> («Bravo», «blue team») or <b>«Everyone»</b> – then say what they should do. Without a team name the order goes to the team you last spoke to.</p>
+  <p><b>Speech recognition can run directly in your browser</b> using local Whisper (works privately in any browser) or via the browser’s speech service. You can combine multiple orders in one sentence (e.g. <i>«Ken follow me, Maya join Team B, Team B cover me»</i>) and reassign officers between teams (e.g. <i>«Maya join Team B»</i>, <i>«Ken switch to Team A»</i>).</p>
   <p>You can also give an order to <b>one officer by name</b>: Team A is <b>Ken</b> and <b>Maya</b>, Team B is <b>Jack</b> and <b>Zoe</b>. «Ken, you cover us» · «Maya, go in» · «Jack, throw flash» · «Zoe, hold here». After that «you …» keeps talking to the same officer («you go in»). The officer acts alone until the team gets a new order, for example «Team A follow me». «Throw flash» at a door is thrown through that door; without a door it is thrown where you aim.</p>
   <table class="cmds">
     <tr><td>«go left / right / forward / back»</td><td>Moves that way as seen from you</td></tr>
@@ -134,7 +135,9 @@
     <label>Volume <input id="sVol" type="range" min="0" max="1" step="0.05" /></label>
     <label>Speech recognition <select id="sMic"><option value="1">On</option><option value="0">Off</option></select></label>
     <label>Microphone mode <select id="sPtt"><option value="1">Hold V to talk</option><option value="0">Always on</option></select></label>
-    <label>Accent for voice commands <select id="sLang"><option value="en-US">English (US)</option><option value="en-GB">English (UK)</option><option value="en-AU">English (Australia)</option><option value="en-IN">English (India)</option></select></label>
+    <label>Speech recognition engine <select id="sAsr"><option value="local">On this computer (every browser, private)</option><option value="web">Browser service (Chrome and Edge)</option></select></label>
+    <div id="asrInfo" class="note"></div>
+    <label>Accent (browser service only) <select id="sLang"><option value="en-US">English (US)</option><option value="en-GB">English (UK)</option><option value="en-AU">English (Australia)</option><option value="en-IN">English (India)</option></select></label>
     <label>Spoken voices <select id="sTts"><option value="1">On</option><option value="0">Off</option></select></label>
     <label>Team voice <span><button id="btnTts" type="button">Test the team voice</button></span></label>
     <div id="ttsInfo" class="note"></div><div id="latInfo" class="note"></div>
@@ -171,6 +174,10 @@
     </ul>
     <h3>Code and fonts</h3>
     <ul class="credits">
+      <li><div><b>Whisper</b><span>speech recognition model (base on the graphics card, tiny on the processor), ONNX conversions by Xenova and onnx-community</span></div><div class="by">OpenAI</div><div class="src">github.com/openai/whisper · huggingface.co/onnx-community/whisper-base · huggingface.co/Xenova/whisper-tiny</div><em>MIT</em></li>
+      <li><div><b>Transformers.js</b> and <b>ONNX Runtime Web</b><span>run Whisper in the browser</span></div><div class="by">Hugging Face · Microsoft</div><div class="src">github.com/huggingface/transformers.js · github.com/microsoft/onnxruntime</div><em>Apache-2.0 · MIT</em></li>
+      <li><div><b>Llama 3.2 · Gemma 3 · Qwen 2.5</b><span>optional in-browser WebGPU language models for Solo Tactical AI</span></div><div class="by">Meta · Google · Alibaba Cloud</div><div class="src">huggingface.co/mlc-ai</div><em>Llama 3.2 · Gemma · Apache-2.0</em></li>
+      <li><div><b>WebLLM</b><span>runs the language model with WebGPU</span></div><div class="by">MLC AI</div><div class="src">github.com/mlc-ai/web-llm</div><em>Apache-2.0</em></li>
       <li><div><b>three.js</b><span>3D engine</span></div><div class="by">three.js authors</div><em>MIT</em></li>
       <li><div><b>Vite</b><span>build tool</span></div><div class="by">VoidZero Inc. and Vite contributors</div><em>MIT</em></li>
       <li><div><b>TypeScript</b><span>language</span></div><div class="by">Microsoft</div><em>Apache-2.0</em></li>

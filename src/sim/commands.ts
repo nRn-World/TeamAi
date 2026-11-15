@@ -36,8 +36,8 @@ const RULES: [Action, RegExp, Dir?][] = ([
   ['move', /\b(over there|there|that position|that spot)\b/, 'there'],
   ['move', /\b(left)\b/, 'left'],
   ['move', /\b(right)\b/, 'right'],
+  ['follow', /\b(follow|follow me|on me|regroup|with me|come back(?: to me)?|back to me|come|come here|come with me|fall in|to me)\b/],
   ['move', /\b(back|backwards|fall back|retreat|pull back|back up)\b/, 'back'],
-  ['follow', /\b(follow|follow me|on me|regroup|with me|come|come here|come with me|fall in|to me)\b/],
   ['move', /\b(forward|forwards|advance|move up|push|push up|go ahead)\b/, 'forward'],
   ['hold', /\b(hold|hold position|hold here|stop|stay|stay here|wait|halt|stand by)\b/],
   ['stack', /\b(door)\b/],
@@ -124,13 +124,19 @@ export function parseCommands(text: string, lastTeam: Team | 'ALL' = 'ALL', last
   let curTeam: Team | 'ALL' = lastTeam;
   let curWho: number | null = lastWho;
   for (const part of parts) {
+    const ns = norm(part);
+    const hasExplicitTarget = TEAM_A.test(ns) || TEAM_B.test(ns) || TEAM_ALL.test(ns) || NAMES.some(re => re.test(ns));
     const c = parseCommand(part, curTeam, curWho);
     if (c) {
+      // Carry forward the active single officer across chained clauses like "Maya open the door and go in"
+      if (!hasExplicitTarget && curWho != null && c.who == null && c.action !== 'shout') {
+        c.who = curWho;
+        c.team = curTeam === 'ALL' ? (curWho < 2 ? 'A' : 'B') : curTeam;
+      }
       out.push(c);
       curTeam = c.team;
       curWho = c.who ?? null;
     } else {
-      const ns = norm(part);
       if (TEAM_A.test(ns)) { curTeam = 'A'; curWho = null; }
       else if (TEAM_B.test(ns)) { curTeam = 'B'; curWho = null; }
       else if (TEAM_ALL.test(ns)) { curTeam = 'ALL'; curWho = null; }
@@ -145,6 +151,12 @@ export function parseCommands(text: string, lastTeam: Team | 'ALL' = 'ALL', last
     return { commands: c ? [c] : [] };
   }
   return { commands: out };
+}
+
+/** Compatibility helper used by tools/check-ai.mts. */
+export function splitOrders(text: string, lastTeam: Team | 'ALL' = 'ALL', lastWho: number | null = null): { text: string; cmd: Command | null }[] {
+  const { commands } = parseCommands(text, lastTeam, lastWho);
+  return commands.length ? commands.map(cmd => ({ text, cmd })) : [{ text, cmd: null }];
 }
 
 const CONVERSATIONAL_HINT = /\?|\b(tell|inform|relay|ask|say to|why|what|where|who|how|when|do you see|can you|could you|are there|status|situation|please|make sure|want you to|need you to|check)\b/i;

@@ -86,3 +86,13 @@ The four officers have names: **Ken** and **Maya** are Team A, **Jack** and **Zo
 ## Door sounds
 
 Doors use recordings from Kenney's «RPG Audio» pack (CC0, `public/sfx/door-*.mp3`, sources in `public/sfx/LICENSE.txt`): latch and swing when opening, sometimes a hinge creak, the leaf meeting the frame when closing, and a slowed slam with a low thump when a team kicks a door in on «breach». Distance lowers and muffles them (`GameAudio.door`).
+
+## Local AI: speech and order reading
+
+Nothing here needs a server or an API key; the models run in the player's browser and are downloaded once from the Hugging Face hub, then kept in the browser cache.
+
+- **Speech recognition** (`src/ai/localvoice.ts`, `src/ai/asr.worker.ts`): the microphone is recorded while V is held (with a short pre-roll and tail), resampled to 16 kHz and transcribed by Whisper through Transformers.js in a worker — `onnx-community/whisper-base` on WebGPU, `Xenova/whisper-tiny` on the CPU otherwise. If the model cannot be loaded the game falls back to the browser's Web Speech service (`src/game/voice.ts`). Settings → «Speech recognition engine» switches between the two.
+- **Several orders, Swedish** (`src/sim/commands.ts`): `splitOrders` cuts a sentence into orders wherever a joining word is followed by a new addressee («Ken cover the door while Team B goes in with a flash»), and the fixed rules know the Swedish words for every order. No model is involved. All orders of one sentence start at once; «first … then …» is not sequenced.
+- **AI order reading** (optional, experimental, off by default; `src/ai/brain.ts`, `src/ai/llm.worker.ts`): Qwen2.5 1.5B Instruct through WebLLM (WebGPU required, about 1 GB). Only an order the fixed rules cannot read is sent to the model, which answers with the action alone (JSON constrained to a schema, `src/sim/aiorders.ts`); who the order is for is still decided by the rules. In the Actions check the model named the right action for about two out of three unfamiliar wordings; the 0.5B model was tried and was not usable.
+- **Online play**: the models run only for the player who speaks. What goes over the network is the finished `Command`, exactly as before.
+- `tools/check-ai.mts` + the «AI model check» workflow verify in GitHub Actions that the model files exist and show how the language model answers a list of unfamiliar English and Swedish wordings; the result is posted as a comment on the commit.

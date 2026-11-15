@@ -1,4 +1,5 @@
 import { Sim, yawTo, fwd } from '../src/sim/sim';
+import type { Command } from '../src/sim/sim';
 import { parseCommand, parseCommands, shouldUseAiBrain } from '../src/sim/commands';
 import { buildLocalReport, buildTacticalContext } from '../src/sim/context';
 import { findPath } from '../src/sim/nav';
@@ -80,6 +81,15 @@ for (const [t, exp, last] of named) { const c = parseCommand(t, 'ALL', last ?? n
   const g0 = sim.grenades.length; sim.command({ team: 'B', action: 'bang', who: 2 }, { x: sim.officers[2].x + 3, z: sim.officers[2].z });
   console.log('solo flash without a door: grenades', sim.grenades.length - g0, 'order', sim.officers[2].solo?.order.type);
   ken.alive = false; ok(!sim.command({ team: 'A', action: 'follow', who: 0 }), 'a dead officer cannot take orders');
+}
+{ // English compound orders tested via splitOrders compatibility wrapper
+  const j = (c: (Command | null)[]) => c.map(x => x ? [x.who ?? x.team, x.action, x.dir].filter(v => v != null).join(' ') : '?').join(', ');
+  const multi: [string, string, ('A' | 'B' | 'ALL')?, number?][] = [
+    ['Ken cover the door while team B goes in with a flash', '0 cover, B bang'], ['team a bang and clear', 'A bang'], ['Maya open the door and go in', '1 open, 1 breach'],
+    ['team a go left and team b go right', 'A move left, B move right'], ['Maya watch my back and Zoe open that door', '1 cover, 3 open'], ['everybody come back to me', 'ALL follow'],
+    ['Zoe hold your fire', '3 fireHold'],
+  ];
+  for (const [t, exp, lt, lw] of multi) { const got = j(parseCommands(t, lt ?? 'ALL', lw ?? null).commands); ok(got === exp, `orders "${t}" => ${got} (expected ${exp})`); }
 }
 console.log('parser cases:', cases.length + named.length);
 
