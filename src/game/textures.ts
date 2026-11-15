@@ -91,3 +91,27 @@ export const bloodTex = () => make('blood', 128, 128, (g, w, h) => {
 });
 /** White block lettering on a transparent background (vehicle markings). */
 export const textTex = (text: string) => make('text' + text, 1024, 204, (g, w, h) => { g.clearRect(0, 0, w, h); g.fillStyle = '#e4e8ee'; g.font = '700 170px "Barlow Condensed", "Arial Narrow", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; try { (g as any).letterSpacing = '26px'; } catch { /* older browsers */ } g.fillText(text, w / 2, h / 2 + 8); });
+/** Backlit architectural signage (EXIT, building names, neon marquee). */
+export const signTex = (text: string, bg: string, fg: string, glow = '') => make('sign_' + text + bg + fg, 512, 128, (g, w, h) => {
+  g.fillStyle = bg; g.fillRect(0, 0, w, h);
+  g.strokeStyle = glow || fg; g.lineWidth = 4; g.strokeRect(4, 4, w - 8, h - 8);
+  g.fillStyle = fg; g.font = `700 ${text.length > 10 ? 44 : 74}px "Barlow Condensed", "Arial Narrow", system-ui, sans-serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  if (glow) { g.shadowColor = glow; g.shadowBlur = 18; }
+  g.fillText(text, w / 2, h / 2 + 3, w - 32);
+});
+/** Dark wet stone flagstone courtyard texture for exterior plazas. */
+export const plazaTex = (key = 'stone', base = '#1e2228', line = '#0d1014') => make('plaza_' + key, 256, 256, (g, w, h) => {
+  const r = rnd(key.length * 17 + 5);
+  g.fillStyle = base; g.fillRect(0, 0, w, h);
+  for (let y = 0; y < h; y += 64) for (let x = 0; x < w; x += 64) {
+    const shade = Math.round((r() - 0.5) * 16);
+    g.fillStyle = `rgba(${shade > 0 ? 255 : 0},${shade > 0 ? 255 : 0},${shade > 0 ? 255 : 0},${Math.abs(shade) / 255})`;
+    g.fillRect(x + 2, y + 2, 60, 60);
+  }
+  g.strokeStyle = line; g.lineWidth = 3;
+  for (let i = 0; i <= w; i += 64) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i, h); g.moveTo(0, i); g.lineTo(w, i); g.stroke(); }
+  blotches(g, w, h, 10, 'rgba(0,0,0,0.22)', 13);
+  grain(g, w, h, 16, 4);
+});
+
