@@ -9,7 +9,8 @@ export interface Door {
 export type FloorKind = 'carpet' | 'tile' | 'concrete' | 'wood';
 export type RoomKind = 'office' | 'corridor' | 'lobby' | 'warehouse' | 'bedroom' | 'storage' | 'vault' | 'club';
 export interface Room { id: number; name: string; x: number; z: number; w: number; h: number; floor: FloorKind; kind: RoomKind; spawn: boolean; }
-export interface Prop { cx: number; cz: number; kind: 'desk' | 'shelf' | 'crate' | 'bed' | 'sofa' | 'plant' | 'locker' | 'bar' | 'server'; rot: number; }
+export type PropKind = 'desk' | 'pc' | 'shelf' | 'crate' | 'bed' | 'sofa' | 'chair' | 'plant' | 'locker' | 'bar' | 'server';
+export interface Prop { cx: number; cz: number; kind: PropKind; rot: number; w?: number; d?: number; }
 export interface Pt { x: number; z: number; }
 export interface BoxCollider { x: number; z: number; hx: number; hz: number; yaw?: number; h?: number; }
 export interface CircleCollider { x: number; z: number; r: number; h?: number; }
@@ -23,7 +24,7 @@ export interface Level {
   w: number; h: number; cells: Uint8Array;
   doors: Door[]; doorAt: Map<number, Door>;
   windows: Pt[];
-  rooms: Room[]; props: Prop[];
+  rooms: Room[]; props: Prop[]; propAt: Map<number, Prop>;
   breaker?: Pt;
   bomb?: Pt & { time: number };
   vehicle?: VehicleCollider;
@@ -92,34 +93,76 @@ class Builder {
   }
   nearDoor(x: number, z: number, d = 2) { return this.doors.some(o => Math.abs(o.cx - x) + Math.abs(o.cz - z) <= d); }
   placeBreaker(x: number, z: number) { this.breaker = { x: x + 0.5, z: z + 0.5 }; }
+  private tryPlace(r: Room, x: number, z: number, w: number, d: number, kind: PropKind, high: boolean, rot: number, sx: number, sz: number): boolean {
+    if (x < r.x + 1 || z < r.z + 1 || x + w - 1 > r.x + r.w - 2 || z + d - 1 > r.z + r.h - 2) return false;
+    for (let iz = z; iz < z + d; iz++) for (let ix = x; ix < x + w; ix++) {
+      if (this.get(ix, iz) !== FLOOR || this.nearDoor(ix, iz)) return false;
+      if (this.bomb && Math.abs(ix + 0.5 - this.bomb.x) < 1.5 && Math.abs(iz + 0.5 - this.bomb.z) < 1.5) return false;
+    }
+    const cell = high ? HIGH : LOW;
+    for (let iz = z; iz < z + d; iz++) for (let ix = x; ix < x + w; ix++) this.set(ix, iz, cell);
+    if (!this.connected(sx, sz)) {
+      for (let iz = z; iz < z + d; iz++) for (let ix = x; ix < x + w; ix++) this.set(ix, iz, FLOOR);
+      return false;
+    }
+    this.props.push({ cx: x, cz: z, kind, rot, w, d });
+    return true;
+  }
   furnish(rng: () => number, spawn: Pt) {
     const sx = Math.floor(spawn.x), sz = Math.floor(spawn.z);
     for (const r of this.rooms) {
       const area = (r.w - 2) * (r.h - 2);
       let n = r.kind === 'corridor' ? Math.floor(area / 40)
         : r.kind === 'warehouse' ? Math.floor(area / 9)
-        : r.kind === 'club' ? Math.floor(area / 11)
-        : r.kind === 'vault' ? Math.floor(area / 8)
-        : r.kind === 'lobby' ? Math.floor(area / 10)
-        : Math.floor(area / 6);
-      for (let t = 0; t < n * 4 && n > 0; t++) {
+        : r.kind === 'club' ? Math.floor(area / 12)
+        : r.kind === 'vault' ? Math.floor(area / 9)
+        : r.kind === 'lobby' ? Math.floor(area / 12)
+        : Math.floor(area / 8);
+      for (let t = 0; t < n * 6 && n > 0; t++) {
         const x = r.x + 1 + Math.floor(rng() * (r.w - 2)), z = r.z + 1 + Math.floor(rng() * (r.h - 2));
-        if (this.get(x, z) !== FLOOR || this.nearDoor(x, z)) continue;
-        if (this.bomb && Math.abs(x + 0.5 - this.bomb.x) < 1.5 && Math.abs(z + 0.5 - this.bomb.z) < 1.5) continue;
-        const atWall = this.get(x - 1, z) === WALL || this.get(x + 1, z) === WALL || this.get(x, z - 1) === WALL || this.get(x, z + 1) === WALL;
-        let kind: Prop['kind']; let high = false;
-        if (r.kind === 'warehouse') { kind = 'crate'; high = rng() < 0.65; }
-        else if (r.kind === 'corridor') { if (!atWall) continue; kind = 'plant'; }
-        else if (r.kind === 'storage') { kind = atWall ? 'shelf' : 'crate'; high = atWall || rng() < 0.5; }
-        else if (r.kind === 'vault') { kind = atWall ? 'locker' : 'crate'; high = kind === 'locker'; }
-        else if (r.kind === 'club') { kind = atWall ? 'bar' : 'sofa'; }
-        else if (r.kind === 'bedroom') { kind = atWall ? (rng() < 0.5 ? 'bed' : 'locker') : 'sofa'; high = kind === 'locker'; }
-        else if (r.kind === 'lobby') { kind = atWall ? 'plant' : 'sofa'; }
-        else { kind = atWall ? (rng() < 0.35 ? 'server' : rng() < 0.55 ? 'shelf' : 'desk') : 'desk'; high = kind === 'shelf' || kind === 'server'; }
-        this.set(x, z, high ? HIGH : LOW);
-        if (!this.connected(sx, sz)) { this.set(x, z, FLOOR); continue; }
-        this.props.push({ cx: x, cz: z, kind, rot: Math.floor(rng() * 4) });
-        n--;
+        const nWall = this.get(x, z - 1) === WALL, sWall = this.get(x, z + 1) === WALL;
+        const wWall = this.get(x - 1, z) === WALL, eWall = this.get(x + 1, z) === WALL;
+        const atWall = nWall || sWall || wWall || eWall;
+        const wallRot = nWall ? 0 : sWall ? 2 : wWall ? 1 : eWall ? 3 : Math.floor(rng() * 4);
+        const horiz = wallRot % 2 === 0;
+        let placed = false;
+        if (r.kind === 'warehouse') {
+          placed = this.tryPlace(r, x, z, 1, 1, 'crate', rng() < 0.65, Math.floor(rng() * 4), sx, sz);
+        } else if (r.kind === 'corridor') {
+          if (atWall) placed = this.tryPlace(r, x, z, 1, 1, 'plant', false, wallRot, sx, sz);
+        } else if (r.kind === 'storage') {
+          if (atWall) placed = this.tryPlace(r, x, z, 1, 1, 'shelf', true, wallRot, sx, sz);
+          else placed = this.tryPlace(r, x, z, 1, 1, 'crate', rng() < 0.5, Math.floor(rng() * 4), sx, sz);
+        } else if (r.kind === 'vault') {
+          if (atWall) placed = this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'locker', true, wallRot, sx, sz);
+          if (!placed) placed = this.tryPlace(r, x, z, 1, 1, 'crate', rng() < 0.4, Math.floor(rng() * 4), sx, sz);
+        } else if (r.kind === 'club') {
+          if (atWall) placed = this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'bar', false, wallRot, sx, sz);
+          else placed = this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'sofa', false, Math.floor(rng() * 4), sx, sz)
+            || this.tryPlace(r, x, z, 1, 1, 'chair', false, Math.floor(rng() * 4), sx, sz);
+        } else if (r.kind === 'bedroom') {
+          if (atWall && rng() < 0.55) {
+            placed = this.tryPlace(r, x, z, 2, 2, 'bed', false, wallRot, sx, sz)
+              || this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'locker', true, wallRot, sx, sz);
+          } else {
+            placed = this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'sofa', false, wallRot, sx, sz)
+              || this.tryPlace(r, x, z, 1, 1, 'chair', false, wallRot, sx, sz);
+          }
+        } else if (r.kind === 'lobby') {
+          if (atWall) placed = this.tryPlace(r, x, z, 1, 1, 'plant', false, wallRot, sx, sz);
+          else placed = this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'sofa', false, Math.floor(rng() * 4), sx, sz)
+            || this.tryPlace(r, x, z, 1, 1, 'chair', false, Math.floor(rng() * 4), sx, sz);
+        } else {
+          if (atWall && rng() < 0.32) placed = this.tryPlace(r, x, z, 1, 1, 'server', true, wallRot, sx, sz);
+          else if (atWall && rng() < 0.5) placed = this.tryPlace(r, x, z, 1, 1, 'shelf', true, wallRot, sx, sz);
+          else {
+            const wantPc = rng() < 0.6;
+            placed = (wantPc && this.tryPlace(r, x, z, 2, 2, 'pc', false, Math.floor(rng() * 4), sx, sz))
+              || this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'desk', false, wallRot, sx, sz)
+              || this.tryPlace(r, x, z, 1, 1, rng() < 0.5 ? 'chair' : 'plant', false, wallRot, sx, sz);
+          }
+        }
+        if (placed) n--;
       }
     }
   }
@@ -342,6 +385,13 @@ export function buildLevel(index: number, seed: number): Level {
   b.furnish(rng, spawn);
   const doorAt = new Map<number, Door>();
   for (const d of b.doors) doorAt.set(d.cz * b.w + d.cx, d);
+  const propAt = new Map<number, Prop>();
+  for (const pr of b.props) {
+    const pw = pr.w ?? 1, pd = pr.d ?? 1;
+    for (let iz = 0; iz < pd; iz++) for (let ix = 0; ix < pw; ix++) {
+      propAt.set((pr.cz + iz) * b.w + (pr.cx + ix), pr);
+    }
+  }
   const used = new Set<number>();
   const place = (count: number) => {
     const out: (Pt & { room: number })[] = [];
@@ -369,7 +419,7 @@ export function buildLevel(index: number, seed: number): Level {
   return {
     index, name: spec.name, brief: spec.brief, theme: spec.theme, objective,
     w: b.w, h: b.h, cells: b.cells, doors: b.doors, doorAt, windows: b.windows,
-    rooms: b.rooms, props: b.props, breaker: b.breaker, bomb: b.bomb,
+    rooms: b.rooms, props: b.props, propAt, breaker: b.breaker, bomb: b.bomb,
     vehicle: b.vehicle, extBoxes: b.extBoxes, extCircles: b.extCircles,
     playerSpawn: spawn, suspects, civs,
   };

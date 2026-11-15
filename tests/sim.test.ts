@@ -233,14 +233,16 @@ ok(wins >= 4, 'bot should be able to win across missions');
   sc.bomb!.defused = true;
   ok(sc.debriefNotes().length > 0, 'debriefNotes provides tactical feedback');
 
-  // 5. Netstate sync for new fields (locked, wedged, power, bomb, brokenWindows)
+  // 5. Netstate sync for new fields (locked, wedged, power, bomb, brokenWindows, brokenProps, brokenDoorGlass)
   const host = new Sim(4, 3, 1, 2), mir = new Sim(4, 3, 1, 2);
   host.powerOn = false;
   host.level.doors[0].wedged = true;
   if (host.level.windows[0]) host.brokenWindows.add(Math.floor(host.level.windows[0].z) * host.level.w + Math.floor(host.level.windows[0].x));
+  host.brokenProps.add(host.level.props[0].cz * host.level.w + host.level.props[0].cx);
+  host.brokenDoorGlass.add(host.level.doors[0].id);
   host.bomb!.time = 42.5;
   applySnap(mir, JSON.parse(JSON.stringify(encodeSnap(host))), mir.players[1]);
-  ok(!mir.powerOn && !!mir.level.doors[0].wedged && Math.abs(mir.bomb!.time - 42.5) < 0.1 && mir.brokenWindows.size === host.brokenWindows.size, 'netstate syncs power, wedge, bomb, and broken windows');
+  ok(!mir.powerOn && !!mir.level.doors[0].wedged && Math.abs(mir.bomb!.time - 42.5) < 0.1 && mir.brokenWindows.size === host.brokenWindows.size && mir.brokenProps.size === 1 && mir.brokenDoorGlass.size === 1, 'netstate syncs power, wedge, bomb, broken windows, broken props & door glass');
 
   // 6. Locked door touched by AI suspects/civs must not spam player 'info' events
   const sLock = new Sim(0, 1);
@@ -299,6 +301,32 @@ ok(wins >= 4, 'bot should be able to win across missions');
   sCol.player.x = 6.2; sCol.player.z = 5.35;
   for (let i = 0; i < 20; i++) { sCol.movePlayer(-0.1, 0); sCol.update(1 / 30); }
   ok(Math.hypot(sCol.player.x - susCol.x, sCol.player.z - susCol.z) >= sCol.player.r + susCol.r - 0.05, 'player cannot walk through standing actor');
+
+  // 8. Shootable / breakable objects: PCs/monitors, servers, plants, and glass entrance doors
+  const sBrk = new Sim(0, 1);
+  for (const s0 of sBrk.suspects) s0.alive = false;
+  const pcProp = sBrk.level.props.find(pr => pr.kind === 'pc' || pr.kind === 'desk');
+  ok(!!pcProp, 'Mission 0 has office desk/PC props');
+  if (pcProp) {
+    const px = pcProp.cx + (pcProp.w ?? 1) / 2, pz = pcProp.cz + (pcProp.d ?? 1) / 2;
+    sBrk.events.length = 0;
+    sBrk.fire(sBrk.player, px, 1.05, pz + 1.5, 0, 0, -1, 34);
+    const pk = pcProp.cz * sBrk.level.w + pcProp.cx;
+    ok(sBrk.brokenProps.has(pk) && sBrk.events.some(e => e.t === 'break' && e.kind === 'pc'), 'shooting PC/desk monitor breaks it');
+  }
+  const srvProp = sBrk.level.props.find(pr => pr.kind === 'server');
+  if (srvProp) {
+    sBrk.events.length = 0;
+    sBrk.fire(sBrk.player, srvProp.cx + 0.5, 1.4, srvProp.cz + 1.2, 0, 0, -1, 34);
+    ok(sBrk.events.some(e => e.t === 'break' && e.kind === 'server'), 'shooting server rack breaks it');
+  }
+  const glassDoor = sBrk.level.doors.find(d => sBrk.isGlassDoor(d));
+  ok(!!glassDoor, 'Mission 0 has front glass entrance door');
+  if (glassDoor) {
+    sBrk.events.length = 0;
+    sBrk.fire(sBrk.player, glassDoor.cx + 0.5, 1.3, glassDoor.cz + 1.5, 0, 0, -1, 34);
+    ok(sBrk.brokenDoorGlass.has(glassDoor.id) && sBrk.events.some(e => e.t === 'glass'), 'shooting glass door shatters its glass pane');
+  }
 }
 
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);

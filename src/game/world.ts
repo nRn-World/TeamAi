@@ -1,7 +1,7 @@
 // three.js presentation of the simulation: level geometry, characters, effects. All geometry is procedural.
 import * as THREE from 'three';
 import { Sim, Actor, Team } from '../sim/sim';
-import { WALL, OUT, WINDOW, Door } from '../sim/level';
+import { WALL, OUT, WINDOW, Door, Prop } from '../sim/level';
 import * as T from './textures';
 import { modelsReady, Rig, droppedPistol } from './models';
 import { weaponModel } from './weapons';
@@ -27,8 +27,10 @@ const THEME = {
 
 export class LevelView {
   group = new THREE.Group();
-  doors: { door: Door; pivot: THREE.Group; base: number; wedge: THREE.Mesh; lock: THREE.Mesh }[] = [];
+  doors: { door: Door; pivot: THREE.Group; base: number; wedge: THREE.Mesh; lock: THREE.Mesh; glass?: THREE.Mesh }[] = [];
   windows = new Map<number, THREE.Mesh>();
+  private propViews = new Map<number, { group: THREE.Group; prop: Prop; serverLeds?: THREE.Mesh[] }>();
+  private appliedBrokenProps = new Set<number>();
   private roomLights: { light: THREE.PointLight; baseInt: number }[] = [];
   private lampMeshes: THREE.Mesh[] = [];
   private lampOnMat: THREE.MeshBasicMaterial;
@@ -131,8 +133,10 @@ export class LevelView {
       const frontGlassDoor = (l.theme === 'office' || l.theme === 'hotel' || l.theme === 'bank') && (sim.cell(d.cx, d.cz + 1) === OUT || sim.cell(d.cx, d.cz - 1) === OUT);
       const lintel = box(1, 0.8, 1, frontGlassDoor ? frameAlum : wallMat, d.cx + 0.5, 2.6, d.cz + 0.5); g.add(lintel);
       const pivot = new THREE.Group();
+      let glass: THREE.Mesh | undefined;
       if (frontGlassDoor) {
-        pivot.add(box(0.94, 2.18, 0.05, glassDoorMat, 0.47, 1.09, 0));
+        glass = box(0.94, 2.18, 0.05, glassDoorMat, 0.47, 1.09, 0);
+        pivot.add(glass);
         pivot.add(box(0.96, 0.08, 0.07, frameMat, 0.47, 0.04, 0), box(0.96, 0.08, 0.07, frameMat, 0.47, 2.15, 0));
         pivot.add(box(0.06, 2.18, 0.07, frameMat, 0.03, 1.09, 0), box(0.06, 2.18, 0.07, frameMat, 0.91, 1.09, 0));
         pivot.add(box(0.03, 0.55, 0.14, std({ color: 0xd0d6de, metalness: 0.85, roughness: 0.2 }), 0.82, 1.05, 0));
@@ -144,7 +148,7 @@ export class LevelView {
       const wedge = box(0.22, 0.08, 0.2, wedgeMat, 0.72, 0.04, 0); wedge.visible = !!d.wedged; pivot.add(wedge);
       if (d.horiz) { pivot.position.set(d.cx + 0.03, 0, d.cz + 0.5); g.add(box(0.06, 2.2, 1.02, frameMat, d.cx + 0.0, 1.1, d.cz + 0.5), box(0.06, 2.2, 1.02, frameMat, d.cx + 1.0, 1.1, d.cz + 0.5)); }
       else { pivot.position.set(d.cx + 0.5, 0, d.cz + 0.03); g.add(box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 0.0), box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 1.0)); }
-      const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base, wedge, lock });
+      const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base, wedge, lock, glass });
     }
     // breaker box
     if (l.breaker) {
@@ -167,33 +171,44 @@ export class LevelView {
     const locker = std({ map: T.metalTex('locker', '#5d6b78'), metalness: 0.4, roughness: 0.55 }), white = std({ map: T.fabricTex('w', '#d8d6d0') }), pot = std({ color: 0x8a5a3c }), leaf = std({ color: 0x2f6b35 });
     const sofaCols = ['#7a2f2f', '#2f4a6a', '#4a4a4a', '#6a5a2f'];
     for (const p of l.props) {
-      const o = new THREE.Group(); o.position.set(p.cx + 0.5, 0, p.cz + 0.5); const rj = ((p.cx * 13 + p.cz * 7) % 10) / 10;
+      const o = new THREE.Group();
+      const pw = p.w ?? 1, pd = p.d ?? 1;
+      o.position.set(p.cx + pw / 2, 0, p.cz + pd / 2);
+      const rj = ((p.cx * 13 + p.cz * 7) % 10) / 10;
       const seed = p.cx * 31 + p.cz * 17 + p.rot;
       const high = sim.cell(p.cx, p.cz) === 5;
+      const pk = p.cz * l.w + p.cx;
       if (p.kind === 'server') {
         const rackFrame = std({ color: 0x16191f, metalness: 0.55, roughness: 0.42 });
         const grille = std({ color: 0x222832, metalness: 0.65, roughness: 0.38 });
-        o.add(
-          box(0.86, 2.15, 0.74, rackFrame, 0, 1.075, 0),
-          box(0.76, 1.98, 0.76, grille, 0, 1.075, 0),
-          box(0.66, 0.05, 0.77, new THREE.MeshBasicMaterial({ color: 0x2de080 }), 0, 1.72, 0),
-          box(0.66, 0.05, 0.77, new THREE.MeshBasicMaterial({ color: 0x3ea8ff }), 0, 1.38, 0),
-          box(0.66, 0.05, 0.77, new THREE.MeshBasicMaterial({ color: 0x2de080 }), 0, 1.04, 0),
-        );
+        const led1 = box(0.66, 0.05, 0.77, new THREE.MeshBasicMaterial({ color: 0x2de080 }), 0, 1.72, 0);
+        const led2 = box(0.66, 0.05, 0.77, new THREE.MeshBasicMaterial({ color: 0x3ea8ff }), 0, 1.38, 0);
+        const led3 = box(0.66, 0.05, 0.77, new THREE.MeshBasicMaterial({ color: 0x2de080 }), 0, 1.04, 0);
+        o.add(box(0.86, 2.15, 0.74, rackFrame, 0, 1.075, 0), box(0.76, 1.98, 0.76, grille, 0, 1.075, 0), led1, led2, led3);
         o.rotation.y = (p.rot * Math.PI) / 2;
+        this.propViews.set(pk, { group: o, prop: p, serverLeds: [led1, led2, led3] });
       } else {
         const buildFallback = () => {
           switch (p.kind) {
             case 'crate': { const a = box(0.94, 0.94, 0.94, crate, 0, 0.47, 0); a.rotation.y = (rj - 0.5) * 0.2; o.add(a); if (high) { const b = box(0.86, 0.86, 0.86, crate, (rj - 0.5) * 0.08, 0.94 + 0.43, 0); b.rotation.y = (rj - 0.5) * 0.5; o.add(b); if (rj > 0.5) o.add(box(0.7, 0.5, 0.7, crate, 0, 2.05, 0)); } break; }
-            case 'desk': o.add(box(0.98, 0.05, 0.86, wood, 0, 0.76, 0), box(0.05, 0.74, 0.8, wood, -0.44, 0.37, 0), box(0.05, 0.74, 0.8, wood, 0.44, 0.37, 0), box(0.86, 0.4, 0.03, wood, 0, 0.5, -0.38));
-              if (rj > 0.3) { o.add(box(0.42, 0.28, 0.03, dark, 0, 1.0, -0.15), box(0.06, 0.1, 0.06, dark, 0, 0.83, -0.15)); const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.38, 0.24), new THREE.MeshBasicMaterial({ color: rj > 0.6 ? 0x2a4f7a : 0x0c1016 })); scr.position.set(0, 1.0, -0.133); o.add(scr); }
+            case 'pc':
+            case 'desk': {
+              const dw = pw > 1 ? 1.82 : 0.98, dd = pd > 1 ? 0.92 : 0.86;
+              o.add(box(dw, 0.05, dd, wood, 0, 0.75, 0), box(0.05, 0.74, dd * 0.92, wood, -dw * 0.45, 0.37, 0), box(0.05, 0.74, dd * 0.92, wood, dw * 0.45, 0.37, 0), box(dw * 0.88, 0.4, 0.03, wood, 0, 0.5, -dd * 0.44));
+              const mon = new THREE.Group(); mon.position.set(0, 0.77, -0.15);
+              const scrMat = new THREE.MeshBasicMaterial({ color: 0x2a4f7a });
+              const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.56, 0.32), scrMat); scr.position.set(0, 0.28, 0.017);
+              mon.add(box(0.6, 0.36, 0.03, dark, 0, 0.28, 0), box(0.08, 0.14, 0.06, dark, 0, 0.08, 0), scr);
+              o.add(mon); o.userData.deskMonitor = { group: mon, scrMat };
               break;
-            case 'bar': o.add(box(0.98, 1.05, 0.6, dark, 0, 0.525, 0), box(1.0, 0.08, 0.68, std({ color: 0x722f8a, emissive: 0x3b124d, emissiveIntensity: 0.4 }), 0, 1.06, 0)); break;
-            case 'shelf': o.add(box(0.96, 2.1, 0.5, shelf, 0, 1.05, 0)); break;
-            case 'locker': o.add(box(0.92, 2.0, 0.6, locker, 0, 1.0, 0)); break;
-            case 'bed': o.add(box(0.96, 0.3, 0.96, wood, 0, 0.15, 0), box(0.9, 0.2, 0.9, white, 0, 0.4, 0), box(0.6, 0.1, 0.3, white, 0, 0.55, -0.26)); break;
-            case 'sofa': { const fm = std({ map: T.fabricTex('s' + (p.rot % 4), sofaCols[p.rot % 4]) }); o.add(box(0.96, 0.42, 0.9, fm, 0, 0.21, 0), box(0.96, 0.4, 0.2, fm, 0, 0.62, -0.36), box(0.14, 0.24, 0.9, fm, -0.41, 0.54, 0), box(0.14, 0.24, 0.9, fm, 0.41, 0.54, 0)); break; }
-            case 'plant': { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.16, 0.4, 10), pot); c.position.y = 0.2; o.add(c); for (let i = 0; i < 3; i++) { const s = new THREE.Mesh(new THREE.IcosahedronGeometry(0.26 - i * 0.05, 0), leaf); s.position.set((i - 1) * 0.08, 0.6 + i * 0.22, (rj - 0.5) * 0.1); s.rotation.set(i, rj * 6, i * 2); o.add(s); } break; }
+            }
+            case 'bar': o.add(box(1.88, 1.02, 0.65, dark, 0, 0.51, 0), box(1.92, 0.08, 0.72, std({ color: 0x722f8a, emissive: 0x3b124d, emissiveIntensity: 0.4 }), 0, 1.03, 0)); break;
+            case 'shelf': o.add(box(0.96, 2.05, 0.5, shelf, 0, 1.025, 0)); break;
+            case 'locker': o.add(box(1.44, 1.94, 0.5, locker, 0, 0.97, 0)); break;
+            case 'bed': o.add(box(1.24, 0.34, 1.92, wood, 0, 0.17, 0), box(1.18, 0.24, 1.84, white, 0, 0.44, 0), box(0.8, 0.12, 0.36, white, 0, 0.6, -0.68)); break;
+            case 'chair': { const fm = std({ map: T.fabricTex('s' + (p.rot % 4), sofaCols[p.rot % 4]) }); o.add(box(0.76, 0.44, 0.74, fm, 0, 0.22, 0), box(0.76, 0.56, 0.18, fm, 0, 0.72, -0.28)); break; }
+            case 'sofa': { const fm = std({ map: T.fabricTex('s' + (p.rot % 4), sofaCols[p.rot % 4]) }); o.add(box(1.82, 0.44, 0.84, fm, 0, 0.22, 0), box(1.82, 0.4, 0.2, fm, 0, 0.64, -0.32), box(0.16, 0.26, 0.84, fm, -0.83, 0.56, 0), box(0.16, 0.26, 0.84, fm, 0.83, 0.56, 0)); break; }
+            case 'plant': { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.18, 0.48, 10), pot); c.position.y = 0.24; o.add(c); for (let i = 0; i < 3; i++) { const s = new THREE.Mesh(new THREE.IcosahedronGeometry(0.32 - i * 0.05, 0), leaf); s.position.set((i - 1) * 0.09, 0.72 + i * 0.24, (rj - 0.5) * 0.1); s.rotation.set(i, rj * 6, i * 2); o.add(s); } break; }
           }
         };
         const fill = () => {
@@ -201,6 +216,7 @@ export class LevelView {
           if (!real) return false;
           o.clear();
           o.add(real);
+          o.userData = { ...real.userData };
           return true;
         };
         if (p.kind === 'shelf') o.rotation.y = (p.rot % 2 ? Math.PI / 2 : 0);
@@ -209,6 +225,9 @@ export class LevelView {
         if (!fill()) {
           buildFallback();
           this.propSlots.push(() => { fill(); });
+        }
+        if (p.kind === 'pc' || p.kind === 'desk' || p.kind === 'plant') {
+          this.propViews.set(pk, { group: o, prop: p });
         }
       }
       g.add(o);
@@ -510,9 +529,36 @@ export class LevelView {
       d.pivot.rotation.y = d.base + d.door.open * 1.62;
       d.lock.visible = !!d.door.locked;
       d.wedge.visible = !!d.door.wedged;
+      if (d.glass && d.glass.visible && this.sim.brokenDoorGlass.has(d.door.id)) d.glass.visible = false;
     }
     for (const [k, m] of this.windows) {
       if (this.sim.brokenWindows.has(k) && m.visible) m.visible = false;
+    }
+    for (const pk of this.sim.brokenProps) {
+      if (this.appliedBrokenProps.has(pk)) continue;
+      this.appliedBrokenProps.add(pk);
+      const pv = this.propViews.get(pk);
+      if (!pv) continue;
+      const { group, prop, serverLeds } = pv;
+      if (prop.kind === 'server' && serverLeds) {
+        for (const lm of serverLeds) (lm.material as THREE.MeshBasicMaterial).color.setHex(0x0c0f14);
+      } else if (prop.kind === 'plant') {
+        group.rotation.set(1.28, group.rotation.y, 0.25);
+        group.position.y = 0.2;
+      } else if (prop.kind === 'desk' || prop.kind === 'pc') {
+        const ud = group.userData;
+        if (ud.vase) ud.vase.visible = false;
+        if (ud.deskMonitor) {
+          ud.deskMonitor.scrMat.color.setHex(0x0a0d12);
+          ud.deskMonitor.group.rotation.set(-0.34, 0.2, -0.14);
+        }
+        if (ud.pcMonitor) {
+          const m = ud.pcMonitor;
+          const dead = box(0.03, m.h, m.w, new THREE.MeshStandardMaterial({ color: 0x0c1016, roughness: 0.25, metalness: 0.4 }), m.x + 0.015, m.y, m.z);
+          dead.rotation.z = -0.08;
+          group.add(dead);
+        }
+      }
     }
     if (this.sim.powerOn !== this.lastPower) {
       this.lastPower = this.sim.powerOn;
