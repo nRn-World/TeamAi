@@ -172,18 +172,19 @@ export class Speech {
   busy(ms: number) { this.until = Math.max(this.until, performance.now() + ms); }
   private keep = new Set<SpeechSynthesisUtterance>(); // Chrome drops utterances that get garbage collected
   get voiceCount() { return this.voices.length; }
-  private pick() {
+  private pick(lang = this.lang) {
     if (!this.voices.length && 'speechSynthesis' in window) this.voices = speechSynthesis.getVoices();
-    const pre = this.lang.slice(0, 2), V = this.voices;
-    return V.find(x => x.lang.replace('_', '-') === this.lang) ?? V.find(x => x.lang.toLowerCase().startsWith(pre)) ?? null;
+    const pre = lang.slice(0, 2), V = this.voices;
+    return V.find(x => x.lang.replace('_', '-') === lang) ?? V.find(x => x.lang.toLowerCase().startsWith(pre)) ?? null;
   }
   get hasLangVoice() { return !!this.pick(); }
-  say(text: string, pitch = 1, rate = 1.15, vol = 0.9, force = false) {
+  say(text: string, pitch = 1, rate = 1.15, vol = 0.9, force = false, lang?: string) {
     if ((!this.enabled && !force) || !('speechSynthesis' in window)) return;
-    if (this.queue > 1 && !force) return;
+    if (this.queue > 3 && !force) return;
     const clean = text.replace(/^Team ([AB]): /, '');
-    const u = new SpeechSynthesisUtterance(clean), v = this.pick();
+    const u = new SpeechSynthesisUtterance(clean), v = this.pick(lang);
     if (v) { u.voice = v; u.lang = v.lang; } // no matching voice: let the browser use its default voice instead of staying silent
+    else if (lang) u.lang = lang;
     u.pitch = pitch; u.rate = rate; u.volume = vol; this.queue++; this.keep.add(u);
     const est = 500 + clean.length * 75; this.until = Math.max(this.until, performance.now()) + est;
     let done = false; const end = () => { if (done) return; done = true; this.keep.delete(u); this.queue = Math.max(0, this.queue - 1); if (this.queue === 0) this.until = Math.min(this.until, performance.now() + 350); };

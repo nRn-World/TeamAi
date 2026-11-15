@@ -1,6 +1,6 @@
 // three.js presentation of the simulation: level geometry, characters, effects. All geometry is procedural.
 import * as THREE from 'three';
-import { Sim, Actor } from '../sim/sim';
+import { Sim, Actor, Team } from '../sim/sim';
 import { WALL, OUT, Door } from '../sim/level';
 import * as T from './textures';
 import { modelsReady, Rig, droppedPistol } from './models';
@@ -109,13 +109,14 @@ export class ActorView {
   legs: { hip: THREE.Group; knee: THREE.Group }[] = []; arms: { sh: THREE.Group; el: THREE.Group }[] = [];
   head = new THREE.Group(); gun = new THREE.Group(); label?: THREE.Sprite; fall = 0; flashT = 0; flash: THREE.Sprite;
   pool?: THREE.Mesh; poolT = 0; dropped?: THREE.Group; wounds = 0;
-  rig?: Rig; private shootT = 0; private rifle = false; op?: OperatorBody;
+  rig?: Rig; private shootT = 0; private rifle = false; op?: OperatorBody; private teamMat?: THREE.MeshStandardMaterial; private teamShown?: Team;
   constructor(public a: Actor) {
     const v = a.variant, off = a.kind === 'officer' || a.kind === 'player', tcol = a.kind === 'player' ? 0x4fd07a : TEAM_COLOR[a.team];
     const cloth = std({ color: off ? 0x1b2434 : a.kind === 'suspect' ? HOOD[v] : SHIRT[v] });
     const pants = std({ color: off ? 0x161d2a : a.kind === 'suspect' ? 0x24303f : [0x2b2b33, 0x3a3f4a, 0x4a3a2a][v % 3] });
     const skin = std({ color: SKIN[(v + a.id) % 6], roughness: 0.7 }), black = std({ color: 0x0e1014, roughness: 0.6 }), boot = std({ color: 0x15130f });
     const tc = off ? std({ color: tcol, emissive: tcol, emissiveIntensity: 0.35 }) : null;
+    if (a.kind === 'officer' && tc) { this.teamMat = tc; this.teamShown = a.team; }
     this.root.add(this.body); const sh = new THREE.Mesh(shadowGeo, shadowMat); sh.rotation.x = -Math.PI / 2; sh.position.y = 0.012; this.root.add(sh);
     for (const s of [-1, 1]) {
       const hip = new THREE.Group(); hip.position.set(s * 0.1, 0.92, 0); hip.add(box(0.16, 0.48, 0.18, pants, 0, -0.23, 0));
@@ -206,6 +207,17 @@ export class ActorView {
   }
   update(dt: number, time: number) {
     const a = this.a, k = Math.min(1, dt * 12), r = this.root;
+    if (a.kind === 'officer' && this.teamShown && a.team !== this.teamShown) {
+      this.teamShown = a.team;
+      const tcol = TEAM_COLOR[a.team];
+      if (this.teamMat) { this.teamMat.color.setHex(tcol); this.teamMat.emissive.setHex(tcol); }
+      if (this.label) {
+        const mat = this.label.material as THREE.SpriteMaterial;
+        mat.map?.dispose();
+        mat.map = T.labelTex(a.name.slice(0, 7), '#' + tcol.toString(16));
+        mat.needsUpdate = true;
+      }
+    }
     r.position.x = lerp(r.position.x, a.x, Math.min(1, dt * 25)); r.position.z = lerp(r.position.z, a.z, Math.min(1, dt * 25));
     let dy = a.yaw - r.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); r.rotation.y += dy * Math.min(1, dt * 14);
     if (!this.rig && modelsReady) {

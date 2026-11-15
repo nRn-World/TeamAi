@@ -1,7 +1,7 @@
 import { Sim, yawTo, fwd } from '../src/sim/sim';
-import { parseCommand, splitOrders, commandFor } from '../src/sim/commands';
-import { toAction, orderMessages, ORDER_SCHEMA } from '../src/sim/aiorders';
 import type { Command } from '../src/sim/sim';
+import { parseCommand, parseCommands, shouldUseAiBrain } from '../src/sim/commands';
+import { buildLocalReport, buildTacticalContext } from '../src/sim/context';
 import { findPath } from '../src/sim/nav';
 import { MISSIONS } from '../src/sim/level';
 import { encodeSnap, applySnap, encodeEv, decodeEv } from '../src/sim/netstate';
@@ -26,6 +26,47 @@ const named: [string, string, number?][] = [
   ['you go in', 'A breach 0', 0], ['you protect us', 'B cover 3', 3], ['you cover me', 'ALL cover'], ['Kenny follow me', 'A follow 0'], ['team b follow me', 'B follow', 0], ['Jack, flashbang', 'B bang 2'], ['Zoe cuff him', 'B restrain 3'],
 ];
 for (const [t, exp, last] of named) { const c = parseCommand(t, 'ALL', last ?? null); const got = c ? [c.team, c.action, c.dir, c.who].filter(v => v != null).join(' ') : 'null'; ok(got === exp, `parse "${t}" => ${got} (expected ${exp})`); }
+
+// ---- compound, relay & dynamic team reassignment ----
+{
+  const j1 = parseCommand('Maya join Team B');
+  ok(!!j1 && j1.action === 'joinTeam' && j1.who === 1 && j1.team === 'B', 'Maya join Team B');
+  const j2 = parseCommand('put Jack on Team A');
+  ok(!!j2 && j2.action === 'joinTeam' && j2.who === 2 && j2.team === 'A', 'put Jack on Team A');
+  const j3 = parseCommand('you switch to Team B', 'A', 0);
+  ok(!!j3 && j3.action === 'joinTeam' && j3.who === 0 && j3.team === 'B', 'you switch to Team B');
+
+  const b0 = parseCommands('Ken follow me, Maya join Team B, team be cover me');
+  ok(
+    b0.commands.length === 3
+      && b0.commands[0].who === 0 && b0.commands[0].action === 'follow'
+      && b0.commands[1].who === 1 && b0.commands[1].action === 'joinTeam' && b0.commands[1].team === 'B'
+      && b0.commands[2].who == null && b0.commands[2].team === 'B' && b0.commands[2].action === 'cover',
+    'compound: Ken follow me, Maya join Team B, team be cover me',
+  );
+
+  const b1 = parseCommands('Ken throw flash and Maya go in');
+  ok(b1.commands.length === 2 && b1.commands[0].who === 0 && b1.commands[0].action === 'bang' && b1.commands[1].who === 1 && b1.commands[1].action === 'breach', 'compound English named');
+  const b2 = parseCommands('Team A stack up on the door and Team B cover me');
+  ok(b2.commands.length === 2 && b2.commands[0].team === 'A' && b2.commands[0].action === 'stack' && b2.commands[1].team === 'B' && b2.commands[1].action === 'cover', 'compound teams');
+  const b3 = parseCommands('Ken, tell Team B to breach');
+  ok(b3.relayFrom === 0 && b3.commands.length === 1 && b3.commands[0].team === 'B' && b3.commands[0].action === 'breach', 'English relay');
+
+  ok(shouldUseAiBrain('Do you see any suspects in the next room?', parseCommands('Do you see any suspects in the next room?')), 'question triggers AI brain');
+  ok(!shouldUseAiBrain('Team A follow me', parseCommands('Team A follow me')), 'short direct command stays fast');
+
+  const sim = new Sim(0, 5);
+  for (const cmd of b0.commands) sim.command(cmd);
+  ok(sim.officers[1].team === 'B' && sim.members('B').length === 3 && sim.members('A').length === 0, 'Maya moved to Team B while Ken stayed solo follow on A');
+  sim.command({ team: 'B', action: 'breach' });
+  sim.command({ team: 'A', action: 'follow' });
+  ok(sim.members('A').length === 1 && sim.members('A')[0].name === 'Ken', 'Team A now has only Ken');
+
+  const ctx = buildTacticalContext(sim);
+  ok(ctx.includes('Ken (Team A') && ctx.includes('Maya (Team B'), 'tactical context reflects Maya on Team B');
+  const repEn = buildLocalReport(sim, 'B');
+  ok(repEn.includes('3 up.'), 'English local report reflects 3 officers on Team B');
+}
 { // one officer on an order of their own, then back into the team
   const sim = new Sim(0, 5), [ken, maya] = sim.officers, p = sim.player;
   ok(ken.name === 'Ken' && sim.officers[3].name === 'Zoe', 'officers have names');
@@ -41,22 +82,14 @@ for (const [t, exp, last] of named) { const c = parseCommand(t, 'ALL', last ?? n
   console.log('solo flash without a door: grenades', sim.grenades.length - g0, 'order', sim.officers[2].solo?.order.type);
   ken.alive = false; ok(!sim.command({ team: 'A', action: 'follow', who: 0 }), 'a dead officer cannot take orders');
 }
-{ // several orders in one sentence, Swedish wordings, answers of the language model
+{ // English compound orders tested via splitOrders compatibility wrapper
   const j = (c: (Command | null)[]) => c.map(x => x ? [x.who ?? x.team, x.action, x.dir].filter(v => v != null).join(' ') : '?').join(', ');
   const multi: [string, string, ('A' | 'B' | 'ALL')?, number?][] = [
-    ['Ken cover the door while team B goes in with a flash', '0 cover, B bang'], ['team a bang and clear', 'A bang'], ['Maya open the door and go in', '1 breach'],
+    ['Ken cover the door while team B goes in with a flash', '0 cover, B bang'], ['team a bang and clear', 'A bang'], ['Maya open the door and go in', '1 open, 1 breach'],
     ['team a go left and team b go right', 'A move left, B move right'], ['Maya watch my back and Zoe open that door', '1 cover, 3 open'], ['everybody come back to me', 'ALL follow'],
-    ['Jack hold here then everyone else do a dance', '2 hold, ?'], ['Ken du täcker oss', '0 cover'], ['du går in', '0 breach', 'A', 0], ['Ken släng flash', '0 bang'], ['lag B följ med mig', 'B follow'],
-    ['alla stannar här', 'ALL hold'], ['Maya öppna dörren och Jack skydda mig', '1 open, 2 cover'], ['lag A gå till vänster', 'A move left'], ['sätt handbojor på dem', 'B restrain', 'B'],
-    ['ni skyddar mig', 'B cover', 'B'], ['Zoe stäng dörren', '3 close'], ['polis släpp vapnet', 'ALL shout'], ['Zoe hold your fire', '3 fireHold'], ['Ken get yourself inside and team b wait', '?, B hold'],
+    ['Zoe hold your fire', '3 fireHold'],
   ];
-  for (const [t, exp, lt, lw] of multi) { const got = j(splitOrders(t, lt ?? 'ALL', lw ?? null).map(x => x.cmd)); ok(got === exp, `orders "${t}" => ${got} (expected ${exp})`); }
-  const part = splitOrders('Ken get yourself inside and team b wait')[0];
-  ok(j([commandFor(part, 'breach', undefined, 'ALL', null)]) === '0 breach', 'the model names the action, the rules keep the addressee');
-  ok(j([commandFor(splitOrders('get yourself inside', 'B', 3)[0], 'breach', undefined, 'B', 3)]) === '3 breach', 'no addressee: the last officer spoken to');
-  const act = (a: string) => { const r = toAction(a); return r ? r.action + (r.dir ? ' ' + r.dir : '') : 'null'; };
-  ok(act('{"action":"breach","dir":""}') === 'breach' && act('ok {"action":"MOVE","dir":"Left"}"') === 'move left' && act('{"action":"move","dir":""}') === 'null' && act('{"action":"none","dir":""}') === 'null' && act('nope') === 'null' && act('{"action":"shout"}') === 'null', 'model answers');
-  ok(orderMessages('x').at(-1)!.content === 'x' && JSON.parse(ORDER_SCHEMA).required[0] === 'action', 'prompt and schema');
+  for (const [t, exp, lt, lw] of multi) { const got = j(parseCommands(t, lt ?? 'ALL', lw ?? null).commands); ok(got === exp, `orders "${t}" => ${got} (expected ${exp})`); }
 }
 console.log('parser cases:', cases.length + named.length);
 

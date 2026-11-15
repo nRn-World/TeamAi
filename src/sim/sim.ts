@@ -1,9 +1,10 @@
 // TeamAi tactical simulation. Pure logic: no DOM, no three.js – runs headless in tests.
 import { Level, Door, Pt, Room, buildLevel, mulberry32, roomAt, WALL, DOOR, LOW, HIGH } from './level';
 import { findPath, nearestWalkable, walkLine } from './nav';
+import { buildLocalReport } from './context';
 
 export type Team = 'A' | 'B';
-export type Action = 'follow' | 'hold' | 'move' | 'cover' | 'stack' | 'breach' | 'bang' | 'open' | 'close' | 'restrain' | 'fireFree' | 'fireHold' | 'report' | 'shout';
+export type Action = 'follow' | 'hold' | 'move' | 'cover' | 'stack' | 'breach' | 'bang' | 'open' | 'close' | 'restrain' | 'fireFree' | 'fireHold' | 'report' | 'shout' | 'joinTeam';
 export type Dir = 'left' | 'right' | 'forward' | 'back' | 'there';
 /** `who` = one officer (index into Sim.officers) instead of a whole team. */
 export interface Command { team: Team | 'ALL'; action: Action; dir?: Dir; who?: number; }
@@ -357,6 +358,10 @@ export class Sim {
   members(g: Grp) { return typeof g === 'string' ? this.officers.filter(o => o.alive && o.team === g && !o.solo) : g.alive ? [g] : []; }
   private st(g: Grp) { return typeof g === 'string' ? this.teams[g] : g.solo!; }
   private idx(m: Actor) { return m.solo ? 0 : m.ti; }
+  reindexTeams() {
+    let ia = 0, ib = 0;
+    for (const o of this.officers) o.ti = o.team === 'A' ? ia++ : ib++;
+  }
 
   // ---------- orders ----------
   nearestDoor(to: Pt, maxD: number): Door | null {
@@ -380,16 +385,16 @@ export class Sim {
     return best ?? this.nearestDoor(p, 12);
   }
   private doorSide(door: Door, from: Pt) { return door.horiz ? (from.z > door.cz + 0.5 ? 1 : -1) : (from.x > door.cx + 0.5 ? 1 : -1); }
-  private stackPts(door: Door, side: number, offset: number): Pt[] {
+  private stackPts(door: Door, side: number, offset: number, count = 2): Pt[] {
     const out: Pt[] = []; const c = { x: door.cx + 0.5, z: door.cz + 0.5 };
     const mk = (lat: number, row: number) => door.horiz ? { x: c.x + lat, z: c.z + side * row } : { x: c.x + side * row, z: c.z + lat };
     for (const [lat, row] of [[-1, 1], [1, 1], [-1, 2], [1, 2], [0, 2.2], [0, 3.2], [-1, 3], [1, 3]]) {
       const p = mk(lat, row); if (!this.solidCell(Math.floor(p.x), Math.floor(p.z)) && this.cell(Math.floor(p.x), Math.floor(p.z)) !== DOOR) out.push(p);
     }
-    while (out.length < offset + 2) out.push(mk(0, 1.2 + out.length));
-    return out.slice(offset, offset + 2);
+    while (out.length < offset + count) out.push(mk(0, 1.2 + out.length));
+    return out.slice(offset, offset + count);
   }
-  private clearPts(door: Door, side: number, offset: number): Pt[] {
+  private clearPts(door: Door, side: number, offset: number, count = 2): Pt[] {
     const c = { x: door.cx + 0.5, z: door.cz + 0.5 };
     const beyond = door.horiz ? { x: c.x, z: c.z - side } : { x: c.x - side, z: c.z };
     const room: Room | null = roomAt(this.level, beyond.x, beyond.z);
@@ -407,8 +412,8 @@ export class Sim {
       const mk = (lat: number, row: number) => door.horiz ? { x: c.x + lat, z: c.z - side * row } : { x: c.x - side * row, z: c.z + lat };
       for (const [lat, row] of [[-1.5, 2], [1.5, 2], [-1.5, 4], [1.5, 4]]) { const n = nearestWalkable(this.level, mk(lat, row).x, mk(lat, row).z, 2); if (n) pts.push(n); }
     }
-    while (pts.length < 4) pts.push(beyond);
-    return pts.slice(offset, offset + 2);
+    while (pts.length < offset + count) pts.push(beyond);
+    return pts.slice(offset, offset + count);
   }
   private dirTarget(dir: Dir, aim: Pt | null, p: Actor): { p: Pt; face: number } | null {
     if (dir === 'there') { if (!aim) return null; const n = nearestWalkable(this.level, aim.x, aim.z, 3); return n ? { p: n, face: yawTo(n.x - p.x, n.z - p.z) } : null; }
@@ -420,8 +425,26 @@ export class Sim {
     return n ? { p: n, face: yaw } : null;
   }
 
-  command(cmd: Command, aim: Pt | null = null, by: Actor = this.player): boolean {
+  command(cmd: Command, aim: Pt | null = null, by: Actor = this.player, opts: { quiet?: boolean } = {}): boolean {
     if (this.over) return false;
+    const reply = (a: Actor, text: string) => { if (!opts.quiet) this.say(a, text); };
+    if (cmd.action === 'joinTeam') {
+      const targetTeam: Team = cmd.team === 'B' ? 'B' : 'A';
+      if (cmd.who != null) {
+        const one = this.officers[cmd.who];
+        if (!one || !one.alive) return false;
+        one.team = targetTeam; one.solo = null; one.path = null; one.goal = null;
+        this.reindexTeams();
+        reply(one, `Copy, joining Team ${targetTeam}.`);
+        return true;
+      }
+      const moving = this.officers.filter(o => o.alive);
+      if (!moving.length) return false;
+      for (const o of moving) { o.team = targetTeam; o.solo = null; o.path = null; o.goal = null; }
+      this.reindexTeams();
+      reply(moving[0], `Everyone moving to Team ${targetTeam}.`);
+      return true;
+    }
     let any = false; const one = cmd.who != null ? this.officers[cmd.who] : null, soloOrder = cmd.action !== 'report' && cmd.action !== 'fireHold' && cmd.action !== 'fireFree' && cmd.action !== 'shout';
     if (cmd.who != null && (!one || !one.alive)) return false;
     const groups: Grp[] = one ? [soloOrder ? one : one.team] : cmd.team === 'ALL' ? ['A', 'B'] : [cmd.team];
@@ -430,43 +453,44 @@ export class Sim {
       if (typeof g === 'string') { if (soloOrder) for (const o of this.officers) if (o.team === g) o.solo = null; } // a team order brings everyone back into the team
       else if (!g.solo) g.solo = { order: { type: 'follow', phase: 0, t: 0, leader: by } };
       const lead = typeof g === 'string' ? this.lead(g) : g; if (!lead) continue; any = true;
-      const off = !one && cmd.team === 'ALL' && team === 'B' ? 2 : 0, T = this.st(g);
+      const off = !one && cmd.team === 'ALL' && team === 'B' ? this.officers.filter(o => o.alive && o.team === 'A').length : 0, T = this.st(g);
+      const count = typeof g === 'string' ? Math.max(2, this.officers.filter(o => o.team === team).length) : 1;
       const set = (o: Order) => { for (const m of this.members(g)) { m.path = null; m.goal = null; if (m.cuff && o.type !== 'restrain') { m.cuff.claimedBy = null; m.cuff = null; } } T.order = o; };
       const tag = typeof g === 'string' ? `Team ${team}: ` : '';
       switch (cmd.action) {
-        case 'follow': set({ type: 'follow', phase: 0, t: 0, leader: by }); this.say(lead, tag + 'Copy, following you.'); break;
-        case 'cover': set({ type: 'cover', phase: 0, t: 0, leader: by }); this.say(lead, tag + 'Covering you.'); break;
-        case 'hold': set({ type: 'hold', phase: 0, t: 0, pts: (typeof g === 'string' ? this.officers.filter(o => o.team === team) : [g]).map(o => ({ x: o.x, z: o.z })) }); this.say(lead, tag + 'Holding position.'); break;
+        case 'follow': set({ type: 'follow', phase: 0, t: 0, leader: by }); reply(lead, tag + 'Copy, following you.'); break;
+        case 'cover': set({ type: 'cover', phase: 0, t: 0, leader: by }); reply(lead, tag + 'Covering you.'); break;
+        case 'hold': set({ type: 'hold', phase: 0, t: 0, pts: (typeof g === 'string' ? this.officers.filter(o => o.team === team) : [g]).map(o => ({ x: o.x, z: o.z })) }); reply(lead, tag + 'Holding position.'); break;
         case 'move': {
           const tg = this.dirTarget(cmd.dir ?? 'forward', aim, by);
-          if (!tg) { this.say(lead, tag + "Can't get there."); break; }
+          if (!tg) { reply(lead, tag + "Can't get there."); break; }
           const f = fwd(tg.face), side = { x: -f.z, z: f.x }; const pts: Pt[] = [];
-          for (let i = 0; i < 2; i++) { const k = (i ? 0.7 : -0.7) * (off ? 1.9 : 1); const q = { x: tg.p.x + side.x * k, z: tg.p.z + side.z * k }; pts.push(!this.solidCell(Math.floor(q.x), Math.floor(q.z)) && walkLine(this.level, tg.p, q) ? q : tg.p); }
+          for (let i = 0; i < count; i++) { const k = count === 1 ? 0 : (i - (count - 1) / 2) * (off ? 1.4 : 1.2); const q = { x: tg.p.x + side.x * k, z: tg.p.z + side.z * k }; pts.push(!this.solidCell(Math.floor(q.x), Math.floor(q.z)) && walkLine(this.level, tg.p, q) ? q : tg.p); }
           set({ type: 'move', phase: 0, t: 0, pts, face: tg.face }); this.events.push({ t: 'marker', x: tg.p.x, z: tg.p.z, team });
-          this.say(lead, tag + ({ left: 'Moving left.', right: 'Moving right.', forward: 'Moving up.', back: 'Falling back.', there: 'Moving to that position.' } as const)[cmd.dir ?? 'forward']); break;
+          reply(lead, tag + ({ left: 'Moving left.', right: 'Moving right.', forward: 'Moving up.', back: 'Falling back.', there: 'Moving to that position.' } as const)[cmd.dir ?? 'forward']); break;
         }
         case 'stack': case 'breach': case 'bang': case 'open': case 'close': {
           const door = this.aimedDoor(by);
           if (!door && typeof g !== 'string' && cmd.action === 'bang' && aim && dist(g, aim) > 2.5 && this.los(g.x, g.z, aim.x, aim.z)) { // no door: one officer throws it where the player aims
-            const d = dist(g, aim), dx = (aim.x - g.x) / d, dz = (aim.z - g.z) / d; g.yaw = Math.atan2(dx, dz) ; this.throwBang(g.x + dx * 0.4, 1.4, g.z + dz * 0.4, dx, 0.1, dz, Math.min(11, 3 + d * 0.9)); this.say(g, 'Flashbang out!'); break;
+            const d = dist(g, aim), dx = (aim.x - g.x) / d, dz = (aim.z - g.z) / d; g.yaw = Math.atan2(dx, dz) ; this.throwBang(g.x + dx * 0.4, 1.4, g.z + dz * 0.4, dx, 0.1, dz, Math.min(11, 3 + d * 0.9)); reply(g, 'Flashbang out!'); break;
           }
-          if (!door) { this.say(lead, tag + "I don't see a door."); break; }
-          const side = this.doorSide(door, by), pts = this.stackPts(door, side, off);
+          if (!door) { reply(lead, tag + "I don't see a door."); break; }
+          const side = this.doorSide(door, by), pts = this.stackPts(door, side, off, count);
           const c = { x: door.cx + 0.5, z: door.cz + 0.5 }; this.events.push({ t: 'marker', x: c.x, z: c.z, team });
-          if (cmd.action === 'stack') { set({ type: 'stack', phase: 0, t: 0, pts, door, side }); this.say(lead, tag + 'Stacking up on the door.'); }
-          else if (cmd.action === 'open' || cmd.action === 'close') { set({ type: 'door', phase: 0, t: 0, pts, door, side, open: cmd.action === 'open' }); this.say(lead, tag + (cmd.action === 'open' ? 'Opening the door.' : 'Closing the door.')); }
-          else { set({ type: 'breach', phase: 0, t: 0, pts, door, side, off, bang: cmd.action === 'bang' }); this.say(lead, tag + (cmd.action === 'bang' ? 'Bang and clear!' : 'Breaching!')); }
+          if (cmd.action === 'stack') { set({ type: 'stack', phase: 0, t: 0, pts, door, side }); reply(lead, tag + 'Stacking up on the door.'); }
+          else if (cmd.action === 'open' || cmd.action === 'close') { set({ type: 'door', phase: 0, t: 0, pts, door, side, open: cmd.action === 'open' }); reply(lead, tag + (cmd.action === 'open' ? 'Opening the door.' : 'Closing the door.')); }
+          else { set({ type: 'breach', phase: 0, t: 0, pts, door, side, off, bang: cmd.action === 'bang' }); reply(lead, tag + (cmd.action === 'bang' ? 'Bang and clear!' : 'Breaching!')); }
           break;
         }
         case 'restrain': {
           const n = this.assignCuffs(g, 16);
-          if (n) { if (T.order.type !== 'restrain') set({ type: 'restrain', phase: 0, t: 0, prev: T.order }); this.assignCuffs(g, 16); this.say(lead, tag + 'Securing.'); }
-          else this.say(lead, tag + 'Nobody to secure here.');
+          if (n) { if (T.order.type !== 'restrain') set({ type: 'restrain', phase: 0, t: 0, prev: T.order }); this.assignCuffs(g, 16); reply(lead, tag + 'Securing.'); }
+          else reply(lead, tag + 'Nobody to secure here.');
           break;
         }
-        case 'fireHold': this.teams[team].fire = 'hold'; this.say(lead, tag + 'Cease fire. Returning fire only.'); break;
-        case 'fireFree': this.teams[team].fire = 'free'; this.say(lead, tag + 'Weapons free.'); break;
-        case 'report': { const m = this.officers.filter(o => o.alive && o.team === team); this.say(lead, tag + `${m.length} up. ${m.some(o => o.hp < 60) ? 'We have wounded.' : 'No injuries.'}`); break; }
+        case 'fireHold': this.teams[team].fire = 'hold'; reply(lead, tag + 'Cease fire. Returning fire only.'); break;
+        case 'fireFree': this.teams[team].fire = 'free'; reply(lead, tag + 'Weapons free.'); break;
+        case 'report': reply(lead, tag + buildLocalReport(this, team, cmd.who)); break;
         case 'shout': break;
       }
     }
@@ -505,7 +529,8 @@ export class Sim {
       } else if (o.phase === 1 && alone && o.bang && o.t > 1.45) { // one officer told to throw a flashbang stays at the door instead of going in alone
         T.order = { type: 'stack', phase: 0, t: 0, pts: o.pts, door, side };
       } else if (o.phase === 1 && o.t > (o.bang ? 1.45 : 0.45)) {
-        o.phase = 2; o.t = 0; o.pts = this.clearPts(door, side, o.off ?? 0);
+        const count = alone ? 1 : Math.max(2, this.officers.filter(m => m.team === (g as Team)).length);
+        o.phase = 2; o.t = 0; o.pts = this.clearPts(door, side, o.off ?? 0, count);
         for (const m of mem) { m.path = null; m.goal = null; }
       } else if (o.phase === 2 && ((arrived() && o.t > 1.5) || o.t > 9) && !mem.some(m => m.target)) {
         const got = this.assignCuffs(g, 9);
@@ -551,7 +576,7 @@ export class Sim {
     let dest: Pt | null = null, face: number | null = null;
     const p = this.leaderOf(ord.type === 'restrain' && ord.prev ? ord.prev : ord);
     if (ord.type === 'follow' || ord.type === 'restrain') { dest = this.trailPoint(1.4 + o.slot * 1.05, p); if (dist(o, p) < 1.3 + o.slot * 0.5 && !o.path) dest = null; }
-    else if (ord.type === 'cover') { dest = this.trailPoint(1.1 + o.ti * 0.9, p); face = p.yaw + Math.PI + (o.ti ? 0.9 : -0.9); if (dist(o, p) < 1.4 + o.ti * 0.6 && !o.path) dest = null; }
+    else if (ord.type === 'cover') { const ang = [-0.9, 0.9, -1.5, 1.5][o.ti % 4] ?? 0; dest = this.trailPoint(1.1 + o.ti * 0.85, p); face = p.yaw + Math.PI + ang; if (dist(o, p) < 1.4 + o.ti * 0.55 && !o.path) dest = null; }
     else if (ord.pts) { dest = ord.pts[this.idx(o)] ?? ord.pts[0]; face = ord.face ?? null; }
     if (ord.type === 'breach' && ord.phase === 1) { dest = null; }
     if ((ord.type === 'stack' || ord.type === 'door' || (ord.type === 'breach' && ord.phase < 2)) && ord.door) face = yawTo(ord.door.cx + 0.5 - o.x, ord.door.cz + 0.5 - o.z);
