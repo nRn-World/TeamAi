@@ -14,6 +14,33 @@ const BOX = new THREE.BoxGeometry(1, 1, 1);
 const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...o });
 function box(w: number, h: number, d: number, m: THREE.Material, x = 0, y = 0, z = 0) { const b = new THREE.Mesh(BOX, m); b.scale.set(w, h, d); b.position.set(x, y, z); return b; }
 
+const CITY_CACHE = new Map<string, Promise<THREE.Group | null>>();
+function loadCityAsset(name: string): Promise<THREE.Group | null> {
+  let p = CITY_CACHE.get(name);
+  if (!p) {
+    p = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(`./models/city/${name}.glb`).then(gltf => {
+      const sc = gltf.scene;
+      sc.updateMatrixWorld(true);
+      sc.traverse((o: any) => {
+        if (!o.isMesh) return;
+        o.receiveShadow = true;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (!m) continue;
+          if ('envMapIntensity' in m) m.envMapIntensity = /glass|window|cteclo/i.test(m.name || '') ? 1.35 : 0.85;
+          if (/lamp.*glass|glow/i.test(m.name || '')) {
+            m.emissive = new THREE.Color(0xffe4b5);
+            m.emissiveIntensity = 3.2;
+          }
+        }
+      });
+      return sc;
+    }).catch(() => null);
+    CITY_CACHE.set(name, p);
+  }
+  return p;
+}
+
 const MARAUDER_PAINT: Record<string, [number, number, number]> = { Body_2: [0x3d485e, 0.45, 0.58], Metal_UP_5: [0x4b5363, 0.5, 0.62] };
 
 const THEME = {
@@ -54,10 +81,10 @@ export class LevelView {
     const plazaGround = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'bank';
     const groundMap = plazaGround ? T.plazaTex(l.theme) : T.floorTex('asphalt');
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(l.w + 32, l.h + 32),
+      new THREE.PlaneGeometry(l.w + 72, l.h + 72),
       std({ map: groundMap, roughness: plazaGround ? 0.24 : 0.34, metalness: plazaGround ? 0.36 : 0.25 }),
     );
-    scaleUV(ground.geometry, (l.w + 32) / 3, (l.h + 32) / 3); ground.rotation.x = -Math.PI / 2; ground.position.set(l.w / 2, -0.012, l.h / 2); g.add(ground);
+    scaleUV(ground.geometry, (l.w + 72) / 3, (l.h + 72) / 3); ground.rotation.x = -Math.PI / 2; ground.position.set(l.w / 2, -0.012, l.h / 2); g.add(ground);
     // rooms: floor + ceiling + lamps
     const ceilMat = std({ map: T.floorTex('ceiling') });
     const lampOn = this.lampOnMat = new THREE.MeshBasicMaterial({ color: l.theme === 'club' ? 0xc864ff : 0xfff4dc });
@@ -252,12 +279,33 @@ export class LevelView {
     const l = this.sim.level, g = this.group;
     const darkSteel = std({ color: 0x181c22, roughness: 0.35, metalness: 0.72 });
     const concrete = std({ color: 0x565b63, roughness: 0.85 });
-    const granite = std({ color: 0x454a52, roughness: 0.68, metalness: 0.1 });
-    const warmGlass = std({ color: 0x382818, emissive: 0x6b4218, emissiveIntensity: 0.78, roughness: 0.25, metalness: 0.35 });
-    const darkGlass = std({ color: 0x0d1522, emissive: 0x091324, emissiveIntensity: 0.4, roughness: 0.15, metalness: 0.78 });
     const soffitMat = new THREE.MeshBasicMaterial({ color: 0xffe4b8 });
     const potMat = std({ color: 0x26292e, roughness: 0.85 });
     const shrubMat = std({ color: 0x264b2b, roughness: 0.9 });
+    const extPromises: Promise<unknown>[] = [];
+
+    const placeCityModel = (
+      name: string,
+      opts: { x: number; y: number; z: number; ry?: number; w?: number; h?: number; d?: number; scale?: number },
+    ) => {
+      extPromises.push(loadCityAsset(name).then(tpl => {
+        if (!tpl || this.disposed) return;
+        const obj = tpl.clone(true);
+        const box3 = new THREE.Box3().setFromObject(obj);
+        const sz = box3.getSize(new THREE.Vector3());
+        const ctr = box3.getCenter(new THREE.Vector3());
+        const sx = opts.w ? opts.w / Math.max(sz.x, 0.001) : (opts.scale ?? 1);
+        const sy = opts.h ? opts.h / Math.max(sz.y, 0.001) : (opts.scale ?? sx);
+        const szScale = opts.d ? opts.d / Math.max(sz.z, 0.001) : (opts.scale ?? sx);
+        const wrap = new THREE.Group();
+        obj.scale.set(sx, sy, szScale);
+        obj.position.set(-ctr.x * sx, -box3.min.y * sy, -ctr.z * szScale);
+        wrap.add(obj);
+        wrap.position.set(opts.x, opts.y, opts.z);
+        if (opts.ry) wrap.rotation.y = opts.ry;
+        g.add(wrap);
+      }));
+    };
 
     const addBollard = (x: number, z: number) => {
       const b = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.15, 0.84, 12), std({ color: 0x6e737b, roughness: 0.72, metalness: 0.2 }));
@@ -304,10 +352,9 @@ export class LevelView {
       const sp = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: T.signTex(text, bg, fg, glow) }));
       sp.position.set(x, y, z); sp.rotation.y = ry; g.add(sp);
     };
-    const addStreetLamp = (x: number, z: number, col = 0xffe0b2) => {
-      g.add(box(0.12, 4.6, 0.12, darkSteel, x, 2.3, z), box(0.7, 0.08, 0.18, darkSteel, x + 0.3, 4.6, z));
-      g.add(box(0.32, 0.04, 0.14, new THREE.MeshBasicMaterial({ color: col }), x + 0.5, 4.55, z));
-      if (quality > 0) { const pl = new THREE.PointLight(col, 14, 14, 1.6); pl.position.set(x + 0.5, 4.3, z); g.add(pl); }
+    const addStreetLamp = (x: number, z: number, col = 0xffe0b2, ry = 0) => {
+      placeCityModel('street_lamp_01', { x, y: 0, z, ry, scale: 1.18 });
+      if (quality > 0) { const pl = new THREE.PointLight(col, 14, 15, 1.55); pl.position.set(x, 4.35, z); g.add(pl); }
     };
 
     if (l.theme === 'office') {
@@ -316,7 +363,7 @@ export class LevelView {
         const col = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 3.1, 18), concrete);
         col.position.set(px, 1.55, 21.45); g.add(col);
       }
-      // Portico flat canopy overhang + soffit downlights + EXIT sign
+      // Portico flat canopy overhang + soffit downlights + EXIT sign + Kista Tech Center & SL Metro totem
       g.add(box(10.6, 0.24, 2.4, darkSteel, 15.0, 3.18, 21.1));
       for (const lx of [11.2, 13.0, 14.5, 16.0, 17.8, 19.3]) {
         const d = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.03, 12), soffitMat);
@@ -329,72 +376,56 @@ export class LevelView {
       }
       addSign('EXIT · NÖDUTGÅNG', '#093818', '#52ff88', '#34e86a', 1.35, 0.3, 14.5, 2.52, 21.03);
       addSign('KISTA TECH CENTER', '#0c1624', '#dbeafe', '#3b82f6', 3.4, 0.48, 15.0, 3.55, 22.32);
-      // Stockholm SL-style blue-white T-BANA KISTA metro totem on the sidewalk
       g.add(box(0.14, 2.9, 0.14, darkSteel, 7.2, 1.45, 25.1));
       addSign('T  KISTA', '#0a3a8a', '#ffffff', '#60a5fa', 1.7, 0.46, 7.2, 2.95, 25.18);
       addSign('T  KISTA', '#0a3a8a', '#ffffff', '#60a5fa', 1.7, 0.46, 7.2, 2.95, 25.02, Math.PI);
-      // Bollards + entrance planters & courtyard trees
       for (const bx of [10.4, 11.7, 12.8, 16.2]) addBollard(bx, 22.85);
       addShrub(10.5, 21.45); addShrub(17.4, 21.45);
       addTree(8.5, 22.0, 1.55); addTree(27.0, 22.2, 1.55);
 
-      // 2nd Floor Warm-Lit Glass Curtain-Wall Offices (y=3.2..6.5) matching image-3.png
-      g.add(box(24.4, 0.35, 18.2, darkSteel, 16.0, 3.28, 11.9));
-      g.add(box(24.2, 3.1, 0.18, warmGlass, 16.0, 4.95, 20.38));
-      // Silhouetted 2nd-floor office furniture & pendant lights behind the warm glass
-      for (let fx = 6.5; fx <= 25.5; fx += 3.2) {
-        g.add(box(1.5, 0.72, 0.7, darkSteel, fx, 3.82, 19.8));
-        g.add(box(0.5, 0.95, 0.5, darkSteel, fx, 3.95, 19.15));
-        const pnd = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.22, 12), soffitMat);
-        pnd.position.set(fx, 5.75, 19.85); g.add(pnd);
-      }
-      for (let mx = 4.0; mx <= 28.0; mx += 2.0) g.add(box(0.11, 3.25, 0.26, darkSteel, mx, 4.95, 20.42));
-      g.add(box(24.4, 0.42, 18.2, darkSteel, 16.0, 6.65, 11.9));
-      // 3rd–5th Floor Corporate Dark Glass Tower (y=6.8..16.5)
-      g.add(box(24.2, 9.6, 18.0, darkGlass, 16.0, 11.6, 11.9));
-      for (const fy of [9.8, 13.0, 16.3]) g.add(box(24.4, 0.24, 18.2, darkSteel, 16.0, fy, 11.9));
-      for (let mx = 4.0; mx <= 28.0; mx += 2.0) g.add(box(0.1, 9.6, 0.2, darkSteel, mx, 11.6, 20.92));
-      // Scattered warm upper-floor office glow strips
-      for (const [wx, wy] of [[9.0, 8.3], [19.0, 8.3], [15.0, 11.4], [23.0, 14.6]]) {
-        g.add(box(3.4, 1.4, 0.06, warmGlass, wx, wy, 20.95));
-      }
-
-      // Neighboring Curved Glass Skyscraper with Glowing Blue LED Floor Bands on the right
-      const skyX = 39.5, skyZ = 10.5;
-      const tower = new THREE.Mesh(new THREE.CylinderGeometry(6.2, 6.2, 24, 24), darkGlass);
-      tower.position.set(skyX, 12, skyZ); g.add(tower);
-      const ledMat = new THREE.MeshBasicMaterial({ color: 0x2ca2ff });
-      for (let ly = 3.5; ly <= 22.5; ly += 3.1) {
-        const ring = new THREE.Mesh(new THREE.CylinderGeometry(6.26, 6.26, 0.14, 24), ledMat);
-        ring.position.set(skyX, ly, skyZ); g.add(ring);
-      }
+      // Photorealistic 3D office upper stories on y=3.12 + distinct corporate tower & neighboring complex
+      g.add(box(24.4, 0.25, 18.2, darkSteel, 16.0, 3.22, 11.9));
+      placeCityModel('office_main', { x: 16.0, y: 3.18, z: 11.9, w: 24.4, h: 15.8, d: 18.2 });
+      placeCityModel('office_tower', { x: 39.5, y: 0, z: 10.5, w: 13.5, h: 28.0, d: 11.0, ry: -0.14 });
+      placeCityModel('office_neighbor', { x: -13.5, y: 0, z: 11.5, w: 26.0, h: 12.5, d: 14.0, ry: Math.PI / 2 });
+      placeCityModel('city_clinic', { x: 18.0, y: 0, z: -12.0, w: 24.0, h: 11.5, d: 12.0 });
+      placeCityModel('metal_trash_can', { x: 9.2, y: 0, z: 24.2 });
+      placeCityModel('fire_hydrant', { x: 4.9, y: 0, z: 25.4 });
+      placeCityModel('concrete_road_barrier_02', { x: 26.2, y: 0, z: 26.2, ry: 0.18 });
       addStreetLamp(6.5, 25.4, 0xd8e8ff);
-      addStreetLamp(27.5, 25.4, 0xd8e8ff);
+      addStreetLamp(27.5, 25.4, 0xd8e8ff, Math.PI);
     } else if (l.theme === 'warehouse') {
-      const steelSiding = std({ color: 0x3b424b, roughness: 0.55, metalness: 0.5 });
       const haz = std({ color: 0xc2921e, roughness: 0.6 });
-      g.add(box(35.4, 4.2, 20.2, steelSiding, 21.5, 5.2, 13.9));
-      g.add(box(35.6, 0.35, 20.4, darkSteel, 21.5, 7.35, 13.9));
+      g.add(box(35.4, 0.24, 20.2, darkSteel, 21.5, 3.22, 13.9));
+      // Sawtooth industrial warehouse building perched cleanly above playable floor + loading shutter doors
+      placeCityModel('warehouse_main', { x: 21.5, y: 3.16, z: 13.9, w: 35.4, h: 7.4, d: 20.2 });
+      placeCityModel('rollershutter_door', { x: 11.6, y: 0, z: 24.06 });
+      placeCityModel('rollershutter_door', { x: 25.4, y: 0, z: 24.06 });
+      placeCityModel('exterior_aircon_unit', { x: 28.4, y: 2.3, z: 24.15 });
+      placeCityModel('warehouse_depot', { x: -11.5, y: 0, z: 14.0, w: 24.0, h: 8.5, d: 10.5, ry: Math.PI / 2 });
+      placeCityModel('warehouse_depot', { x: 52.0, y: 0, z: 14.0, w: 24.0, h: 8.5, d: 10.5, ry: -Math.PI / 2 });
+      placeCityModel('warehouse_depot', { x: 21.0, y: 0, z: -10.0, w: 28.0, h: 8.5, d: 10.0 });
       g.add(box(5.6, 0.25, 1.6, darkSteel, 16.5, 3.18, 23.8), box(5.6, 0.1, 0.12, haz, 16.5, 3.05, 24.55));
       addSign('WAREHOUSE 04', '#161a1e', '#f0c050', '#c89020', 2.6, 0.48, 16.5, 3.18, 24.62);
       if (quality > 0) { const pl = new THREE.PointLight(0xffb454, 18, 13, 1.5); pl.position.set(16.5, 2.95, 24.1); g.add(pl); }
-      // Stacked shipping containers in the dockyard
       const cont = (x: number, y: number, z: number, col: number, ry = 0) => {
         const c = box(5.8, 2.5, 2.4, std({ color: col, roughness: 0.62, metalness: 0.45 }), x, y, z);
         c.rotation.y = ry; g.add(c);
       };
       cont(7.2, 1.25, 27.6, 0x6b2e26, 0.08); cont(7.2, 3.75, 27.6, 0x2b4554, -0.04);
       cont(31.2, 1.25, 28.0, 0x2b4554, -0.14);
-      // Dockside harbor cranes in the background
       for (const cx of [-2.5, 37.5]) {
         g.add(box(1.1, 16, 1.1, darkSteel, cx, 8, -2), box(1.1, 16, 1.1, darkSteel, cx + 3.2, 8, -2));
         g.add(box(14, 0.9, 1.2, haz, cx + 4, 15.5, -2));
         if (quality > 0) { const pl = new THREE.PointLight(0xffa64d, 24, 24, 1.4); pl.position.set(cx + 4, 14.5, -1); g.add(pl); }
       }
+      placeCityModel('concrete_road_barrier', { x: 11.4, y: 0, z: 29.8, ry: 0.1 });
+      placeCityModel('concrete_road_barrier', { x: 35.8, y: 0, z: 29.4, ry: -0.2 });
+      addStreetLamp(4.8, 25.0, 0xffc888);
+      addStreetLamp(36.0, 25.0, 0xffc888, Math.PI);
     } else if (l.theme === 'hotel') {
       const stone = std({ color: 0x3b3530, roughness: 0.65 });
       const brass = std({ color: 0xc29848, roughness: 0.3, metalness: 0.8 });
-      // Wide marble plaza entry runner + brass columns + coffered gold canopy
       g.add(box(7.2, 0.08, 3.2, std({ color: 0x9b948a, roughness: 0.32, metalness: 0.15 }), 22.5, 0.03, 25.5));
       for (const px of [20.4, 24.6]) {
         const c = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 3.3, 16), brass);
@@ -407,18 +438,18 @@ export class LevelView {
       }
       addShrub(18.6, 25.5); addShrub(26.4, 25.5);
       addTree(16.2, 25.8, 1.65); addTree(36.6, 26.2, 1.65);
-      // 5-Story Limestone & Lit Guest-Window Hotel Tower
-      g.add(box(38.2, 14.2, 21.2, stone, 23.0, 10.3, 14.4));
-      for (let fy = 5.0; fy <= 14.5; fy += 3.1) {
-        g.add(box(38.4, 0.16, 21.4, brass, 23.0, fy - 1.4, 14.4));
-        for (let wx = 7.0; wx <= 39.0; wx += 4.0) {
-          const lit = ((wx + fy) % 3) !== 0;
-          g.add(box(1.8, 1.4, 0.12, lit ? warmGlass : darkGlass, wx, fy, 25.02));
-        }
-      }
+      // Roof deck + towering Marina-style hotel skyscraper above the lobby & neighboring residential blocks
+      g.add(box(38.4, 0.28, 21.4, stone, 23.0, 3.24, 14.4));
+      placeCityModel('hotel_main', { x: 23.0, y: 3.26, z: 14.4, w: 38.4, h: 24.0, d: 21.4 });
+      placeCityModel('hotel_neighbor', { x: -5.5, y: 0, z: 15.5, w: 12.0, h: 15.5, d: 13.0, ry: Math.PI / 2 });
+      placeCityModel('hotel_neighbor', { x: 50.5, y: 0, z: 15.5, w: 12.0, h: 15.5, d: 13.0, ry: -Math.PI / 2 });
+      placeCityModel('office_neighbor', { x: 23.0, y: 0, z: -12.0, w: 30.0, h: 12.5, d: 14.0 });
+      placeCityModel('fire_hydrant', { x: 14.4, y: 0, z: 26.8 });
+      placeCityModel('metal_trash_can', { x: 28.4, y: 0, z: 25.8 });
+      addStreetLamp(13.5, 26.4, 0xffd59e);
+      addStreetLamp(38.5, 26.4, 0xffd59e, Math.PI);
     } else if (l.theme === 'bank') {
       const limestone = std({ color: 0x767a82, roughness: 0.62 });
-      // Classical steps + 4 monumental fluted columns + entablature + triangular pediment
       g.add(box(14.0, 0.12, 3.6, limestone, 15.5, 0.05, 25.8));
       for (const cx of [11.2, 13.4, 17.6, 19.8]) {
         const col = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.46, 6.4, 16), limestone);
@@ -428,28 +459,39 @@ export class LevelView {
       addSign('NORDIA BANK', '#141a22', '#e8edf2', '#8eb6e0', 4.0, 0.56, 15.5, 6.95, 26.52);
       const ped = new THREE.Mesh(new THREE.ConeGeometry(6.4, 2.2, 3), limestone);
       ped.rotation.y = Math.PI / 6; ped.scale.set(1.0, 1.0, 0.35); ped.position.set(15.5, 8.6, 25.1); g.add(ped);
-      // 2nd story granite bank wing + security bollards
-      g.add(box(36.2, 4.4, 21.2, granite, 22.0, 5.4, 14.4));
-      for (let wx = 7.5; wx <= 37.5; wx += 4.2) g.add(box(1.5, 2.1, 0.12, warmGlass, wx, 5.2, 25.02));
+      // Stone upper bank building on y=3.24 + classical historic annex buildings flanking the street
+      g.add(box(36.2, 0.28, 21.2, limestone, 22.0, 3.24, 14.4));
+      placeCityModel('bank_main', { x: 22.0, y: 3.26, z: 14.4, w: 36.2, h: 14.5, d: 21.2 });
+      placeCityModel('bank_annex', { x: -6.5, y: 0, z: 17.0, w: 18.5, h: 12.5, d: 12.0, ry: Math.PI / 2 });
+      placeCityModel('bank_annex', { x: 50.5, y: 0, z: 17.0, w: 18.5, h: 12.5, d: 12.0, ry: -Math.PI / 2 });
+      placeCityModel('office_main', { x: 22.0, y: 0, z: -13.0, w: 26.0, h: 16.0, d: 15.0 });
       for (const bx of [9.6, 11.2, 12.8, 18.2, 19.8]) addBollard(bx, 27.1);
       addShrub(12.3, 25.7); addShrub(18.7, 25.7);
       addTree(7.8, 26.2, 1.6); addTree(30.8, 26.2, 1.6);
       if (quality > 0) {
         for (const lx of [12.5, 15.5, 18.5]) { const pl = new THREE.PointLight(0xffdfb8, 18, 12, 1.5); pl.position.set(lx, 5.8, 25.8); g.add(pl); }
       }
+      placeCityModel('concrete_road_barrier_02', { x: 21.8, y: 0, z: 28.4 });
+      placeCityModel('fire_hydrant', { x: 6.4, y: 0, z: 27.4 });
+      addStreetLamp(6.2, 26.8, 0xffe4b8);
+      addStreetLamp(32.5, 26.8, 0xffe4b8, Math.PI);
     } else if (l.theme === 'club') {
       const brick = std({ map: T.brickTex('club_ext', '#261e2a', '#1b1520') });
-      // Narrow brick alley framing + 2nd floor brick club facade + glowing ECLIPSE neon sign
-      g.add(box(32.2, 4.4, 21.2, brick, 20.0, 5.4, 13.4));
+      g.add(box(32.2, 0.26, 21.2, brick, 20.0, 3.22, 13.4));
+      placeCityModel('club_main', { x: 20.0, y: 3.24, z: 13.4, w: 32.2, h: 13.5, d: 21.2 });
+      placeCityModel('club_alley', { x: -4.2, y: 0, z: 22.0, w: 14.0, h: 12.0, d: 14.0, ry: Math.PI / 2 });
+      placeCityModel('club_alley', { x: 34.5, y: 0, z: 24.5, w: 14.0, h: 12.0, d: 14.0, ry: -Math.PI / 2 });
+      placeCityModel('city_clinic', { x: 48.0, y: 0, z: 12.0, w: 18.0, h: 11.0, d: 11.0, ry: -Math.PI / 2 });
+      placeCityModel('modular_fire_escape', { x: 4.8, y: 2.6, z: 27.0, ry: Math.PI / 2, scale: 0.72 });
+      placeCityModel('metal_trash_can', { x: 6.8, y: 0, z: 28.4, ry: Math.PI / 2 });
+      placeCityModel('street_lamp_02', { x: 6.2, y: 3.4, z: 26.6, ry: Math.PI / 2 });
       g.add(box(1.2, 6.5, 6.0, brick, 5.5, 3.25, 27.0), box(1.2, 6.5, 6.0, brick, 24.0, 3.25, 27.0));
       addSign('ECLIPSE', '#12061c', '#ff52e0', '#d438ff', 3.4, 0.72, 13.5, 3.25, 24.06);
       addShrub(7.6, 24.6); addShrub(15.2, 24.6);
-      // Magenta & cyan alley sconces
       for (const [sx, sz, col] of [[6.15, 25.5, 0xd438ff], [6.15, 28.0, 0x38c8ff], [23.35, 25.5, 0x38c8ff], [23.35, 28.0, 0xd438ff]] as const) {
         g.add(box(0.14, 0.45, 0.2, new THREE.MeshBasicMaterial({ color: col }), sx, 2.3, sz));
         if (quality > 0) { const pl = new THREE.PointLight(col, 14, 10, 1.6); pl.position.set(sx + (sx < 13 ? 0.5 : -0.5), 2.3, sz); g.add(pl); }
       }
-      // Mirror disco ball & animated laser beams inside the dancefloor
       const ballGrp = new THREE.Group(); ballGrp.position.set(14.0, 2.62, 16.5);
       const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 1), std({ color: 0xe6eeff, metalness: 0.95, roughness: 0.08, emissive: 0x384460 }));
       ballGrp.add(ball); g.add(ballGrp); this.discoBall = ballGrp;
@@ -465,26 +507,43 @@ export class LevelView {
     } else if (l.theme === 'raid') {
       const sx = l.playerSpawn.x, sz = l.playerSpawn.z;
       const conc = std({ color: 0x4b4e54, roughness: 0.85 });
-      const meshMat = std({ color: 0x7a828c, metalness: 0.6, roughness: 0.45, wireframe: true });
-      // Upper compound roof & yard floodlight towers + perimeter security fence with open entry gate
-      g.add(box(32.2, 3.2, 20.4, conc, 20.0, 4.8, 13.0));
+      g.add(box(32.2, 0.26, 20.4, conc, 20.0, 3.22, 13.0));
+      placeCityModel('raid_outpost', { x: 20.0, y: 3.24, z: 13.0, w: 32.2, h: 14.5, d: 20.4 });
+      placeCityModel('raid_compound', { x: -4.5, y: 0, z: 13.0, w: 12.0, h: 14.0, d: 9.0, ry: Math.PI / 2 });
+      placeCityModel('raid_graffiti', { x: 47.0, y: 0, z: 13.5, w: 14.0, h: 7.5, d: 18.0, ry: -Math.PI / 2 });
+      placeCityModel('city_clinic', { x: 20.0, y: 0, z: -11.0, w: 24.0, h: 11.0, d: 11.0 });
+
       const fz = sz - 1.5;
-      for (let fx = 3.0; fx <= 37.0; fx += 2.0) {
-        if (Math.abs(fx - sx) < 2.6) continue; // open gate gap
-        g.add(box(0.1, 2.3, 0.1, darkSteel, fx, 1.15, fz));
-        g.add(box(2.0, 2.1, 0.04, meshMat, fx, 1.1, fz));
-      }
-      // Tall yard security floodlight towers
+      // Real Poly Haven CC0 modular chainlink fence panels + posts flanking the open entry gate
+      extPromises.push(loadCityAsset('modular_chainlink_fence').then(kit => {
+        if (!kit || this.disposed) return;
+        const panelSrc = kit.getObjectByName('modular_chainlink_fence_double');
+        const postSrc = kit.getObjectByName('modular_chainlink_post_middle');
+        if (!panelSrc || !postSrc) return;
+        for (let fx = 3.0; fx <= 37.0; fx += 2.0) {
+          if (Math.abs(fx - sx) < 2.6) continue;
+          const panel = panelSrc.clone(true);
+          panel.position.set(fx, 1.24, fz);
+          panel.scale.set(1.04, 0.96, 1.0);
+          g.add(panel);
+          const post = postSrc.clone(true);
+          post.position.set(fx - 1.0, 1.26, fz);
+          g.add(post);
+        }
+      }));
       for (const tx of [5.0, 36.2]) {
         g.add(box(0.22, 7.5, 0.22, darkSteel, tx, 3.75, fz + 0.3));
         g.add(box(0.9, 0.3, 0.2, soffitMat, tx, 7.4, fz + 0.3));
         if (quality > 0) { const pl = new THREE.PointLight(0xdfe8ff, 26, 22, 1.4); pl.position.set(tx, 7.1, fz + 0.6); g.add(pl); }
       }
+      placeCityModel('concrete_road_barrier', { x: sx - 3.6, y: 0, z: fz + 1.1, ry: 0.2 });
+      placeCityModel('metal_trash_can', { x: 6.4, y: 0, z: fz + 0.9 });
       addTree(4.5, fz + 1.4, 1.5); addTree(36.6, fz + 1.4, 1.5);
     }
     if (l.vehicle) {
-      this.readyPromise = this.spawnPoliceUnit(l.vehicle.x, l.vehicle.z, l.vehicle.yaw, quality);
+      extPromises.push(this.spawnPoliceUnit(l.vehicle.x, l.vehicle.z, l.vehicle.yaw, quality));
     }
+    this.readyPromise = Promise.all(extPromises).then(() => {});
   }
   private async spawnPoliceUnit(x: number, z: number, yaw: number, quality: number) {
     try {

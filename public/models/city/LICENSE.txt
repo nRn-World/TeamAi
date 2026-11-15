@@ -2,7 +2,7 @@ City Architecture & Street Furniture 3D Models — Licenses & Attributions
 ===========================================================================
 
 1. Poly Haven (CC0 1.0 Universal — Public Domain)
-   Source: https://polyhaven.com/ (meshopt/WebP mobile builds adapted via https://github.com/zeyadpublish/swat-shooter)
+   Source: https://polyhaven.com/ (meshopt/WebP mobile builds adapted via https://github.com/zeyadpublish/swat-shooter and https://github.com/andersanders806-dev/dopesick-game)
    - modular_urban_apartments_facade.glb   (Modular Urban Apartments Facade)
    - modular_factory_facade.glb            (Modular Factory Facade)
    - concrete_road_barrier.glb             (Concrete Road Barrier)
@@ -10,9 +10,36 @@ City Architecture & Street Furniture 3D Models — Licenses & Attributions
    - fire_hydrant.glb                      (Fire Hydrant)
    - metal_trash_can.glb                   (Metal Trash Can)
    - exterior_aircon_unit.glb              (Exterior Aircon Unit)
+   - rollershutter_door.glb                (Rollershutter Door)
+   - modular_chainlink_fence.glb           (Modular Chainlink Fence — WebP + meshopt packed)
+   - modular_fire_escape.glb               (Modular Fire Escape — WebP + meshopt packed)
 
 2. Josh Dean / Poly Haven (CC0 1.0 Universal — Public Domain)
    Sources:
    - https://polyhaven.com/a/street_lamp_01
    - https://polyhaven.com/a/street_lamp_02
    Files: street_lamp_01.glb, street_lamp_02.glb
+
+3. aitortilla01 (CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/)
+   - office_main.glb: Based on "Low rise wall to wall office building" (https://sketchfab.com/3d-models/low-rise-wall-to-wall-office-building-1f341f8261af4fb6a0dc910c2aae37a6) by aitortilla01 (https://sketchfab.com/aitortilla01). Changes: normalized to metric pivot, textures converted to WebP, meshopt-compressed.
+   - office_neighbor.glb: Based on "Low rise wall to wall office building" (https://sketchfab.com/3d-models/low-rise-wall-to-wall-office-building-dcf171dca9174000a0fa8d44660253d0) by aitortilla01. Changes: normalized, WebP textures, meshopt-compressed.
+   - bank_main.glb: Based on "Low rise wall to wall office building" (https://sketchfab.com/3d-models/low-rise-wall-to-wall-office-building-be7583ca46f5411d8921ac85d8c33f3f) by aitortilla01. Changes: normalized, WebP textures, meshopt-compressed.
+
+4. 99.Miles (CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/)
+   - office_tower.glb: Based on "[FREE] Atlanta, Corperate Office Building" (https://sketchfab.com/3d-models/free-atlanta-corperate-office-building-d96380fb001345cca9a9be121f3e43d5) by 99.Miles (https://sketchfab.com/99.Miles). Changes: rotated to +Z front, normalized, WebP textures, meshopt-compressed.
+   - bank_annex.glb: Based on "Realistic chicago buildings" (https://sketchfab.com/3d-models/realistic-chicago-buildings-c4a3993ef1e84e6d9d5a15c78da88aae) by 99.Miles (https://sketchfab.com/Mazen220). Changes: isolated Building_6, normalized, WebP textures, meshopt-compressed.
+
+5. OmegaRedZA (CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/)
+   - warehouse_main.glb: Based on "Warehouse Building" (https://sketchfab.com/3d-models/warehouse-building-0c37b0f92cb54e07a1e1c6c3df9f8439) by OmegaRedZA (https://sketchfab.com/OmegaRedZA). Changes: normalized to metric pivot, WebP textures, meshopt-compressed.
+
+6. asleshka (CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/)
+   - hotel_main.glb: Based on "Skyscraper Hotel Apartments Marina" (https://sketchfab.com/3d-models/skyscraper-hotel-apartments-marina-70cf84ace9354cb4b0addfe6cf1b4054) by asleshka (https://sketchfab.com/asleshka). Changes: removed dock/water base planes, pool, loungers and palm trees; normalized, WebP textures, meshopt-compressed.
+
+7. Neberkenezer (CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/)
+   - warehouse_depot.glb, club_main.glb, club_alley.glb, city_clinic.glb, raid_outpost.glb: Based on "CCity Building Set 1" (https://sketchfab.com/3d-models/ccity-building-set-1-a2d5c7bfcc2148fb8994864c43dfcc97) by Neberkenezer (https://sketchfab.com/neberkenezer). Changes: extracted individual buildings (FFactory, LM_Paramount1, LM_PawnShop1, LM_Clinic2, Projects), normalized to metric +Z front, WebP textures, meshopt-compressed.
+
+8. nermin (CC BY-SA 4.0 — https://creativecommons.org/licenses/by-sa/4.0/)
+   - hotel_neighbor.glb, raid_compound.glb: Based on "Building Set" (https://sketchfab.com/3d-models/building-set-6ab39c80de944a6cac9ef7a0e43314e6) by nermin (https://sketchfab.com/nermin). Changes: extracted building2 and building8, normalized to metric +Z front, WebP textures, meshopt-compressed; modified assets remain licensed under CC BY-SA 4.0.
+
+9. jimbogies (CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/)
+   - raid_graffiti.glb: Based on "Graffiti Building" (https://sketchfab.com/3d-models/graffiti-building-9e12d721fec84688b73ec381dec272e6) by jimbogies (https://sketchfab.com/jimbogies). Changes: removed asphalt ground plane, normalized, WebP textures, meshopt-compressed.
