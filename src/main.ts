@@ -116,17 +116,27 @@ class Game {
   }
 
   // ---------------- menus ----------------
+  showPlan = false;
   selectMission(i: number) {
     this.mission = i;
     const m = MISSIONS[i];
+    const LOCS = ['KISTA, STOCKHOLM', 'DOCKLANDS, HARBOR', 'CITY CENTER', 'FINANCIAL DISTRICT', 'DOWNTOWN UNDERGROUND', 'OUTSKIRTS COMPOUND'];
+    const OBJS = {
+      clear: 'RESCUE ALL CIVILIANS · NEUTRALIZE THREATS',
+      hostage: 'RESCUE BANK DIRECTOR (VIP) · ARREST CREW',
+      bomb: 'LOCATE & DEFUSE EXPLOSIVE · SECURE AREA',
+    } as const;
     document.querySelectorAll('#mPills .mpill').forEach((el, idx) => el.classList.toggle('on', idx === i));
     $('mTitle').textContent = m.name;
+    $('mLoc').textContent = LOCS[i] ?? 'SECTOR UNKNOWN';
+    $('mObj').textContent = OBJS[m.objective];
     $('mBrief').textContent = m.brief;
+    ($('mPhoto') as HTMLImageElement).src = `./missions/${i}.jpg`;
     this.drawPlan(i, $<HTMLCanvasElement>('mPlan'), 7);
-    $('mFacts').textContent = `${m.suspects} suspects · ${m.civs} civilians · ${m.objective.toUpperCase()}`;
+    $('mFacts').textContent = `${m.suspects} SUSPECTS · ${m.civs} CIVILIANS`;
     const b = $('mBestBadge');
-    if (best[i] != null) { b.textContent = `Best ${best[i]}/100`; b.className = ''; }
-    else { b.textContent = 'Not completed'; b.className = 'none'; }
+    if (best[i] != null) { b.textContent = `BEST ${best[i]}/100`; b.className = ''; }
+    else { b.textContent = 'UNCOMPLETED'; b.className = 'none'; }
   }
   updateRankDock() {
     $('mRank').textContent = `${getRank(career.xp)} · ${career.xp} XP`;
@@ -139,11 +149,19 @@ class Game {
     const pills = $('mPills'); pills.innerHTML = '';
     MISSIONS.forEach((m, i) => {
       const b = document.createElement('button'); b.className = 'mpill';
-      b.innerHTML = `<em>OP ${String(i + 1).padStart(2, '0')}</em><b>${m.name.replace(/^The /, '')}</b>`;
+      b.title = m.name;
+      b.textContent = `0${i + 1}`;
       b.onclick = () => { this.audio.init(); this.audio.ui(); this.selectMission(i); };
       pills.appendChild(b);
     });
     this.selectMission(this.mission);
+
+    $('btnViewMode').onclick = () => {
+      this.audio.init(); this.audio.ui();
+      this.showPlan = !this.showPlan;
+      show('mPhoto', !this.showPlan); show('mPlan', this.showPlan);
+      $('btnViewMode').textContent = this.showPlan ? 'PHOTO' : 'FLOORPLAN';
+    };
 
     document.querySelectorAll<HTMLElement>('#mDiffPips [data-diff]').forEach(b => {
       b.classList.toggle('on', +b.dataset.diff! === S.diff);
@@ -169,7 +187,7 @@ class Game {
     });
     const w = $('micwarn');
     if (!canVoice) { w.className = 'note warn'; w.textContent = 'Microphone unsupported here – use Enter or H wheel for orders.'; }
-    else { w.className = 'note'; w.textContent = 'Voice ready: allow mic access when prompted (or use H / Enter anytime).'; }
+    else { w.className = 'note hidden'; w.textContent = ''; }
   }
   /** Blueprint-style floor plan of a mission, drawn for the menu card / briefing. */
   drawPlan(index: number, c: HTMLCanvasElement, k: number) {
@@ -868,6 +886,10 @@ const modelsDone = loadModels().then(() => {
 if (S.qual > 0) {
   game.menu.env(game.renderer);
   operatorEnv(game.menu.scene.environment);
+  void Promise.all([game.menu.hero(3), game.menu.vehicle('./models/vehicle/marauder.glb')]).then(async ([heroOk]) => {
+    if (!heroOk) { await modelsDone; game.menu.squad(); }
+  });
+} else {
+  void modelsDone.then(() => game.menu.squad());
 }
-void modelsDone;
 (window as any).__ta = game;
