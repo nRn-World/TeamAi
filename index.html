@@ -38,7 +38,10 @@
       <div class="logo">TEAM<span>AI</span></div>
       <div class="tag">Tactical Response Unit</div>
     </div>
-    <div id="micwarn" class="note hidden"></div>
+    <div class="mtop-r">
+      <button type="button" id="btnMenuMusic" class="musicpill" title="Toggle menu music">♪ MUSIC ON</button>
+      <div id="micwarn" class="note hidden"></div>
+    </div>
   </header>
 
   <aside id="armoryCard" class="acard">
@@ -241,6 +244,7 @@
   <div class="form">
     <label>Mouse sensitivity <input id="sSens" type="range" min="0.3" max="3" step="0.05" /></label>
     <label>Volume <input id="sVol" type="range" min="0" max="1" step="0.05" /></label>
+    <label>Menu music <select id="sMusic"><option value="1">On (CO.AG – Digital Blackout)</option><option value="0">Off</option></select></label>
     <label>Speech recognition <select id="sMic"><option value="1">On</option><option value="0">Off</option></select></label>
     <label>Microphone mode <select id="sPtt"><option value="1">Hold V to talk</option><option value="0">Always on</option></select></label>
     <label>Speech recognition engine <select id="sAsr"><option value="local">On this computer (every browser, private)</option><option value="web">Browser service (Chrome and Edge)</option></select></label>
@@ -266,6 +270,9 @@
     <ul class="credits">
       <li><div><b>S.W.A.T. Operator</b><span>the officers, in the menu and in the game</span></div><div class="by">Mateusz Woliński · sketchfab.com/jeandiz</div><div class="src">sketchfab.com/3d-models/swat-operator-9e82fabf26194896b5ad4a364d864eab</div><div class="src">Changes: textures downscaled; rifle and patches attached to the skeleton; in the game the legs, the fall and the aiming pose are driven by the game</div><em>CC BY 4.0</em></li>
       <li><div><b>Paramount Marauder – Armored Military Vehicle</b><span>the armoured truck in the menu</span></div><div class="by">amanpatel9725 · sketchfab.com/amanpatel9725</div><div class="src">sketchfab.com/3d-models/paramount-marauder-armored-military-vehicle-4f8e9fda901344bfb10c47381511d074</div><div class="src">Changes: rebuilt as one file, simplified, textures downscaled and desaturated, repainted black, light bar and POLICE lettering added</div><em>CC BY 4.0</em></li>
+      <li><div><b>Police SUV with generic livery</b><span>the patrol SUV cruiser in the outdoor menu scene</span></div><div class="by">Innerscene · adapted via mohammedemara48-code/police-command</div><div class="src">github.com/mohammedemara48-code/police-command</div><div class="src">Changes: scaled to scene units with emissive headlight, taillight and beacon accents</div><em>CC0</em></li>
+      <li><div><b>Traffic Cone (Car Kit)</b><span>police perimeter cones in the outdoor menu scene</span></div><div class="by">Kenney · kenney.nl</div><div class="src">kenney.nl/assets/car-kit</div><em>CC0</em></li>
+      <li><div><b>Outdoor Urban Textures</b><span>wet asphalt, concrete sidewalks, brick and modern glass building facades</span></div><div class="by">Poly Haven (polyhaven.com) · mohammedemara48-code/police-command</div><em>CC0</em></li>
       <li><div><b>Low-Poly M4a1</b><span>the officers’ carbine on the lowest graphics setting</span></div><div class="by">TastyTony · sketchfab.com/TastyTony</div><div class="src">sketchfab.com/3d-models/low-poly-m4a1-8cab1cbeb82c4396a154f9fc8771417b</div><div class="src">Changes: scaled, rotated, brighter materials</div><em>CC BY 4.0</em></li>
       <li><div><b>Glock17</b><span>SWAT tactical pistol</span></div><div class="by">sigmuuus · sketchfab.com/sigmuuus</div><div class="src">sketchfab.com/3d-models/glock17-0ed3cb4fe262459f978bb3d4893f5d2b</div><div class="src">Changes: scaled, two-tone nitride/polymer finish, RMR optic, tritium sights, X300 weapon light</div><em>CC BY 4.0</em></li>
       <li><div><b>Animated FPS hands (rifle animation pack)</b><span>first-person arms and rifle</span></div><div class="by">Cransh · sketchfab.com/ccransh</div><div class="src">sketchfab.com/3d-models/animated-fps-hands-rifle-animation-pack-5f2d0ed780a94724b36ab505f7564057</div><div class="src">Changes: textures downscaled, suppressor hidden, left arm hidden in pistol mode</div><em>CC BY 4.0</em></li>
@@ -275,6 +282,8 @@
     </ul>
     <h3>Sound and voices</h3>
     <ul class="credits">
+      <li><div><b>«Digital Blackout»</b><span>main menu tactical ambient music</span></div><div class="by">Music by CO.AG · coagmusic@gmail.com</div><div class="src">youtube.com/@coagmusic · via Fris0uman/CDDA-Music-Packs (written authorization for free &amp; CC BY 4.0 use with credit)</div><em>CC BY 4.0</em></li>
+      <li><div><b>Rain (loopable)</b><span>outdoor rainy night ambience in the main menu</span></div><div class="by">Ylmir · opengameart.org/content/rain-loopable</div><em>CC0</em></li>
       <li><div><b>The Free Firearm Sound Library</b><span>gunshots – recordings of real firearms</span></div><div class="by">Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney</div><div class="src">opengameart.org/content/the-free-firearm-sound-library</div><em>CC0</em></li>
       <li><div><b>Reload and handling sounds</b><span>«Gun Reload Sounds», «Gun Reload Sound Effects», «Handgun Reload Sound Effect», «Equipment Clicks III»</span></div><div class="by">SpringySpringo · BMacZero (Brian MacIntosh) · zer0_sol · LFA</div><div class="src">opengameart.org · cut and normalised in the project Turf War (github.com/madeyexz/turfwar, MIT)</div><em>CC0</em></li>
       <li><div><b>RPG Audio</b><span>doors – recorded handle, latch, hinge creak and the door meeting its frame</span></div><div class="by">Kenney (kenney.nl)</div><div class="src">kenney.nl/assets/rpg-audio · mixed to mono and levelled</div><em>CC0</em></li>

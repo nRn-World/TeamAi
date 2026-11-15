@@ -26,3 +26,7 @@ Prop, Plant, Flower & Furniture 3D Models — Licenses & Attributions
    - bed.glb               "Wooden Bed" by toAflame
    - locker.glb            "Locker" by andree
    - bar.glb               "Cabinet – Bar counter" by Adam
+
+4. Kenney (CC0 1.0 Universal — Public Domain)
+   Source: https://kenney.nl/assets/car-kit
+   - traffic_cone.glb      (Traffic Cone)

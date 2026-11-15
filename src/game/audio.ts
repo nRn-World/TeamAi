@@ -30,6 +30,73 @@ export class GameAudio {
     void this.loadLines(); void this.loadSfx();
     const hum = c.createBufferSource(); hum.buffer = this.noise; hum.loop = true; const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 140; const hg = c.createGain(); hg.gain.value = 0.05; hum.connect(lp); lp.connect(hg); hg.connect(this.master); hum.start();
   }
+  // ---- menu music & outdoor rain ambience (public/music) ----
+  private menuBufs: { music?: AudioBuffer; rain?: AudioBuffer } = {};
+  private menuLoading: Promise<void> | null = null;
+  private menuNodes: { src: AudioBufferSourceNode; gain: GainNode; target: number }[] = [];
+  private menuWant = false;
+  private menuPlaying = false;
+  private menuSeq = 0;
+  private loadMenuAudio() {
+    if (this.menuLoading || !this.ctx) return this.menuLoading;
+    const c = this.ctx;
+    const grab = async (url: string) => {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return undefined;
+        return await c.decodeAudioData(await res.arrayBuffer());
+      } catch { return undefined; }
+    };
+    this.menuLoading = Promise.all([grab('./music/menu_theme.ogg'), grab('./music/rain_soft.ogg')]).then(([music, rain]) => {
+      this.menuBufs.music = music;
+      this.menuBufs.rain = rain;
+    });
+    return this.menuLoading;
+  }
+  /** Fades custom menu music & soft outdoor rain ambience in on the title screen and out during missions. */
+  async setMenuMusic(active: boolean) {
+    this.menuWant = active;
+    const seq = ++this.menuSeq;
+    if (!this.ctx) return;
+    if (!active) {
+      if (!this.menuPlaying && !this.menuNodes.length) return;
+      this.menuPlaying = false;
+      const c = this.ctx, t = c.currentTime;
+      const nodes = this.menuNodes.splice(0);
+      for (const n of nodes) {
+        try {
+          n.gain.gain.cancelScheduledValues(t);
+          n.gain.gain.setValueAtTime(n.gain.gain.value, t);
+          n.gain.gain.linearRampToValueAtTime(0, t + 0.65);
+          n.src.stop(t + 0.72);
+        } catch { /* already stopped */ }
+      }
+      return;
+    }
+    if (this.menuPlaying) return;
+    await this.loadMenuAudio();
+    if (!this.menuWant || seq !== this.menuSeq || !this.ctx || this.menuPlaying) return;
+    const c = this.ctx;
+    if (c.state === 'suspended') { try { await c.resume(); } catch { /* ignore */ } }
+    if (!this.menuWant || seq !== this.menuSeq) return;
+    this.menuPlaying = true;
+    const t = c.currentTime;
+    const spawn = (buf: AudioBuffer | undefined, target: number) => {
+      if (!buf) return;
+      const src = c.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      const gain = c.createGain();
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(target, t + 1.4);
+      src.connect(gain);
+      gain.connect(this.master);
+      src.start(t);
+      this.menuNodes.push({ src, gain, target });
+    };
+    spawn(this.menuBufs.music, 0.34);
+    spawn(this.menuBufs.rain, 0.12);
+  }
   // ---- recorded voice lines (public/voice, generated with the Apache-2.0 Kokoro speech model; one set of voices per role) ----
   private lines = new Map<string, AudioBuffer>(); private linesReq = false; linesReady = false;
   private async loadLines() {
