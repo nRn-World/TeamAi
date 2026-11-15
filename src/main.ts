@@ -671,7 +671,27 @@ class Game {
         break;
       }
       case 'c2': { const q = this.pan(e.x, e.z); this.audio.c2(q.d, q.pan); fx.flashAt(e.x, 1.2, e.z, 600, 0.12, 0xffa848); fx.burst(e.x, 1.1, e.z, 45, 0xffb860, 6, 4, 0.6); fx.burst(e.x, 1.1, e.z, 25, 0x8a6d48, 4, 6, 0.9); break; }
-      case 'glass': { const q = this.pan(e.x, e.z); this.audio.glass(q.d, q.pan); fx.burst(e.x, 1.5, e.z, 22, 0xb8e8ff, 3.8, 7, 0.65); break; }
+      case 'glass': { const q = this.pan(e.x, e.z); this.audio.glass(q.d, q.pan); fx.burst(e.x, 1.5, e.z, 28, 0xb8e8ff, 4.2, 7, 0.7); break; }
+      case 'break': {
+        const q = this.pan(e.x, e.z);
+        if (e.kind === 'pc') {
+          this.audio.glass(q.d, q.pan); this.audio.impact(q.d, q.pan);
+          fx.flashAt(e.x, e.y, e.z, 18, 0.08, 0x70c8ff);
+          fx.burst(e.x, e.y, e.z, 18, 0x70c8ff, 3.6, 6, 0.45);
+          fx.burst(e.x, e.y, e.z, 14, 0xffaa44, 4.4, 8, 0.35);
+          fx.burst(e.x, e.y, e.z, 12, 0x1a2028, 2.5, 7, 0.6);
+        } else if (e.kind === 'server') {
+          this.audio.impact(q.d, q.pan);
+          fx.flashAt(e.x, e.y, e.z, 22, 0.09, 0x40e890);
+          fx.burst(e.x, e.y, e.z, 20, 0x40e890, 4.2, 6, 0.4);
+          fx.burst(e.x, e.y, e.z, 16, 0xffc040, 4.6, 8, 0.35);
+        } else {
+          this.audio.glass(q.d, q.pan);
+          fx.burst(e.x, e.y, e.z, 20, 0xb8e8ff, 3.6, 7, 0.6);
+          fx.burst(e.x, e.y, e.z, 12, 0x3b6e35, 2.8, 7, 0.6);
+        }
+        break;
+      }
       case 'power': { if (this.ambLight) this.ambLight.intensity = e.on ? (S.qual ? 0.45 : 1.1) : 0.1; this.audio.nvg(!e.on); this.log(e.on ? 'Power restored.' : 'Building power cut! NVG (N) or Flashlight (T) recommended.', 'me'); break; }
       case 'bomb': { if (e.kind === 'defused') { this.audio.defuse(); this.log('Explosive device disarmed!', 'me'); } else { this.audio.c2(0, 0); fx.flashAt(e.x, 1, e.z, 900, 0.2, 0xff4020); this.log('Explosive detonated!', 'warn'); } break; }
       case 'hurt': this.views.get(e.a)?.wound(); if (e.a === p) { this.dmgFx = 1; this.audio.hurt(); this.recoil += 0.03; } else if (e.a.kind !== 'officer') { /* hit marker only for own shots handled below */ } break;

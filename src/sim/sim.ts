@@ -1,5 +1,5 @@
 // TeamAi tactical simulation. Pure logic: no DOM, no three.js – runs headless in tests.
-import { Level, Door, Pt, Room, buildLevel, mulberry32, roomAt, WALL, DOOR, LOW, HIGH, WINDOW } from './level';
+import { Level, Door, Pt, Room, buildLevel, mulberry32, roomAt, OUT, WALL, DOOR, LOW, HIGH, WINDOW } from './level';
 import { findPath, nearestWalkable, walkLine } from './nav';
 import { buildLocalReport } from './context';
 
@@ -38,7 +38,9 @@ export type Ev =
   | { t: 'hurt'; a: Actor; head: boolean } | { t: 'death'; a: Actor }
   | { t: 'door'; door: Door; open: boolean; kick?: boolean } | { t: 'say'; a: Actor; text: string; shout?: boolean }
   | { t: 'shout'; a: Actor } | { t: 'bang'; x: number; z: number } | { t: 'throw'; x: number; z: number }
-  | { t: 'c2'; x: number; z: number } | { t: 'glass'; x: number; z: number } | { t: 'power'; on: boolean }
+  | { t: 'c2'; x: number; z: number } | { t: 'glass'; x: number; z: number }
+  | { t: 'break'; kind: 'pc' | 'server' | 'glass'; x: number; y: number; z: number }
+  | { t: 'power'; on: boolean }
   | { t: 'taser'; x: number; y: number; z: number; x2: number; y2: number; z2: number }
   | { t: 'bomb'; kind: 'defused' | 'detonate'; x: number; z: number }
   | { t: 'cuff'; a: Actor; by: Actor } | { t: 'surrender'; a: Actor } | { t: 'marker'; x: number; z: number; team: Team }
@@ -110,6 +112,8 @@ export class Sim {
   teams: Record<Team, { order: Order; fire: 'free' | 'hold'; cuffSay?: number }>;
   grenades: { x: number; y: number; z: number; vx: number; vy: number; vz: number; t: number }[] = [];
   brokenWindows = new Set<number>();
+  brokenProps = new Set<number>();
+  brokenDoorGlass = new Set<number>();
   powerOn = true;
   bomb: BombState | null = null;
   stats: Stats = { shotsFired: 0, suspectsKilled: 0, suspectsArrested: 0, civsSecured: 0, civsKilled: 0, civsKilledByPolice: 0, officersDown: 0, unauthorized: 0, c2Used: 0, nonLethalHits: 0 };
@@ -170,6 +174,10 @@ export class Sim {
     if (c === DOOR) return this.doorAtCell(cx, cz)!.open < 0.5;
     return false; // WINDOW and LOW allow line of sight!
   }
+  isGlassDoor(d: Door) {
+    const t = this.level.theme;
+    return (t === 'office' || t === 'hotel' || t === 'bank') && (this.cell(d.cx, d.cz + 1) === OUT || this.cell(d.cx, d.cz - 1) === OUT);
+  }
   breakWindow(cx: number, cz: number) {
     const k = cz * this.level.w + cx;
     if (this.cell(cx, cz) !== WINDOW || this.brokenWindows.has(k)) return false;
@@ -177,6 +185,34 @@ export class Sim {
     this.events.push({ t: 'glass', x: cx + 0.5, z: cz + 0.5 });
     this.noise(cx + 0.5, cz + 0.5, 16);
     return true;
+  }
+  private breakProp(cx: number, cz: number, x: number, y: number, z: number): boolean {
+    const prop = this.level.propAt.get(cz * this.level.w + cx);
+    if (!prop) return false;
+    const pk = prop.cz * this.level.w + prop.cx;
+    if (this.brokenProps.has(pk)) return false;
+    if (prop.kind === 'pc' || prop.kind === 'desk') {
+      if (y < 0.72 || y > 1.38) return false;
+      this.brokenProps.add(pk);
+      this.events.push({ t: 'break', kind: 'pc', x, y, z });
+      this.noise(x, z, 12);
+      return true;
+    }
+    if (prop.kind === 'server') {
+      if (y < 0.35 || y > 2.2) return false;
+      this.brokenProps.add(pk);
+      this.events.push({ t: 'break', kind: 'server', x, y, z });
+      this.noise(x, z, 14);
+      return true;
+    }
+    if (prop.kind === 'plant') {
+      if (y < 0.1 || y > 1.65) return false;
+      this.brokenProps.add(pk);
+      this.events.push({ t: 'break', kind: 'glass', x, y, z });
+      this.noise(x, z, 10);
+      return true;
+    }
+    return false;
   }
   los(x1: number, z1: number, x2: number, z2: number) {
     const dx = x2 - x1, dz = z2 - z1, d = Math.hypot(dx, dz), n = Math.ceil(d / 0.2);
@@ -197,14 +233,14 @@ export class Sim {
     const c = this.cell(cx, cz);
     return c === WALL || c === LOW || c === HIGH || c === WINDOW;
   }
-  private hitDoorLeaf3D(x: number, y: number, z: number) {
-    if (y >= 2.2) return false;
+  private hitDoorLeaf3D(x: number, y: number, z: number): Door | null {
+    if (y >= 2.2) return null;
     for (const d of this.level.doors) {
       if (Math.abs(d.cx + 0.5 - x) > 1.6 || Math.abs(d.cz + 0.5 - z) > 1.6) continue;
       const seg = doorLeafSegment(d);
-      if (closestOnSeg(x, z, seg.hx, seg.hz, seg.tx, seg.tz).d < 0.042) return true;
+      if (closestOnSeg(x, z, seg.hx, seg.hz, seg.tx, seg.tz).d < 0.042) return d;
     }
-    return false;
+    return null;
   }
   private hitExterior3D(x: number, y: number, z: number) {
     const l = this.level;
@@ -232,9 +268,37 @@ export class Sim {
         if (breakGlass) this.breakWindow(cx, cz);
         continue; // bullets pass through window glass!
       }
-      if (y < 3 && (c === WALL || (c === WINDOW && y < 0.9) || (c === WINDOW && y > 2.3) || (c === HIGH && y < 2.2) || (c === LOW && y < 0.85) || (c === DOOR && y >= 2.2)))
+      if (c === LOW && y >= 0.72 && y <= 1.38) {
+        const pr = this.level.propAt.get(cz * this.level.w + cx);
+        if (pr && (pr.kind === 'pc' || pr.kind === 'desk')) {
+          const pcx = pr.cx + (pr.w ?? 1) / 2, pcz = pr.cz + (pr.d ?? 1) / 2;
+          if (Math.hypot(x - pcx, z - pcz) < 0.72) {
+            if (breakGlass) this.breakProp(cx, cz, x, y, z);
+            return { kind: 'wall' as const, x, y, z, d, actor: null, head: false };
+          }
+        }
+      }
+      if (y < 3 && (c === WALL || (c === WINDOW && y < 0.9) || (c === WINDOW && y > 2.3) || (c === HIGH && y < 2.2) || (c === LOW && y < 0.85) || (c === DOOR && y >= 2.2))) {
+        if (breakGlass && (c === LOW || c === HIGH)) this.breakProp(cx, cz, x, y, z);
         return { kind: 'wall' as const, x, y, z, d, actor: null, head: false };
-      if (this.hitDoorLeaf3D(x, y, z) || this.hitExterior3D(x, y, z))
+      }
+      const hitDoor = this.hitDoorLeaf3D(x, y, z);
+      if (hitDoor) {
+        if (this.isGlassDoor(hitDoor) && y >= 0.12 && y <= 2.1) {
+          const seg = doorLeafSegment(hitDoor);
+          const distHinge = Math.hypot(x - seg.hx, z - seg.hz);
+          if (distHinge > 0.07 && distHinge < 0.87) {
+            if (breakGlass && !this.brokenDoorGlass.has(hitDoor.id)) {
+              this.brokenDoorGlass.add(hitDoor.id);
+              this.events.push({ t: 'glass', x, z });
+              this.noise(x, z, 16);
+            }
+            continue; // bullets pass through shattered door glass pane!
+          }
+        }
+        return { kind: 'wall' as const, x, y, z, d, actor: null, head: false };
+      }
+      if (this.hitExterior3D(x, y, z))
         return { kind: 'wall' as const, x, y, z, d, actor: null, head: false };
       for (const a of cand) {
         const ex = x - a.x, ez = z - a.z;

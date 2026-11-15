@@ -7,7 +7,7 @@ const r2 = (v: number) => Math.round(v * 100) / 100;
 export interface Snap {
   a: number[][]; d: number[]; o: [string, string, number][]; so?: string[];
   g: number[][]; p: number[][];
-  pw?: number; bm?: [number, number] | null; bw?: number[];
+  pw?: number; bm?: [number, number] | null; bw?: number[]; bp?: number[]; bd?: number[];
   over: number; time: number; st?: unknown;
 }
 
@@ -24,6 +24,8 @@ export function encodeSnap(sim: Sim): Snap {
     pw: sim.powerOn ? 1 : 0,
     bm: sim.bomb ? [r2(sim.bomb.time), sim.bomb.defused ? 1 : 0] : null,
     bw: sim.brokenWindows.size ? [...sim.brokenWindows] : undefined,
+    bp: sim.brokenProps.size ? [...sim.brokenProps] : undefined,
+    bd: sim.brokenDoorGlass.size ? [...sim.brokenDoorGlass] : undefined,
     over: sim.over ? (sim.over.win ? 2 : 1) : 0, time: r2(sim.time), st: sim.over ? sim.stats : undefined,
   };
 }
@@ -57,6 +59,8 @@ export function applySnap(sim: Sim, s: Snap, me: Actor) {
   if (s.pw !== undefined) sim.powerOn = !!s.pw;
   if (s.bm && sim.bomb) { sim.bomb.time = s.bm[0]; sim.bomb.defused = !!s.bm[1]; }
   if (s.bw) for (const k of s.bw) sim.brokenWindows.add(k);
+  if (s.bp) for (const k of s.bp) sim.brokenProps.add(k);
+  if (s.bd) for (const k of s.bd) sim.brokenDoorGlass.add(k);
   sim.time = s.time;
   if (s.over && !sim.over) { if (s.st) Object.assign(sim.stats, s.st); sim.over = { win: s.over === 2 }; }
 }
