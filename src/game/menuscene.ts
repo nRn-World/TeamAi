@@ -126,6 +126,8 @@ export class MenuScene {
   private mixers: THREE.AnimationMixer[] = [];
   private heroMode = false;
   private mx = 0; private my = 0; private cx = 0; private cy = 0;
+  ready = false;
+  private cityReady: Promise<void>;
 
   constructor() {
     const s = this.scene;
@@ -273,10 +275,12 @@ export class MenuScene {
     s.add(this.mist);
 
     // Load real photorealistic Poly Haven CC0 buildings, streetlights, concrete barriers & urban props
-    void this.buildCity();
+    this.cityReady = this.buildCity();
 
     window.addEventListener('mousemove', e => { this.mx = e.clientX / innerWidth - 0.5; this.my = e.clientY / innerHeight - 0.5; });
   }
+
+  whenReady() { return this.cityReady; }
 
   /** Assembles real Poly Haven CC0 modular apartment & industrial buildings, cast-iron streetlamps, concrete barriers and street props. */
   private async buildCity() {
@@ -320,6 +324,7 @@ export class MenuScene {
     const inst = new Map<string, InstEntry>();
     const modCache: Record<string, FacadeModule | null> = {};
     const propCache: Record<string, { nodes: THREE.Object3D[]; origin: THREE.Matrix4 } | null> = {};
+    const cityGroup = new THREE.Group();
 
     const placeNodes = (nodes: THREE.Object3D[], originM: THREE.Matrix4, M: THREE.Matrix4, shadow = true) => {
       const inv = originM.clone().invert();
@@ -435,14 +440,14 @@ export class MenuScene {
       });
       const inner = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0 - 0.65, H - 0.1, z1 - z0 - 0.65), innerMat);
       inner.position.set((x0 + x1) / 2, H / 2 + 0.14, (z0 + z1) / 2);
-      this.scene.add(inner);
+      cityGroup.add(inner);
 
       const roof = new THREE.Mesh(
         new THREE.BoxGeometry(x1 - x0 - 0.1, 0.3, z1 - z0 - 0.1),
         new THREE.MeshStandardMaterial({ color: 0x262b33, roughness: 0.9 }),
       );
       roof.position.set((x0 + x1) / 2, H + 0.14, (z0 + z1) / 2);
-      this.scene.add(roof);
+      cityGroup.add(roof);
     };
 
     const placeProp = (file: string, filter: string, x: number, z: number, rot = 0, y = 0, scale = 1) => {
@@ -491,11 +496,11 @@ export class MenuScene {
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.72 }));
       sp.position.set(lx, 4.1, lz);
       sp.scale.set(2.9, 2.9, 1);
-      this.scene.add(sp);
+      cityGroup.add(sp);
       if (withLight) {
         const pl = new THREE.PointLight(0xffdfb4, lz < -10 ? 18 : 26, 17, 1.55);
         pl.position.set(lx + (lx < 0 ? 0.55 : -0.55), 4.05, lz);
-        this.scene.add(pl);
+        cityGroup.add(pl);
       }
     }
 
@@ -504,7 +509,7 @@ export class MenuScene {
       placeProp('street_lamp_02', '.', wx, wz, Math.PI / 2, wy, 1.0);
       const wl = new THREE.PointLight(0xffd7a3, 10, 10, 1.6);
       wl.position.set(wx + 0.6, wy - 0.1, wz);
-      this.scene.add(wl);
+      cityGroup.add(wl);
     }
     for (const [ax, ay, az] of [[-7.4, 4.1, -9.5], [-7.4, 7.1, -11.5], [-7.4, 4.2, -28.5]]) {
       placeProp('exterior_aircon_unit', '^exterior_aircon_unit$', ax, az, Math.PI / 2, ay, 1.0);
@@ -535,7 +540,7 @@ export class MenuScene {
       im.castShadow = e.shadow;
       im.receiveShadow = true;
       im.computeBoundingSphere();
-      this.scene.add(im);
+      cityGroup.add(im);
     }
 
     // Real CC0 Kenney 3D traffic cones along the perimeter cordon
@@ -547,7 +552,7 @@ export class MenuScene {
         const c = proto.clone(true);
         c.position.set(cx, 0, cz);
         c.scale.setScalar(sMul);
-        this.scene.add(c);
+        cityGroup.add(c);
       }
     } catch { /* optional cones */ }
 
@@ -577,8 +582,10 @@ export class MenuScene {
       wrap.add(car);
       wrap.position.set(-5.0, 0, -16.5);
       wrap.rotation.y = 0.05;
-      this.scene.add(wrap);
+      cityGroup.add(wrap);
     } catch { /* optional parked sedan */ }
+
+    this.scene.add(cityGroup);
   }
 
   /** Put the fallback squad in the scene if detailed operators cannot be loaded. */
@@ -632,7 +639,7 @@ export class MenuScene {
       });
       const w = new THREE.Group();
       w.add(v); w.position.set(C[0], 0, C[1]); w.rotation.y = C[2];
-      this.scene.add(w); this.truck = w;
+      this.truck = w;
       w.updateMatrixWorld(true);
       const meshes: THREE.Mesh[] = [];
       v.traverse((o: any) => { if (o.isMesh) meshes.push(o); });
@@ -645,7 +652,7 @@ export class MenuScene {
         const n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
         const d = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.2), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.6, metalness: 0, polygonOffset: true, polygonOffsetFactor: -4 }));
         d.position.copy(h.point).addScaledVector(n, 0.012); d.lookAt(h.point.clone().add(n));
-        this.scene.add(d); w.attach(d);
+        w.attach(d);
       }
       const top = hit(new THREE.Vector3(C[4], 6, 0), new THREE.Vector3(0, -1, 0));
       const bar = new THREE.Group();
@@ -673,16 +680,18 @@ export class MenuScene {
         sp.scale.set(0.9, 0.9, 1);
         w.add(sp);
       }
-      return true;
-    }).catch(e => { console.warn('vehicle model', e); return false; });
+      return w;
+    }).catch(e => { console.warn('vehicle model', e); return null; });
 
     const patrolJob = this.patrolCar('./models/vehicle/police_suv.glb');
-    const [ok] = await Promise.all([marauderJob, patrolJob]);
-    return ok;
+    const [truckGroup, patrolGroup] = await Promise.all([marauderJob, patrolJob]);
+    if (truckGroup) this.scene.add(truckGroup);
+    if (patrolGroup) this.scene.add(patrolGroup);
+    return !!truckGroup;
   }
 
   /** Realistic CC0 Police SUV cruiser parked to the right-rear with glowing headlights & flashing beacon. */
-  async patrolCar(url: string) {
+  async patrolCar(url: string): Promise<THREE.Group | null> {
     try {
       const g = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(url);
       const v = g.scene;
@@ -733,7 +742,6 @@ export class MenuScene {
       w.add(v);
       w.position.set(PATROL[0], 0, PATROL[1]);
       w.rotation.y = PATROL[2];
-      this.scene.add(w);
       this.patrol = w;
 
       if (!headBox.isEmpty()) {
@@ -760,10 +768,10 @@ export class MenuScene {
       this.suvRed = new THREE.PointLight(0xff2626, 0, 14, 1.6);
       this.suvRed.position.set(0.4, by, bz);
       w.add(this.suvBlue, this.suvRed);
-      return true;
+      return w;
     } catch (e) {
       console.warn('patrol SUV model', e);
-      return false;
+      return null;
     }
   }
 

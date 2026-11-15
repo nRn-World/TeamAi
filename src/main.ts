@@ -663,6 +663,7 @@ class Game {
       await nextFrame();
 
       this.mission = mission; this.seed = seed; this.audio.init(); void this.audio.setMenuMusic(false);
+      document.body.classList.remove('menu-wait');
       this.netTargets.clear(); this.pings = []; this.breachBannerT = 0;
       const sim = this.sim = new Sim(mission, seed, diff, n, mods); if (me) sim.player = sim.players[me];
       sim.players.forEach((pl, i) => {
@@ -1573,7 +1574,12 @@ class Game {
     r.setScissorTest(false);
     r.setViewport(0, 0, innerWidth, innerHeight);
     r.clear();
-    if (this.state === 'menu') { const now = performance.now(), dt = Math.min(0.05, (now - this.menuT) / 1000); this.menuT = now; this.menu.resize(innerWidth / innerHeight); this.menu.update(dt); r.render(this.menu.scene, this.menu.cam); }
+    if (this.state === 'menu') {
+      if (!this.menu.ready) return;
+      const now = performance.now(), dt = Math.min(0.05, (now - this.menuT) / 1000);
+      this.menuT = now; this.menu.resize(innerWidth / innerHeight); this.menu.update(dt);
+      r.render(this.menu.scene, this.menu.cam);
+    }
     else if (this.sim) {
       r.render(this.scene, this.camera); r.clearDepth(); r.render(this.viewScene, this.viewCam);
       if (this.pipOn && S.pip && this.state === 'play') {
@@ -1614,13 +1620,34 @@ const modelsDone = loadModels().then(() => {
   $('modelStatus').textContent = modelsReady ? '' : 'The 3D characters could not be loaded – built-in figures are used.';
 });
 assetsDone = Promise.all([propsDone, weaponsDone, modelsDone]);
+document.body.classList.add('menu-wait');
+const revealMenu = () => {
+  if (game.menu.ready) return;
+  game.menu.ready = true;
+  game.menuT = performance.now();
+  document.body.classList.remove('menu-wait');
+};
+const menuSafety = setTimeout(revealMenu, 6000);
 if (S.qual > 0) {
   game.menu.env(game.renderer);
   operatorEnv(game.menu.scene.environment);
-  void Promise.all([game.menu.hero(3), game.menu.vehicle('./models/vehicle/marauder.glb')]).then(async ([heroOk]) => {
-    if (!heroOk) { await modelsDone; game.menu.squad(); }
+  void Promise.all([
+    game.menu.whenReady(),
+    game.menu.hero(3).then(async heroOk => {
+      if (!heroOk) { await modelsDone; game.menu.squad(); }
+    }),
+    game.menu.vehicle('./models/vehicle/marauder.glb'),
+  ]).finally(() => {
+    clearTimeout(menuSafety);
+    revealMenu();
   });
 } else {
-  void modelsDone.then(() => game.menu.squad());
+  void Promise.all([
+    game.menu.whenReady(),
+    modelsDone.then(() => game.menu.squad()),
+  ]).finally(() => {
+    clearTimeout(menuSafety);
+    revealMenu();
+  });
 }
 (window as any).__ta = game;
