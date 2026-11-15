@@ -6,6 +6,7 @@ import { MenuScene } from './game/menuscene';
 import { operatorEnv } from './game/operator';
 import { loadWeapons, weaponsReady, FpsArms, studioEnv } from './game/weapons';
 import { upgradeViewModel } from './game/world';
+import { loadProps } from './game/props';
 import '@fontsource/barlow-condensed/500.css'; import '@fontsource/barlow-condensed/600.css'; import '@fontsource/barlow-condensed/700.css'; import '@fontsource/barlow/400.css'; import '@fontsource/barlow/600.css';
 import { parseCommands, shouldUseAiBrain, ACTION_LABEL, DIR_LABEL } from './sim/commands';
 import { TacticalAi, AI_MODELS, AiState, AiResult } from './game/ai';
@@ -36,7 +37,7 @@ if (params.has('q')) S.qual = +params.get('q')!;
 const saveSettings = () => localStorage.setItem('teamai.settings', JSON.stringify(S));
 
 // where the animated arms move to when aiming: x, y, z offset and pitch, yaw; carbine then pistol
-const AIMPOS = [[-0.113, 0.036, 0, 0, 0], [-0.03, 0.03, -0.03, 0, 0]];
+const AIMPOS = [[-0.113, 0.036, 0, 0, 0], [-0.0936, 0.0813, -0.02, 0, 0]];
 // the challenges the player and the officers yell; one is picked at random each time
 const SHOUTS = ['Police! Drop the weapon!', 'Police! Get on the ground!', 'Police! Hands up! Now!', 'Get down! Get down on the ground!', 'Drop it! Drop it now!', 'Show me your hands!'];
 interface WeaponSpec { name: string; mag: number; res: number; rate: number; dmg: number; auto: boolean; spread: number; reload: number; kick: number; pellets?: number; nonLethal?: boolean; taser?: boolean; shield?: boolean }
@@ -47,7 +48,7 @@ const PRIMARY_SPECS: Record<PrimaryLoadout, WeaponSpec> = {
   shield: { name: 'SHIELD + PISTOL', mag: 15, res: 90, rate: 0.16, dmg: 26, auto: false, spread: 0.01, reload: 1.5, kick: 0.015, shield: true },
 };
 const SECONDARY_SPECS: Record<SecondaryLoadout, WeaponSpec> = {
-  pistol: { name: 'GLOCK 17', mag: 15, res: 60, rate: 0.15, dmg: 26, auto: false, spread: 0.008, reload: 1.4, kick: 0.016 },
+  pistol: { name: 'GLOCK 17 SWAT', mag: 17, res: 68, rate: 0.15, dmg: 26, auto: false, spread: 0.008, reload: 1.4, kick: 0.016 },
   taser: { name: 'X26 TASER', mag: 2, res: 12, rate: 0.45, dmg: 4, auto: false, spread: 0.006, reload: 1.5, kick: 0.008, nonLethal: true, taser: true },
 };
 const ORDER_LABEL: Record<string, string> = {
@@ -362,6 +363,7 @@ class Game {
     this.nvgLight = new THREE.AmbientLight(0x6aff99, 0);
     this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(0xb8c8ff, 0x2a241c, 0.55));
     const moon = new THREE.DirectionalLight(0xa8c0ff, 0.7); moon.position.set(-8, 14, 6); this.scene.add(moon);
+    this.level?.dispose();
     this.level = new LevelView(sim, S.qual); this.scene.add(this.level.group);
     this.fx = new FX(); this.scene.add(this.fx.group);
     this.views.clear(); for (const a of sim.actors) { if (a === sim.player) continue; const v = new ActorView(a); this.views.set(a, v); this.scene.add(v.root); }
@@ -426,7 +428,7 @@ class Game {
       case 'KeyZ': sim.player.prone = !sim.player.prone; sim.player.crouch = false; break;
       case 'KeyX': this.slow = !this.slow; this.audio.ui(); break;
       case 'Space': { const pl = sim.player; if (pl.prone || pl.crouch) { pl.prone = false; pl.crouch = false; } else if (pl.jumpY <= 0 && pl.alive) this.jumpV = 3.4; break; }
-      case 'Digit1': case 'Digit2': { const w = code === 'Digit1' ? 0 : 1; if (w !== this.weapon) { this.weapon = w; this.reloadT = 0; this.fireCd = 0.35; this.vmKick = -0.5; this.audio.draw(); if (w === 0) this.arms.draw(); } break; }
+      case 'Digit1': case 'Digit2': { const w = code === 'Digit1' ? 0 : 1; if (w !== this.weapon) { this.weapon = w; this.reloadT = 0; this.fireCd = 0.35; this.vmKick = -0.5; this.audio.draw(); if (!this.weaponSpecs[w].shield) this.arms.draw(); } break; }
       case 'Tab': this.selTeam = this.selTeam === 'ALL' ? 'A' : this.selTeam === 'A' ? 'B' : 'ALL'; this.audio.ui(); this.updateHud(true); break;
       case 'Enter': this.setTyping(true); break;
       default: if (quick[code]) { const q = quick[code]; this.exec(q === 'there' ? { team: this.selTeam, action: 'move', dir: 'there' } : { team: this.selTeam, action: q }, true); }
@@ -585,7 +587,7 @@ class Game {
     void tts; const now = performance.now(); if (now - this.shoutT > 900) { this.shoutT = now; this.speak(SHOUTS[0], null, { pitch: 0.7, rate: 1.3, gain: 1 }); } // your own voice yells the challenge, also when you gave it by microphone
     this.log('YOU: Police! Drop the weapon!', 'me');
   }
-  reload() { const w = this.weaponSpecs[this.weapon]; if (this.reloadT > 0 || this.ammo[this.weapon] >= w.mag || this.reserve[this.weapon] <= 0) return; this.reloadT = w.reload; if (this.weapon === 0 && !w.shield) this.arms.reload(w.reload); this.audio.reload(this.weapon === 0 && !w.shield ? 'rifle' : 'pistol', w.reload); }
+  reload() { const w = this.weaponSpecs[this.weapon]; if (this.reloadT > 0 || this.ammo[this.weapon] >= w.mag || this.reserve[this.weapon] <= 0) return; this.reloadT = w.reload; if (!w.shield) this.arms.reload(w.reload); this.audio.reload(this.weapon === 0 && !w.shield ? 'rifle' : 'pistol', w.reload); }
   throwBang() {
     const sim = this.sim!, p = sim.player; if (p.bangs <= 0 || !p.alive) return; const d = this.aimDir(), o = [p.x + d.x * 0.4, this.eye - 0.1, p.z + d.z * 0.4];
     if (this.mirror) this.net.send({ t: 'bang', o, d: [d.x, d.y, d.z] }); else { p.bangs--; sim.throwBang(o[0], o[1], o[2], d.x, d.y, d.z); } this.vmKick = -0.6;
@@ -609,7 +611,7 @@ class Game {
     }
     if (this.mirror && !this.preShot && !w.taser) this.audio.shot(0, 0, true, this.weapon === 0 && !w.shield ? 'rifle' : 'pistol');
     this.preShot = false;
-    this.recoil = Math.min(0.11, this.recoil + w.kick); this.pitch = Math.min(1.45, this.pitch + w.kick * 0.55); this.yaw += (Math.random() - 0.5) * w.kick * 0.5; this.vmKick = 1; if (this.weapon === 0 && !w.shield) this.arms.fire();
+    this.recoil = Math.min(0.11, this.recoil + w.kick); this.pitch = Math.min(1.45, this.pitch + w.kick * 0.55); this.yaw += (Math.random() - 0.5) * w.kick * 0.5; this.vmKick = 1; if (!w.shield) this.arms.fire();
     if (!w.taser) { this.vm.flash.visible = true; this.vm.flash.material.rotation = Math.random() * 6; setTimeout(() => { this.vm.flash.visible = false; }, 45); }
   }
 
@@ -859,7 +861,7 @@ class Game {
     g.rotation.set(Math.max(0, this.vmKick) * 0.07 - rl * 0.7, 0.03 + this.sway.x * 2, rl * 0.5);
     this.vm.rifle.visible = this.weapon === 0 && !ws0.shield; this.vm.pistol.visible = this.weapon === 1 || !!ws0.shield; this.vm.shield.visible = !!ws0.shield; g.visible = p.alive;
     if (this.arms.ready) { // animated arms: the clips do the reloading and walking, the code only adds sway and recoil
-      const a = this.arms.root, rf = this.weapon === 0 && !ws0.shield, dip = rf ? 0 : rl, mv = !p.alive || this.typing || !(K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD')) ? 0 : (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.crouch && !p.prone ? 2 : 1;
+      const a = this.arms.root, rf = this.weapon === 0 && !ws0.shield, dip = 0, mv = !p.alive || this.typing || !(K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD')) ? 0 : (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.crouch && !p.prone ? 2 : 1;
       const wIdx = rf ? 0 : 1;
       const am = AIM[wIdx]; a.position.set(-this.sway.x * (1 - ak * 0.7) + am[0] * ak, this.sway.y * (1 - ak * 0.7) + Math.min(0, this.vmKick) * 0.2 - dip * 0.16 + am[1] * ak, Math.max(0, this.vmKick) * 0.035 + am[2] * ak);
       a.rotation.set(Math.max(0, this.vmKick) * 0.035 * (1 - ak * 0.6) - dip * 0.7 + am[3] * ak, this.sway.x * 2 * (1 - ak * 0.7) + am[4] * ak, dip * 0.5); a.visible = p.alive && !ws0.shield;
@@ -868,7 +870,7 @@ class Game {
     // overlays
     $('dmg').style.opacity = String(Math.max(this.dmgFx, p.hp < 35 && p.alive ? 0.35 : 0, p.alive ? 0 : 0.8)); $('flash').style.opacity = String(Math.min(1, p.flash * 1.6));
     const hm = $('hitmark'); hm.style.opacity = String(this.hitFx);
-    const gap = 6 + this.recoil * 260 + (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD') ? 7 : 0) - (p.crouch ? 2 : 0); $('cross').style.setProperty('--gap', gap * (1 - this.aimK * 0.5) + 'px'); $('cross').style.opacity = String(this.weapon === 0 ? 1 - this.aimK : 1); // the carbine aims with its red dot, the pistol keeps the crosshair
+    const gap = 6 + this.recoil * 260 + (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD') ? 7 : 0) - (p.crouch ? 2 : 0); $('cross').style.setProperty('--gap', gap * (1 - this.aimK * 0.5) + 'px'); $('cross').style.opacity = String(1 - this.aimK); // both primary and tactical RMR pistol aim down sights
     if (this.parsedT > 0) { this.parsedT -= dt; if (this.parsedT <= 0) { $('parsed').textContent = ''; $('heard').textContent = ''; } }
     this.updateHud(); this.drawMap();
     if (this.endT > 0) { this.endT -= dt; if (this.endT <= 0) this.debrief(); }
@@ -881,6 +883,7 @@ class Game {
 }
 
 const game = new Game();
+void loadProps();
 loadWeapons().then(async () => {
   if (weaponsReady) { upgradeViewModel(game.vm); game.menu.upgradeWeapons(); }
   if (S.qual > 0 && await game.arms.load()) { // animated arms replace the static weapon (not on the lowest graphics setting)
