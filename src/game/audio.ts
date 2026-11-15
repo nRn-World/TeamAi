@@ -213,6 +213,29 @@ export class GameAudio {
   hitmark(head: boolean) { if (!this.ctx) return; const o = this.out(0, 0.3, false); this.tone(o, 'triangle', head ? 1500 : 950, head ? 1100 : 700, 0.05, 0.7); }
   impact(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 1.2 / (1 + dist * 0.2)); this.burst(o, 0.05, 'bandpass', 2600 + Math.random() * 1500, 900, 2, 0.8); }
   radio() { if (!this.ctx) return; const o = this.out(0, 0.3, false); this.tone(o, 'square', 1250, 1250, 0.045, 0.4); this.burst(o, 0.09, 'bandpass', 2200, 2000, 1.5, 0.35, 0.05); }
+  radioSquelch(delay = 0.45) { if (!this.ctx) return; const o = this.out(0, 0.22, false); this.burst(o, 0.06, 'bandpass', 2500, 1900, 1.8, 0.45, delay); this.tone(o, 'sine', 1680, 1180, 0.04, 0.35, delay + 0.03); }
+  phoneRing(dist: number, pan: number) {
+    if (!this.ctx) return;
+    const att = Math.max(0.08, 0.65 / (1 + dist * 0.22));
+    const o = this.out(pan, att, true);
+    for (const off of [0, 0.18]) {
+      this.tone(o, 'sine', 1220, 1220, 0.14, 0.35, off);
+      this.tone(o, 'sine', 1540, 1540, 0.14, 0.28, off);
+    }
+  }
+  clubPulse(dist: number, pan: number, muffled = true) {
+    if (!this.ctx) return;
+    const att = Math.max(0.04, (muffled ? 0.36 : 0.72) / (1 + dist * 0.1));
+    const o = this.out(pan, att, !muffled);
+    this.tone(o, 'sine', 96, 44, 0.19, 0.85);
+    if (!muffled) this.burst(o, 0.04, 'bandpass', 1400, 900, 2, 0.16, 0.12);
+  }
+  heartbeat(intensity = 0.5) {
+    if (!this.ctx) return;
+    const o = this.out(0, Math.min(0.65, 0.22 + intensity * 0.4), false);
+    this.tone(o, 'sine', 62, 36, 0.12, 0.8, 0);
+    this.tone(o, 'sine', 56, 32, 0.14, 0.6, 0.18);
+  }
   /** Synthesised human-ish vocal (formant filtered saw). Works even when the browser has no speech voices. */
   vocal(kind: 'shout' | 'pain' | 'die' | 'whimper' | 'yes', pitch: number, dist: number, pan: number) {
     if (!this.ctx) return; const c = this.ctx, t = c.currentTime, g = this.out(pan, 1.8 / (1 + dist * 0.14));
