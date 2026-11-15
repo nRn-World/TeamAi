@@ -3,6 +3,16 @@ export type Gun = 'rifle' | 'pistol' | 'smg';
 const SFX = ['shot-m4a1-1', 'shot-m4a1-2', 'shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3', 'shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3', 'shot-m1014-1', 'far-rifle', 'far-pistol', 'far-smg', 'far-sniper',
   'foley-mag-out', 'foley-mag-in', 'foley-charge', 'foley-pistol-out', 'foley-pistol-in', 'foley-slide', 'foley-click', 'foley-bolt'];
 const NEAR: Record<Gun, string[]> = { rifle: ['shot-m4a1-1', 'shot-m4a1-2'], pistol: ['shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3'], smg: ['shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3'] };
+// Voice levels. Every clip is measured when it is loaded and scaled to LINE_LEVEL (RMS of its voiced parts, dBFS), so a shouted
+// line is not louder than a spoken one – it only sounds shouted. CH_* even out what the radio / rough-voice filters add.
+const LINE_LEVEL = -20, CH_RADIO = 0.89, CH_GRUFF = 0.8, CH_PLAIN = 2.14, CH_SHOUT = 1.25, CH_GRUFF_SHOUT = 0.95;
+/** Gain that brings a clip's voiced parts to the target level. */
+function level(buf: AudioBuffer, target: number) {
+  const d = buf.getChannelData(0), n = Math.max(1, Math.round(buf.sampleRate * 0.05)), fr: number[] = [];
+  for (let i = 0; i + n <= d.length; i += n) { let e = 0; for (let k = i; k < i + n; k++) e += d[k] * d[k]; fr.push(e / n); }
+  if (!fr.length) return 1; const top = Math.max(...fr), act = fr.filter(e => e > top * 0.03); const rms = Math.sqrt(act.reduce((x, y) => x + y, 0) / act.length);
+  return rms > 1e-5 ? Math.min(4, Math.max(0.1, Math.pow(10, target / 20) / rms)) : 1;
+}
 export class GameAudio {
   ctx: AudioContext | null = null; master!: GainNode; private noise!: AudioBuffer; private verb!: ConvolverNode; private wet!: GainNode; volume = 0.8;
   init() {
@@ -26,10 +36,11 @@ export class GameAudio {
     try {
       const man = await (await fetch('./voice/manifest.json')).json();
       const L = man.lines as { t: string; r: string; s?: number }[]; for (const l of L) { this.known.add(l.t); if (l.s) this.loud.add(l.t); }
-      await Promise.all((man.voices as string[]).flatMap(v => L.map(async (l, i) => { if (!l.r.includes(v[0])) return; try { const ab = await (await fetch(`./voice/${v}/${i}.mp3`)).arrayBuffer(); this.lines.set(v + '|' + l.t, await this.ctx!.decodeAudioData(ab)); } catch { /* falls back to browser speech */ } })));
+      await Promise.all((man.voices as string[]).flatMap(v => L.map(async (l, i) => { if (!l.r.includes(v[0])) return; try { const ab = await (await fetch(`./voice/${v}/${i}.mp3`)).arrayBuffer(); const buf = await this.ctx!.decodeAudioData(ab); this.lineGain.set(buf, level(buf, LINE_LEVEL)); this.lines.set(v + '|' + l.t, buf); } catch { /* falls back to browser speech */ } })));
       this.linesReady = this.lines.size > 0;
     } catch { /* no clips: browser speech is used */ }
   }
+  private lineGain = new WeakMap<AudioBuffer, number>();
   private known = new Set<string>(); private loud = new Set<string>();
   hasLine(text: string) { return this.linesReady && this.known.has(text); }
   /** True for lines that were recorded as a shout. */
@@ -38,10 +49,11 @@ export class GameAudio {
   get latencyMs() { const c = this.ctx as any; return c ? Math.round(((c.baseLatency || 0) + (c.outputLatency || 0)) * 1000) : 0; }
   /** Plays a recorded line as a particular character. Returns its duration in ms, or 0 if there is no clip for the text.
    *  rate shifts pitch and tempo together (different people), radio = team radio filter, gruff = rough close voice. */
-  line(text: string, o: { voice?: string; rate?: number; radio?: boolean; gruff?: boolean; gain?: number; pan?: number; muffle?: boolean } = {}) {
+  line(text: string, o: { voice?: string; rate?: number; radio?: boolean; gruff?: boolean; shout?: boolean; gain?: number; pan?: number; muffle?: boolean } = {}) {
     const v = o.voice ?? 'o1'; let buf = this.lines.get(v + '|' + text); if (!buf) for (let i = 1; i < 6 && !buf; i++) buf = this.lines.get(v[0] + i + '|' + text); if (!this.ctx || !buf) return 0;
     const c = this.ctx, t = c.currentTime, rate = o.rate ?? 1, src = c.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
     let node: AudioNode = src; const chain = (n: AudioNode) => { node.connect(n); node = n; };
+    { const lv = c.createGain(); lv.gain.value = this.lineGain.get(buf) ?? 1; chain(lv); } // every clip enters at the same loudness, shouted or not
     const shape = (k: number) => { const w = c.createWaveShaper(), cv = new Float32Array(257); for (let i = 0; i < 257; i++) { const x = i / 128 - 1; cv[i] = Math.tanh(x * k) / Math.tanh(k); } w.curve = cv; return w; };
     if (o.radio) {
       const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 420; hp.Q.value = 0.8; chain(hp);
@@ -49,7 +61,11 @@ export class GameAudio {
       const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3100; lp.Q.value = 0.9; chain(lp); chain(shape(3.2));
     } else if (o.gruff) { chain(shape(2.2)); const ls = c.createBiquadFilter(); ls.type = 'lowshelf'; ls.frequency.value = 260; ls.gain.value = 5; chain(ls); }
     if (o.muffle) { const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900; chain(lp); }
-    const out = this.out(o.pan ?? 0, (o.gain ?? 1) * (o.radio ? 0.9 : 1.25), !o.radio); chain(out); src.start(t + (o.radio ? 0.06 : 0));
+    if (o.shout && !o.radio && !o.gruff) chain(shape(1.7)); // a strained, pushed voice
+    const out = this.out(o.pan ?? 0, (o.gain ?? 1) * (o.radio ? CH_RADIO : o.gruff ? (o.shout ? CH_GRUFF_SHOUT : CH_GRUFF) : o.shout ? CH_SHOUT : CH_PLAIN), !o.radio);
+    // a yell rings in the room; the level stays the same
+    if (o.shout) { const send = c.createGain(); send.gain.value = 0.9; out.connect(send); send.connect(this.verb); }
+    chain(out); src.start(t + (o.radio ? 0.06 : 0));
     const dur = buf.duration / rate;
     if (o.radio) { const g = this.out(o.pan ?? 0, 0.05, false); this.burst(g, dur + 0.1, 'bandpass', 2200, 2200, 0.7, 0.5); } // carrier hiss under the transmission
     return dur * 1000 + 120;
@@ -108,23 +124,23 @@ export class GameAudio {
   }
   /** Weapon raised after switching. */
   draw() { if (!this.ctx) return; this.sample('foley-bolt', this.out(0.1, 0.7, false)); }
-  step(vol = 0.25, pan = 0) { if (!this.ctx) return; const o = this.out(pan, vol * 1.8, false); this.burst(o, 0.07, 'lowpass', 500 + Math.random() * 200, 120, 1, 0.9); this.burst(o, 0.03, 'bandpass', 1800, 900, 1.5, 0.25); }
-  door(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 1.2 / (1 + dist * 0.12)); this.tone(o, 'sawtooth', 95, 150, 0.32, 0.12); this.burst(o, 0.12, 'lowpass', 600, 90, 1, 0.9, 0.3); }
-  cuff() { if (!this.ctx) return; const o = this.out(0, 0.5, false); for (let i = 0; i < 6; i++) this.burst(o, 0.02, 'bandpass', 3500 + i * 250, 3000, 8, 0.6, i * 0.04); }
+  step(vol = 0.25, pan = 0) { if (!this.ctx) return; const o = this.out(pan, vol * 4, false); this.burst(o, 0.07, 'lowpass', 500 + Math.random() * 200, 120, 1, 0.9); this.burst(o, 0.03, 'bandpass', 1800, 900, 1.5, 0.25); }
+  door(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 3 / (1 + dist * 0.12)); this.tone(o, 'sawtooth', 95, 150, 0.32, 0.12); this.burst(o, 0.12, 'lowpass', 600, 90, 1, 0.9, 0.3); }
+  cuff() { if (!this.ctx) return; const o = this.out(0, 2.5, false); for (let i = 0; i < 6; i++) this.burst(o, 0.02, 'bandpass', 3500 + i * 250, 3000, 8, 0.6, i * 0.04); }
   bang(dist: number, pan: number, deaf: number) {
-    if (!this.ctx) return; const o = this.out(pan, 1.6 / (1 + dist * 0.06));
+    if (!this.ctx) return; const o = this.out(pan, 1.0 / (1 + dist * 0.06));
     // built from real reports: a shotgun blast slowed down for the body and a distant rifle for the tail
     if (this.sample('shot-m1014-1', o, 1.5, 0.55)) { this.sample('far-sniper', o, 1.2, 0.7, 0.02); this.tone(o, 'sine', 90, 28, 0.35, 0.9); }
     else { this.burst(o, 0.5, 'lowpass', 9000, 120, 0.5, 1.5); this.tone(o, 'sine', 120, 30, 0.4, 1.2); }
-    if (deaf > 0.15) { const r = this.out(0, deaf * 0.25, false); this.tone(r, 'sine', 3900, 3850, 3 + deaf * 3, 1); }
+    if (deaf > 0.15) { const r = this.out(0, deaf * 0.08, false); this.tone(r, 'sine', 3900, 3850, 3 + deaf * 3, 1); } // ringing ears: audible, never painful
   }
   hurt() { if (!this.ctx) return; const o = this.out(0, 0.7, false); this.tone(o, 'sine', 140, 50, 0.18, 1); this.burst(o, 0.08, 'lowpass', 900, 200, 1, 0.6); }
   hitmark(head: boolean) { if (!this.ctx) return; const o = this.out(0, 0.3, false); this.tone(o, 'triangle', head ? 1500 : 950, head ? 1100 : 700, 0.05, 0.7); }
-  impact(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 0.35 / (1 + dist * 0.2)); this.burst(o, 0.05, 'bandpass', 2600 + Math.random() * 1500, 900, 2, 0.8); }
+  impact(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 1.2 / (1 + dist * 0.2)); this.burst(o, 0.05, 'bandpass', 2600 + Math.random() * 1500, 900, 2, 0.8); }
   radio() { if (!this.ctx) return; const o = this.out(0, 0.3, false); this.tone(o, 'square', 1250, 1250, 0.045, 0.4); this.burst(o, 0.09, 'bandpass', 2200, 2000, 1.5, 0.35, 0.05); }
   /** Synthesised human-ish vocal (formant filtered saw). Works even when the browser has no speech voices. */
   vocal(kind: 'shout' | 'pain' | 'die' | 'whimper' | 'yes', pitch: number, dist: number, pan: number) {
-    if (!this.ctx) return; const c = this.ctx, t = c.currentTime, g = this.out(pan, 0.9 / (1 + dist * 0.14));
+    if (!this.ctx) return; const c = this.ctx, t = c.currentTime, g = this.out(pan, 1.8 / (1 + dist * 0.14));
     const P = { shout: [1.25, 1.0, 0.38, 800, 1250], pain: [1.5, 0.8, 0.22, 650, 1700], die: [1.1, 0.5, 0.75, 600, 1000], whimper: [1.9, 1.5, 0.45, 400, 2100], yes: [1.0, 1.15, 0.16, 500, 1500] }[kind];
     const f0 = 120 * pitch, o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(f0 * P[0], t); o.frequency.exponentialRampToValueAtTime(f0 * P[1], t + P[2]);
     const vib = c.createOscillator(), vg = c.createGain(); vib.frequency.value = kind === 'whimper' ? 9 : 5.5; vg.gain.value = f0 * (kind === 'whimper' ? 0.06 : 0.02); vib.connect(vg); vg.connect(o.frequency);
