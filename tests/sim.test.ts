@@ -382,6 +382,31 @@ ok(wins >= 4, 'bot should be able to win across missions');
   sDisp.over = { win: true, reason: 'Area secure' };
   const aw = sDisp.awards();
   ok(Array.isArray(aw) && aw.length >= 1 && !!aw[0].title, 'awards() generates tactical badges on win');
+
+  // 11. Bullet ray precision & no invisible mid-air hits (curtain-wall windows, broken props, trees, perimeter sky)
+  const sRay = new Sim(0, 1, 1);
+  // Curtain-wall window at x=13.5, z=20.5 on Office should pass through at low (y=0.5) and high (y=2.5)
+  const hLowWin = sRay.ray(13.5, 0.5, 22.0, 0, 0, -1, 10, sRay.player);
+  ok(hLowWin.d > 2.0, `curtain-wall window passes bullet at y=0.5 (d=${hLowWin.d.toFixed(2)})`);
+  const hHighWin = sRay.ray(13.5, 2.5, 22.0, 0, 0, -1, 10, sRay.player);
+  ok(hHighWin.d > 2.0, `curtain-wall window passes bullet at y=2.5 (d=${hHighWin.d.toFixed(2)})`);
+  // Shooting over exterior perimeter curb (z = h - 1) towards sky should not hit invisible wall/ceiling
+  const hSky = sRay.ray(14.5, 1.6, 24.4, 0, 0.05, 1, 30, sRay.player);
+  ok(hSky.kind === 'none', `shooting over perimeter curb goes to open sky (got ${hSky.kind} at d=${hSky.d.toFixed(2)})`);
+  // Courtyard tree at (8.5, 22.0): bullet 0.25m from center passes trunk cleanly
+  const hTree = sRay.ray(8.75, 1.2, 24.0, 0, 0, -1, 3.0, sRay.player);
+  ok(hTree.kind === 'none', `bullet 0.25m beside tree trunk passes through air (got ${hTree.kind})`);
+  // Broken PC prop no longer blocks mid-air above desk
+  const pcProp2 = sRay.level.props.find(pr => pr.kind === 'pc');
+  if (pcProp2) {
+    const px = pcProp2.cx + (pcProp2.w ?? 1) / 2, pz = pcProp2.cz + (pcProp2.d ?? 1) / 2;
+    sRay.fire(sRay.player, px, 1.05, pz + 1.2, 0, 0, -1, 34);
+    const hAfterBreak = sRay.ray(px, 1.05, pz + 1.2, 0, 0, -1, 2.4, sRay.player);
+    ok(hAfterBreak.d > 1.8, `broken PC monitor does not leave invisible midair blocker (d=${hAfterBreak.d.toFixed(2)})`);
+  }
+  // Sub-2mm wall surface accuracy (e.g. solid wall at z=20 in column x=15.5)
+  const hWall = sRay.ray(15.5, 1.6, 22.0, 0, 0, -1, 5, sRay.player);
+  ok(hWall.kind === 'wall' && Math.abs(hWall.z - 21.0) < 0.002, `wall hit lands on exact surface (<2mm, z=${hWall.z.toFixed(4)})`);
 }
 
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);
