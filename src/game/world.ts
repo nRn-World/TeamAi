@@ -6,18 +6,22 @@ import * as T from './textures';
 import { modelsReady, Rig, droppedPistol } from './models';
 import { weaponModel } from './weapons';
 import { OperatorBody, operatorReady } from './operator';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
 const BOX = new THREE.BoxGeometry(1, 1, 1);
 const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...o });
 function box(w: number, h: number, d: number, m: THREE.Material, x = 0, y = 0, z = 0) { const b = new THREE.Mesh(BOX, m); b.scale.set(w, h, d); b.position.set(x, y, z); return b; }
 
+const MARAUDER_PAINT: Record<string, [number, number, number]> = { Body_2: [0x3d485e, 0.45, 0.58], Metal_UP_5: [0x4b5363, 0.5, 0.62] };
+
 const THEME = {
-  office: { wall: '#c9c3b6', trim: '#4a443c', brickA: '#8e5a48', brickB: '#7c4c3d', fog: 0x0b0e12 },
-  warehouse: { wall: '#8b9095', trim: '#33373b', brickA: '#6f7377', brickB: '#62666a', fog: 0x090b0d },
-  hotel: { wall: '#bfa58e', trim: '#4d2e24', brickA: '#9a7a5c', brickB: '#8a6c50', fog: 0x0d0b0a },
-  bank: { wall: '#d6d4ce', trim: '#2d3b4e', brickA: '#5f6873', brickB: '#525a64', fog: 0x0a0d12 },
-  club: { wall: '#282633', trim: '#6a1b6a', brickA: '#231f2e', brickB: '#1c1824', fog: 0x05030a },
-  raid: { wall: '#b8b4aa', trim: '#3b3c40', brickA: '#706055', brickB: '#5f5046', fog: 0x090b0e },
+  office: { wall: '#c9c3b6', trim: '#4a443c', brickA: '#3a3e46', brickB: '#2f333b', fog: 0x0b0e12 },
+  warehouse: { wall: '#8b9095', trim: '#33373b', brickA: '#5f6469', brickB: '#4e5358', fog: 0x090b0d },
+  hotel: { wall: '#bfa58e', trim: '#4d2e24', brickA: '#695c52', brickB: '#584c43', fog: 0x0d0b0a },
+  bank: { wall: '#d6d4ce', trim: '#2d3b4e', brickA: '#6d737c', brickB: '#5d636b', fog: 0x0a0d12 },
+  club: { wall: '#282633', trim: '#6a1b6a', brickA: '#28202c', brickB: '#1f1823', fog: 0x05030a },
+  raid: { wall: '#b8b4aa', trim: '#3b3c40', brickA: '#635c54', brickB: '#524b44', fog: 0x090b0e },
 };
 
 export class LevelView {
@@ -31,18 +35,28 @@ export class LevelView {
   private bombLed?: THREE.Mesh;
   private bombBox?: THREE.Group;
   private lastPower = true;
+  private strobeBlue?: THREE.PointLight;
+  private strobeRed?: THREE.PointLight;
+  private strobeLens: THREE.MeshStandardMaterial[] = [];
+  private discoBall?: THREE.Group;
+  private lasers: THREE.Mesh[] = [];
   constructor(public sim: Sim, quality: number) {
     const l = sim.level, th = THEME[l.theme], g = this.group;
-    // ground
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(l.w, l.h), std({ map: T.floorTex('asphalt') }));
-    scaleUV(ground.geometry, l.w / 3, l.h / 3); ground.rotation.x = -Math.PI / 2; ground.position.set(l.w / 2, -0.012, l.h / 2); g.add(ground);
+    // exterior ground: wet stone plaza for architectural themes, dark wet asphalt elsewhere
+    const plazaGround = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'bank';
+    const groundMap = plazaGround ? T.plazaTex(l.theme) : T.floorTex('asphalt');
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(l.w + 32, l.h + 32),
+      std({ map: groundMap, roughness: plazaGround ? 0.24 : 0.34, metalness: plazaGround ? 0.36 : 0.25 }),
+    );
+    scaleUV(ground.geometry, (l.w + 32) / 3, (l.h + 32) / 3); ground.rotation.x = -Math.PI / 2; ground.position.set(l.w / 2, -0.012, l.h / 2); g.add(ground);
     // rooms: floor + ceiling + lamps
     const ceilMat = std({ map: T.floorTex('ceiling') });
     const lampOn = this.lampOnMat = new THREE.MeshBasicMaterial({ color: l.theme === 'club' ? 0xc864ff : 0xfff4dc });
     const lampOff = this.lampOffMat = std({ color: 0x3a3a38 });
     let lights = 0;
     for (const r of l.rooms) {
-      const fl = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), std({ map: T.floorTex(r.floor), roughness: r.floor === 'tile' ? 0.45 : 0.95 }));
+      const fl = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), std({ map: T.floorTex(r.floor), roughness: r.floor === 'tile' ? 0.35 : 0.95 }));
       scaleUV(fl.geometry, r.w / 2, r.h / 2); fl.rotation.x = -Math.PI / 2; fl.position.set(r.x + r.w / 2, r.id * 0.0006, r.z + r.h / 2); g.add(fl);
       const ce = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), ceilMat.clone()); (ce.material as THREE.MeshStandardMaterial).map = T.floorTex('ceiling');
       scaleUV(ce.geometry, r.w / 2, r.h / 2); ce.rotation.x = Math.PI / 2; ce.position.set(r.x + r.w / 2, 3 - r.id * 0.0006, r.z + r.h / 2); g.add(ce);
@@ -75,25 +89,51 @@ export class LevelView {
       const im = new THREE.InstancedMesh(wallGeo, mat, cells.length); const m = new THREE.Matrix4();
       cells.forEach(([x, z], i) => { m.makeScale(1, h / 3, 1); m.setPosition(x + 0.5, h / 2, z + 0.5); im.setMatrixAt(i, m); }); g.add(im);
     };
-    const wallMat = std({ map: T.wallTex(th.wall, th.trim, l.theme) }), brickMat = std({ map: T.brickTex(l.theme === 'bank' || l.theme === 'club' || l.theme === 'raid' ? 'office' : l.theme, th.brickA, th.brickB) });
-    mk(inner, wallMat); mk(outer.filter(([x, z]) => !(x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1)), brickMat, 3.2); mk(outer.filter(([x, z]) => x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1), brickMat, 2.4);
-    // breakable glass windows
-    const glassMat = new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.32, roughness: 0.1, metalness: 0.1 });
+    const wallMat = std({ map: T.wallTex(th.wall, th.trim, l.theme) });
+    const brickMat = l.theme === 'office'
+      ? std({ color: 0x20252d, roughness: 0.35, metalness: 0.45 })
+      : std({ map: T.brickTex(l.theme === 'bank' || l.theme === 'club' || l.theme === 'raid' ? 'office' : l.theme, th.brickA, th.brickB) });
+    const curbMat = std({ color: 0x262a31, roughness: 0.72, metalness: 0.25 });
+    const perimH = l.theme === 'club' ? 2.6 : 0.85;
+    mk(inner, wallMat); mk(outer.filter(([x, z]) => !(x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1)), brickMat, 3.2); mk(outer.filter(([x, z]) => x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1), l.theme === 'club' ? brickMat : curbMat, perimH);
+    // breakable glass windows (floor-to-ceiling curtain-wall glass on office/hotel/club ground exterior)
+    const glassMat = new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.3, roughness: 0.08, metalness: 0.15 });
+    const frameAlum = std({ color: 0x161a20, roughness: 0.35, metalness: 0.65 });
+    const curtainWall = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'club';
     for (const w of l.windows) {
       const cx = Math.floor(w.x), cz = Math.floor(w.z);
       const horiz = sim.cell(cx - 1, cz) === WALL || sim.cell(cx - 1, cz) === WINDOW || sim.cell(cx + 1, cz) === WALL || sim.cell(cx + 1, cz) === WINDOW;
-      g.add(box(1, 0.9, 1, wallMat, w.x, 0.45, w.z), box(1, 0.7, 1, wallMat, w.x, 2.65, w.z));
-      const pane = box(horiz ? 0.98 : 0.06, 1.4, horiz ? 0.06 : 0.98, glassMat, w.x, 1.6, w.z);
-      g.add(pane);
-      this.windows.set(cz * l.w + cx, pane);
+      const isFront = sim.cell(cx, cz + 1) === OUT || sim.cell(cx, cz - 1) === OUT || sim.cell(cx + 1, cz) === OUT || sim.cell(cx - 1, cz) === OUT;
+      if (curtainWall && isFront) {
+        g.add(box(1, 0.12, 1, frameAlum, w.x, 0.06, w.z), box(1, 0.25, 1, frameAlum, w.x, 2.875, w.z));
+        g.add(box(horiz ? 0.08 : 0.14, 2.7, horiz ? 0.14 : 0.08, frameAlum, w.x + (horiz ? 0.46 : 0), 1.45, w.z + (horiz ? 0 : 0.46)));
+        const pane = box(horiz ? 0.96 : 0.06, 2.65, horiz ? 0.06 : 0.96, glassMat, w.x, 1.44, w.z);
+        g.add(pane);
+        this.windows.set(cz * l.w + cx, pane);
+      } else {
+        g.add(box(1, 0.9, 1, wallMat, w.x, 0.45, w.z), box(1, 0.7, 1, wallMat, w.x, 2.65, w.z));
+        const pane = box(horiz ? 0.98 : 0.06, 1.4, horiz ? 0.06 : 0.98, glassMat, w.x, 1.6, w.z);
+        g.add(pane);
+        this.windows.set(cz * l.w + cx, pane);
+      }
     }
-    // doors (+ lock & wedge indicators)
-    const doorMat = std({ map: T.doorTex(), roughness: 0.6 }), frameMat = std({ color: 0x2c2620 });
+    // doors (+ lock & wedge indicators; glass entrance doors on office/hotel/bank)
+    const doorMat = std({ map: T.doorTex(), roughness: 0.6 }), frameMat = std({ color: 0x202328, roughness: 0.4, metalness: 0.4 });
+    const glassDoorMat = new THREE.MeshPhysicalMaterial({ color: 0x99d0e8, transparent: true, opacity: 0.36, roughness: 0.08, metalness: 0.2 });
     const wedgeMat = std({ color: 0xf2a82e, roughness: 0.4 }), lockMat = std({ color: 0xe04848, emissive: 0x801010, emissiveIntensity: 0.6 });
     for (const d of l.doors) {
-      const lintel = box(1, 0.8, 1, wallMat, d.cx + 0.5, 2.6, d.cz + 0.5); g.add(lintel);
-      const pivot = new THREE.Group(), panel = box(0.94, 2.18, 0.06, doorMat, 0.47, 1.09, 0); pivot.add(panel);
-      pivot.add(box(0.05, 0.05, 0.16, std({ color: 0xc9b46a, metalness: 0.7, roughness: 0.3 }), 0.84, 1.05, 0));
+      const frontGlassDoor = (l.theme === 'office' || l.theme === 'hotel' || l.theme === 'bank') && (sim.cell(d.cx, d.cz + 1) === OUT || sim.cell(d.cx, d.cz - 1) === OUT);
+      const lintel = box(1, 0.8, 1, frontGlassDoor ? frameAlum : wallMat, d.cx + 0.5, 2.6, d.cz + 0.5); g.add(lintel);
+      const pivot = new THREE.Group();
+      if (frontGlassDoor) {
+        pivot.add(box(0.94, 2.18, 0.05, glassDoorMat, 0.47, 1.09, 0));
+        pivot.add(box(0.96, 0.08, 0.07, frameMat, 0.47, 0.04, 0), box(0.96, 0.08, 0.07, frameMat, 0.47, 2.15, 0));
+        pivot.add(box(0.06, 2.18, 0.07, frameMat, 0.03, 1.09, 0), box(0.06, 2.18, 0.07, frameMat, 0.91, 1.09, 0));
+        pivot.add(box(0.03, 0.55, 0.14, std({ color: 0xd0d6de, metalness: 0.85, roughness: 0.2 }), 0.82, 1.05, 0));
+      } else {
+        const panel = box(0.94, 2.18, 0.06, doorMat, 0.47, 1.09, 0); pivot.add(panel);
+        pivot.add(box(0.05, 0.05, 0.16, std({ color: 0xc9b46a, metalness: 0.7, roughness: 0.3 }), 0.84, 1.05, 0));
+      }
       const lock = box(0.08, 0.06, 0.18, lockMat, 0.84, 1.15, 0); lock.visible = !!d.locked; pivot.add(lock);
       const wedge = box(0.22, 0.08, 0.2, wedgeMat, 0.72, 0.04, 0); wedge.visible = !!d.wedged; pivot.add(wedge);
       if (d.horiz) { pivot.position.set(d.cx + 0.03, 0, d.cz + 0.5); g.add(box(0.06, 2.2, 1.02, frameMat, d.cx + 0.0, 1.1, d.cz + 0.5), box(0.06, 2.2, 1.02, frameMat, d.cx + 1.0, 1.1, d.cz + 0.5)); }
@@ -137,8 +177,261 @@ export class LevelView {
       }
       g.add(o);
     }
+    this.buildExterior(quality);
   }
-  update() {
+  private buildExterior(quality: number) {
+    const l = this.sim.level, g = this.group;
+    const darkSteel = std({ color: 0x181c22, roughness: 0.35, metalness: 0.72 });
+    const concrete = std({ color: 0x565b63, roughness: 0.85 });
+    const granite = std({ color: 0x454a52, roughness: 0.68, metalness: 0.1 });
+    const warmGlass = std({ color: 0x382818, emissive: 0x6b4218, emissiveIntensity: 0.78, roughness: 0.25, metalness: 0.35 });
+    const darkGlass = std({ color: 0x0d1522, emissive: 0x091324, emissiveIntensity: 0.4, roughness: 0.15, metalness: 0.78 });
+    const soffitMat = new THREE.MeshBasicMaterial({ color: 0xffe4b8 });
+    const potMat = std({ color: 0x26292e, roughness: 0.85 });
+    const shrubMat = std({ color: 0x264b2b, roughness: 0.9 });
+
+    const addBollard = (x: number, z: number) => {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.15, 0.84, 12), std({ color: 0x6e737b, roughness: 0.72, metalness: 0.2 }));
+      b.position.set(x, 0.42, z); g.add(b);
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.142, 0.142, 0.04, 12), new THREE.MeshBasicMaterial({ color: 0xd0d6de }));
+      cap.position.set(x, 0.75, z); g.add(cap);
+    };
+    const addShrub = (x: number, z: number) => {
+      g.add(box(0.75, 0.48, 0.75, potMat, x, 0.24, z));
+      for (let i = 0; i < 3; i++) {
+        const s = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28 - i * 0.04, 1), shrubMat);
+        s.position.set(x + (i - 1) * 0.11, 0.62 + i * 0.12, z + ((i % 2) - 0.5) * 0.1);
+        g.add(s);
+      }
+    };
+    const addSign = (text: string, bg: string, fg: string, glow: string, w: number, h: number, x: number, y: number, z: number, ry = 0) => {
+      const sp = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: T.signTex(text, bg, fg, glow) }));
+      sp.position.set(x, y, z); sp.rotation.y = ry; g.add(sp);
+    };
+    const addStreetLamp = (x: number, z: number, col = 0xffe0b2) => {
+      g.add(box(0.12, 4.6, 0.12, darkSteel, x, 2.3, z), box(0.7, 0.08, 0.18, darkSteel, x + 0.3, 4.6, z));
+      g.add(box(0.32, 0.04, 0.14, new THREE.MeshBasicMaterial({ color: col }), x + 0.5, 4.55, z));
+      if (quality > 0) { const pl = new THREE.PointLight(col, 14, 14, 1.6); pl.position.set(x + 0.5, 4.3, z); g.add(pl); }
+    };
+
+    if (l.theme === 'office') {
+      // Cylindrical portico pillars flanking glass entrance (x=14.5, z=20.5)
+      for (const px of [12.5, 16.5]) {
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 3.1, 18), concrete);
+        col.position.set(px, 1.55, 21.15); g.add(col);
+      }
+      // Portico flat canopy overhang + soffit downlights + EXIT sign
+      g.add(box(10.6, 0.24, 2.4, darkSteel, 15.0, 3.18, 21.1));
+      for (const lx of [11.2, 13.0, 14.5, 16.0, 17.8, 19.3]) {
+        const d = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.03, 12), soffitMat);
+        d.position.set(lx, 3.05, 21.3); g.add(d);
+      }
+      if (quality > 0) {
+        for (const lx of [12.4, 14.5, 16.6]) {
+          const pl = new THREE.PointLight(0xffdfb0, 16, 11, 1.5); pl.position.set(lx, 2.95, 21.35); g.add(pl);
+        }
+      }
+      addSign('EXIT', '#093818', '#52ff88', '#34e86a', 0.9, 0.3, 14.5, 2.52, 20.02);
+      // Bollards + entrance planters
+      for (const bx of [10.4, 11.7, 12.8, 16.2]) addBollard(bx, 22.85);
+      addShrub(10.5, 21.3); addShrub(18.5, 21.3);
+
+      // 2nd Floor Warm-Lit Glass Curtain-Wall Offices (y=3.2..6.5) matching image-3.png
+      g.add(box(24.4, 0.35, 18.2, darkSteel, 16.0, 3.28, 11.9));
+      g.add(box(24.2, 3.1, 0.18, warmGlass, 16.0, 4.95, 20.38));
+      // Silhouetted 2nd-floor office furniture & pendant lights behind the warm glass
+      for (let fx = 6.5; fx <= 25.5; fx += 3.2) {
+        g.add(box(1.5, 0.72, 0.7, darkSteel, fx, 3.82, 19.8));
+        g.add(box(0.5, 0.95, 0.5, darkSteel, fx, 3.95, 19.15));
+        const pnd = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.22, 12), soffitMat);
+        pnd.position.set(fx, 5.75, 19.85); g.add(pnd);
+      }
+      for (let mx = 4.0; mx <= 28.0; mx += 2.0) g.add(box(0.11, 3.25, 0.26, darkSteel, mx, 4.95, 20.42));
+      g.add(box(24.4, 0.42, 18.2, darkSteel, 16.0, 6.65, 11.9));
+      // 3rd–5th Floor Corporate Dark Glass Tower (y=6.8..16.5)
+      g.add(box(24.2, 9.6, 18.0, darkGlass, 16.0, 11.6, 11.9));
+      for (const fy of [9.8, 13.0, 16.3]) g.add(box(24.4, 0.24, 18.2, darkSteel, 16.0, fy, 11.9));
+      for (let mx = 4.0; mx <= 28.0; mx += 2.0) g.add(box(0.1, 9.6, 0.2, darkSteel, mx, 11.6, 20.92));
+      // Scattered warm upper-floor office glow strips
+      for (const [wx, wy] of [[9.0, 8.3], [19.0, 8.3], [15.0, 11.4], [23.0, 14.6]]) {
+        g.add(box(3.4, 1.4, 0.06, warmGlass, wx, wy, 20.95));
+      }
+
+      // Neighboring Curved Glass Skyscraper with Glowing Blue LED Floor Bands on the right
+      const skyX = 39.5, skyZ = 10.5;
+      const tower = new THREE.Mesh(new THREE.CylinderGeometry(6.2, 6.2, 24, 24), darkGlass);
+      tower.position.set(skyX, 12, skyZ); g.add(tower);
+      const ledMat = new THREE.MeshBasicMaterial({ color: 0x2ca2ff });
+      for (let ly = 3.5; ly <= 22.5; ly += 3.1) {
+        const ring = new THREE.Mesh(new THREE.CylinderGeometry(6.26, 6.26, 0.14, 24), ledMat);
+        ring.position.set(skyX, ly, skyZ); g.add(ring);
+      }
+      addStreetLamp(6.5, 25.4, 0xd8e8ff);
+      addStreetLamp(25.0, 25.4, 0xd8e8ff);
+      if (quality > 0) void this.spawnPoliceUnit(19.4, 22.0, -0.62, quality);
+    } else if (l.theme === 'warehouse') {
+      const steelSiding = std({ color: 0x3b424b, roughness: 0.55, metalness: 0.5 });
+      const haz = std({ color: 0xc2921e, roughness: 0.6 });
+      g.add(box(35.4, 4.2, 20.2, steelSiding, 21.5, 5.2, 13.9));
+      g.add(box(35.6, 0.35, 20.4, darkSteel, 21.5, 7.35, 13.9));
+      g.add(box(5.6, 0.25, 1.6, darkSteel, 16.5, 3.18, 23.8), box(5.6, 0.1, 0.12, haz, 16.5, 3.05, 24.55));
+      addSign('WAREHOUSE 04', '#161a1e', '#f0c050', '#c89020', 2.6, 0.48, 16.5, 2.75, 23.02);
+      if (quality > 0) { const pl = new THREE.PointLight(0xffb454, 18, 13, 1.5); pl.position.set(16.5, 2.95, 24.1); g.add(pl); }
+      // Stacked shipping containers in the dockyard
+      const cont = (x: number, y: number, z: number, col: number, ry = 0) => {
+        const c = box(5.8, 2.5, 2.4, std({ color: col, roughness: 0.62, metalness: 0.45 }), x, y, z);
+        c.rotation.y = ry; g.add(c);
+      };
+      cont(7.2, 1.25, 27.6, 0x6b2e26, 0.08); cont(7.2, 3.75, 27.6, 0x2b4554, -0.04);
+      cont(28.5, 1.25, 28.0, 0x2b4554, -0.14);
+      // Dockside harbor cranes in the background
+      for (const cx of [-2.5, 37.5]) {
+        g.add(box(1.1, 16, 1.1, darkSteel, cx, 8, -2), box(1.1, 16, 1.1, darkSteel, cx + 3.2, 8, -2));
+        g.add(box(14, 0.9, 1.2, haz, cx + 4, 15.5, -2));
+        if (quality > 0) { const pl = new THREE.PointLight(0xffa64d, 24, 24, 1.4); pl.position.set(cx + 4, 14.5, -1); g.add(pl); }
+      }
+      if (quality > 0) void this.spawnPoliceUnit(22.2, 25.8, -0.58, quality);
+    } else if (l.theme === 'hotel') {
+      const stone = std({ color: 0x3b3530, roughness: 0.65 });
+      const brass = std({ color: 0xc29848, roughness: 0.3, metalness: 0.8 });
+      // Wide marble plaza entry runner + brass columns + coffered gold canopy
+      g.add(box(7.2, 0.08, 3.2, std({ color: 0x9b948a, roughness: 0.32, metalness: 0.15 }), 22.5, 0.03, 25.5));
+      for (const px of [20.4, 24.6]) {
+        const c = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 3.3, 16), brass);
+        c.position.set(px, 1.65, 25.4); g.add(c);
+      }
+      g.add(box(11.4, 0.35, 3.0, darkSteel, 22.5, 3.4, 25.3));
+      addSign('HOTEL NORTH STAR', '#1c1510', '#ffd480', '#e0a238', 3.8, 0.54, 22.5, 3.42, 26.82);
+      if (quality > 0) {
+        for (const lx of [20.5, 22.5, 24.5]) { const pl = new THREE.PointLight(0xffcf88, 18, 12, 1.5); pl.position.set(lx, 3.1, 25.6); g.add(pl); }
+      }
+      addShrub(18.6, 25.5); addShrub(26.4, 25.5);
+      // 5-Story Limestone & Lit Guest-Window Hotel Tower
+      g.add(box(38.2, 14.2, 21.2, stone, 23.0, 10.3, 14.4));
+      for (let fy = 5.0; fy <= 14.5; fy += 3.1) {
+        g.add(box(38.4, 0.16, 21.4, brass, 23.0, fy - 1.4, 14.4));
+        for (let wx = 7.0; wx <= 39.0; wx += 4.0) {
+          const lit = ((wx + fy) % 3) !== 0;
+          g.add(box(1.8, 1.4, 0.12, lit ? warmGlass : darkGlass, wx, fy, 25.02));
+        }
+      }
+      if (quality > 0) void this.spawnPoliceUnit(29.2, 26.2, -0.54, quality);
+    } else if (l.theme === 'bank') {
+      const limestone = std({ color: 0x767a82, roughness: 0.62 });
+      // Classical steps + 4 monumental fluted columns + entablature + triangular pediment
+      g.add(box(14.0, 0.12, 3.6, limestone, 15.5, 0.05, 25.8));
+      for (const cx of [11.2, 13.4, 17.6, 19.8]) {
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.46, 6.4, 16), limestone);
+        col.position.set(cx, 3.2, 25.6); g.add(col);
+      }
+      g.add(box(12.2, 1.1, 2.8, limestone, 15.5, 6.95, 25.1));
+      addSign('NORDIA BANK', '#141a22', '#e8edf2', '#8eb6e0', 4.0, 0.56, 15.5, 6.95, 26.52);
+      const ped = new THREE.Mesh(new THREE.ConeGeometry(6.4, 2.2, 3), limestone);
+      ped.rotation.y = Math.PI / 6; ped.scale.set(1.0, 1.0, 0.35); ped.position.set(15.5, 8.6, 25.1); g.add(ped);
+      // 2nd story granite bank wing + security bollards
+      g.add(box(36.2, 4.4, 21.2, granite, 22.0, 5.4, 14.4));
+      for (let wx = 7.5; wx <= 37.5; wx += 4.2) g.add(box(1.5, 2.1, 0.12, warmGlass, wx, 5.2, 25.02));
+      for (const bx of [9.6, 11.2, 12.8, 18.2, 19.8]) addBollard(bx, 27.1);
+      if (quality > 0) {
+        for (const lx of [12.5, 15.5, 18.5]) { const pl = new THREE.PointLight(0xffdfb8, 18, 12, 1.5); pl.position.set(lx, 5.8, 25.8); g.add(pl); }
+        void this.spawnPoliceUnit(22.4, 26.2, -0.54, quality);
+      }
+    } else if (l.theme === 'club') {
+      const brick = std({ map: T.brickTex('club_ext', '#261e2a', '#1b1520') });
+      // Narrow brick alley framing + 2nd floor brick club facade + glowing ECLIPSE neon sign
+      g.add(box(32.2, 4.4, 21.2, brick, 20.0, 5.4, 13.4));
+      g.add(box(1.2, 6.5, 8.0, brick, 5.5, 3.25, 26.8), box(1.2, 6.5, 8.0, brick, 21.5, 3.25, 26.8));
+      addSign('ECLIPSE', '#12061c', '#ff52e0', '#d438ff', 3.4, 0.72, 13.5, 3.25, 24.06);
+      // Magenta & cyan alley sconces
+      for (const [sx, sz, col] of [[6.15, 25.5, 0xd438ff], [6.15, 28.0, 0x38c8ff], [20.85, 25.5, 0x38c8ff], [20.85, 28.0, 0xd438ff]] as const) {
+        g.add(box(0.14, 0.45, 0.2, new THREE.MeshBasicMaterial({ color: col }), sx, 2.3, sz));
+        if (quality > 0) { const pl = new THREE.PointLight(col, 14, 10, 1.6); pl.position.set(sx + (sx < 13 ? 0.5 : -0.5), 2.3, sz); g.add(pl); }
+      }
+      // Mirror disco ball & animated laser beams inside the dancefloor
+      const ballGrp = new THREE.Group(); ballGrp.position.set(14.0, 2.62, 16.5);
+      const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 1), std({ color: 0xe6eeff, metalness: 0.95, roughness: 0.08, emissive: 0x384460 }));
+      ballGrp.add(ball); g.add(ballGrp); this.discoBall = ballGrp;
+      for (let i = 0; i < 6; i++) {
+        const beam = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.015, 0.06, 9.5, 6),
+          new THREE.MeshBasicMaterial({ color: i % 2 ? 0xff38c8 : 0x38d8ff, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false }),
+        );
+        beam.position.set(14.0 + (i - 2.5) * 1.4, 2.4, 17.5);
+        beam.rotation.set(0.7, 0, (i - 2.5) * 0.25);
+        g.add(beam); this.lasers.push(beam);
+      }
+      if (quality > 0) void this.spawnPoliceUnit(18.0, 25.4, -0.82, quality);
+    } else if (l.theme === 'raid') {
+      const sx = l.playerSpawn.x, sz = l.playerSpawn.z;
+      const conc = std({ color: 0x4b4e54, roughness: 0.85 });
+      const meshMat = std({ color: 0x7a828c, metalness: 0.6, roughness: 0.45, wireframe: true });
+      // Upper compound roof & yard floodlight towers + perimeter security fence with open entry gate
+      g.add(box(32.2, 3.2, 20.4, conc, 20.0, 4.8, 13.0));
+      const fz = sz - 1.5;
+      for (let fx = 3.0; fx <= 37.0; fx += 2.0) {
+        if (Math.abs(fx - sx) < 2.6) continue; // open gate gap
+        g.add(box(0.1, 2.3, 0.1, darkSteel, fx, 1.15, fz));
+        g.add(box(2.0, 2.1, 0.04, meshMat, fx, 1.1, fz));
+      }
+      // Tall yard security floodlight towers
+      for (const tx of [6.0, 34.0]) {
+        g.add(box(0.22, 7.5, 0.22, darkSteel, tx, 3.75, fz + 0.3));
+        g.add(box(0.9, 0.3, 0.2, soffitMat, tx, 7.4, fz + 0.3));
+        if (quality > 0) { const pl = new THREE.PointLight(0xdfe8ff, 26, 22, 1.4); pl.position.set(tx, 7.1, fz + 0.6); g.add(pl); }
+      }
+      if (quality > 0) void this.spawnPoliceUnit(Math.min(35.5, sx + 5.0), fz + 1.6, -0.58, quality);
+    }
+  }
+  private async spawnPoliceUnit(x: number, z: number, yaw: number, quality: number) {
+    try {
+      const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync('./models/vehicle/marauder.glb');
+      const v = gltf.scene;
+      v.traverse((o: any) => {
+        if (!o.isMesh) return;
+        const m = o.material as THREE.MeshStandardMaterial;
+        m.envMapIntensity = 0.85;
+        const tint = MARAUDER_PAINT[m.name];
+        if (tint) { m.color.setHex(tint[0]); m.roughness = tint[1]; m.metalness = tint[2]; }
+      });
+      const w = new THREE.Group();
+      w.add(v); w.position.set(x, 0, z); w.rotation.y = yaw;
+      this.group.add(w);
+      w.updateMatrixWorld(true);
+      const meshes: THREE.Mesh[] = [];
+      v.traverse((o: any) => { if (o.isMesh) meshes.push(o); });
+      const ray = new THREE.Raycaster();
+      const hit = (from: THREE.Vector3, dir: THREE.Vector3) => {
+        ray.set(w.localToWorld(from), dir.transformDirection(w.matrixWorld));
+        return ray.intersectObjects(meshes, false)[0];
+      };
+      const tex = T.textTex('POLICE');
+      for (const sgn of [-1, 1]) {
+        const h = hit(new THREE.Vector3(2.05, 1.42, sgn * 4), new THREE.Vector3(0, 0, -sgn));
+        if (!h || !h.face) continue;
+        const n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+        const d = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.2), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.6, metalness: 0, polygonOffset: true, polygonOffsetFactor: -4 }));
+        d.position.copy(h.point).addScaledVector(n, 0.012); d.lookAt(h.point.clone().add(n));
+        this.group.add(d); w.attach(d);
+      }
+      const top = hit(new THREE.Vector3(0.9, 6, 0), new THREE.Vector3(0, -1, 0));
+      const bar = new THREE.Group();
+      bar.position.set(0.9, (top ? w.worldToLocal(top.point.clone()).y : 2.3) + 0.05, 0);
+      bar.rotation.y = Math.PI / 2; w.add(bar);
+      const dark = std({ color: 0x0c0e11, roughness: 0.4, metalness: 0.6 });
+      bar.add(box(1.5, 0.05, 0.3, dark));
+      this.strobeLens = [0x2a6bff, 0xff2a2a].map((c, i) => {
+        const m = new THREE.MeshStandardMaterial({ color: 0x111418, emissive: c, emissiveIntensity: 0.3, roughness: 0.25 });
+        const b = box(0.66, 0.1, 0.24, m, i ? 0.37 : -0.37, 0.075, 0);
+        bar.add(b); return m;
+      });
+      if (quality > 0) {
+        this.strobeBlue = new THREE.PointLight(0x2e7bff, 0, 14, 1.6); this.strobeBlue.position.set(-0.6, 0.45, 0.3);
+        this.strobeRed = new THREE.PointLight(0xff3434, 0, 14, 1.6); this.strobeRed.position.set(0.6, 0.45, 0.3);
+        bar.add(this.strobeBlue, this.strobeRed);
+      }
+    } catch { /* fallback quietly if asset unavailable */ }
+  }
+  update(dt = 0.016, time = 0) {
     for (const d of this.doors) {
       d.pivot.rotation.y = d.base + d.door.open * 1.62;
       d.lock.visible = !!d.door.locked;
@@ -155,6 +448,20 @@ export class LevelView {
     if (this.bombLed && this.sim.bomb) {
       if (this.sim.bomb.defused) { (this.bombLed.material as THREE.MeshBasicMaterial).color.setHex(0x4fd07a); this.bombLed.visible = true; }
       else { this.bombLed.visible = Math.floor(this.sim.time * (this.sim.bomb.time < 20 ? 6 : 2)) % 2 === 0; }
+    }
+    const ph = (time * 1.35) % 1, fl = (p: number) => (p < 0.08 || (p > 0.14 && p < 0.22) ? 1 : 0);
+    if (this.strobeBlue) this.strobeBlue.intensity = fl(ph) * 28;
+    if (this.strobeRed) this.strobeRed.intensity = fl((ph + 0.5) % 1) * 20;
+    if (this.strobeLens.length) {
+      this.strobeLens[0].emissiveIntensity = 0.25 + fl(ph) * 5;
+      this.strobeLens[1].emissiveIntensity = 0.25 + fl((ph + 0.5) % 1) * 5;
+    }
+    if (this.discoBall) this.discoBall.rotation.y += dt * 0.9;
+    if (this.lasers.length) {
+      this.lasers.forEach((b, i) => {
+        b.rotation.z = Math.sin(time * 1.4 + i) * 0.45;
+        b.rotation.x = 0.72 + Math.cos(time * 1.1 + i * 0.7) * 0.22;
+      });
     }
   }
 }

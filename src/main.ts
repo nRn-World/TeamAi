@@ -356,7 +356,8 @@ class Game {
     sim.players.forEach((pl, i) => { if (names[i]) pl.name = names[i]; }); this.stepPh.clear();
     for (const id of ['lobby', 'debrief', 'pause', 'brief']) show(id, false);
     const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
-    this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x070a10); this.scene.fog = new THREE.FogExp2(0x070a10, 0.028);
+    this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x070a10); this.scene.fog = new THREE.FogExp2(0x070a10, 0.016);
+    if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = 0.28; }
     this.ambLight = new THREE.AmbientLight(0x9fb0c8, S.qual ? 0.45 : 1.1);
     this.nvgLight = new THREE.AmbientLight(0x6aff99, 0);
     this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(0xb8c8ff, 0x2a241c, 0.55));
@@ -831,7 +832,7 @@ class Game {
       if (last !== undefined && ph !== last && !a.prone) { const q = this.pan(a.x, a.z); if (q.d < 14) this.audio.step((a.kind === 'officer' || a.kind === 'player' ? 0.2 : 0.14) / (1 + q.d * 0.25), q.pan); }
     }
     if (this.net.online) { const vc = $('vc'); vc.textContent = this.net.micOk ? (this.net.muted ? 'VOICE CHAT: YOUR MIC IS OFF (B)' : `VOICE CHAT ON · ${this.net.voiceCount} connected · B = mute mic`) : 'VOICE CHAT: no microphone – you can only hear the others'; vc.className = this.net.muted || !this.net.micOk ? 'off' : ''; }
-    this.level!.update(); for (const v of this.views.values()) v.update(dt, sim.time); this.fx.update(dt, sim);
+    this.level!.update(dt, sim.time); for (const v of this.views.values()) v.update(dt, sim.time); this.fx.update(dt, sim);
     // camera
     this.recoil = Math.max(0, this.recoil - dt * 0.22); this.dmgFx = Math.max(0, this.dmgFx - dt * 1.4); this.hitFx = Math.max(0, this.hitFx - dt * 5);
     const targetEye = (!p.alive ? 0.35 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive ? p.jumpY : 0); this.eye += (targetEye - this.eye) * Math.min(1, dt * (p.jumpY > 0 ? 30 : 9));

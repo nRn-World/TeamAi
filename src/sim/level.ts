@@ -124,7 +124,7 @@ interface Spec {
 
 const SPECS: Spec[] = [
   {
-    name: 'The Office Complex', theme: 'office', objective: 'clear', w: 32, h: 26, suspects: 5, civs: 3,
+    name: 'The Office Complex', theme: 'office', objective: 'clear', w: 32, h: 29, suspects: 5, civs: 3,
     brief: 'Armed suspects have entered an accounting office in Kista. At least three employees are held inside. Glass partitions let you scout the meeting room — use your optiwand, breach or flashbangs to arrest everyone cleanly.',
     build(b) {
       b.room(4, 10, 24, 5, 'Corridor', 'corridor', 'tile', false);
@@ -139,14 +139,16 @@ const SPECS: Spec[] = [
       b.door(24, 10, true); // Manager's Office locked
       b.door(7, 14, true);  // Archive locked
       b.door(23, 14); b.door(19, 17); b.door(27, 12);
-      // Interior office glass walls for visibility
+      // Interior office glass + front floor-to-ceiling curtain-wall glass facade
       b.win(11, 10); b.win(14, 10); b.win(22, 10);
+      b.win(6, 20); b.win(8, 20); b.win(11, 20); b.win(12, 20); b.win(13, 20);
+      b.win(16, 20); b.win(17, 20); b.win(18, 20); b.win(22, 20); b.win(24, 20);
       b.placeBreaker(11, 19);
-      return { x: 14.5, z: 23.2, yaw: 0 };
+      return { x: 14.5, z: 24.4, yaw: 0 };
     },
   },
   {
-    name: 'The Warehouse', theme: 'warehouse', objective: 'clear', w: 44, h: 32, suspects: 8, civs: 4,
+    name: 'The Warehouse', theme: 'warehouse', objective: 'clear', w: 44, h: 33, suspects: 8, civs: 4,
     brief: 'An arms deal is under way in a dockside warehouse. Workers are trapped among high shipping crates. Watch your flanks, wedge side doors and cut the power breaker if you need the element of surprise.',
     build(b) {
       b.room(4, 4, 26, 20, 'Warehouse Floor', 'warehouse', 'concrete');
@@ -155,13 +157,13 @@ const SPECS: Spec[] = [
       b.room(29, 16, 10, 8, 'Storage', 'storage', 'concrete');
       b.door(16, 23); b.door(4, 12); b.door(29, 7); b.door(29, 13); b.door(29, 20, true);
       b.door(33, 10); b.door(33, 16); b.door(38, 20, true);
-      b.win(29, 5); b.win(29, 12);
+      b.win(29, 5); b.win(29, 12); b.win(10, 23); b.win(12, 23); b.win(20, 23); b.win(22, 23);
       b.placeBreaker(5, 22);
-      return { x: 16.5, z: 27.5, yaw: 0 };
+      return { x: 16.5, z: 29.0, yaw: 0 };
     },
   },
   {
-    name: 'Hotel North Star', theme: 'hotel', objective: 'clear', w: 46, h: 30, suspects: 10, civs: 6,
+    name: 'Hotel North Star', theme: 'hotel', objective: 'clear', w: 46, h: 32, suspects: 10, civs: 6,
     brief: 'An armed group has barricaded itself inside Hotel North Star with guests held across multiple rooms. Stack up on doors, peek with the optiwand and clear room by room.',
     build(b) {
       b.room(4, 12, 38, 5, 'Corridor', 'corridor', 'carpet', false);
@@ -174,12 +176,13 @@ const SPECS: Spec[] = [
       b.door(22, 24); b.door(22, 16); b.door(7, 16); b.door(13, 16); b.door(31, 16); b.door(37, 16, true);
       b.door(10, 8); b.door(28, 8); b.door(41, 14);
       b.win(19, 16); b.win(25, 16);
+      b.win(18, 24); b.win(19, 24); b.win(20, 24); b.win(24, 24); b.win(25, 24); b.win(26, 24);
       b.placeBreaker(11, 23);
-      return { x: 22.5, z: 27.3, yaw: 0 };
+      return { x: 22.5, z: 29.0, yaw: 0 };
     },
   },
   {
-    name: 'Nordia Bank', theme: 'bank', objective: 'hostage', w: 44, h: 30, suspects: 9, civs: 5,
+    name: 'Nordia Bank', theme: 'bank', objective: 'hostage', w: 44, h: 32, suspects: 9, civs: 5,
     brief: 'Armed robbers seized Nordia Bank during business hours. Teller glass shields the main hall and the vault door is locked. Rescue the Bank Director (VIP) and arrest the crew alive.',
     build(b) {
       b.room(4, 14, 24, 11, 'Main Hall', 'lobby', 'tile', false);
@@ -194,14 +197,15 @@ const SPECS: Spec[] = [
       b.door(27, 19);
       b.door(33, 14, true); // Vault rear access locked
       b.door(16, 9);
-      // Teller glass separating lobby and teller line
+      // Teller glass + tall front granite bank windows
       b.win(6, 14); b.win(7, 14); b.win(12, 14); b.win(13, 14);
+      b.win(8, 24); b.win(10, 24); b.win(20, 24); b.win(22, 24);
       b.placeBreaker(17, 5);
-      return { x: 15.5, z: 27.3, yaw: 0 };
+      return { x: 15.5, z: 29.0, yaw: 0 };
     },
   },
   {
-    name: 'Club Eclipse', theme: 'club', objective: 'bomb', w: 40, h: 28, suspects: 9, civs: 6,
+    name: 'Club Eclipse', theme: 'club', objective: 'bomb', w: 40, h: 31, suspects: 9, civs: 6,
     brief: 'Extremists planted an improvised explosive inside Club Eclipse. Visibility is low and civilians are panicked across the dancefloor. Locate and defuse the bomb before the timer expires!',
     build(b) {
       b.room(4, 10, 20, 14, 'Dancefloor', 'club', 'concrete');
@@ -216,14 +220,14 @@ const SPECS: Spec[] = [
       b.door(23, 6, true);
       b.door(29, 10, true);
       b.door(14, 6);
-      b.win(16, 10); b.win(20, 10);
+      b.win(16, 10); b.win(20, 10); b.win(11, 23); b.win(15, 23);
       b.placeBreaker(24, 22);
       b.bomb = { x: 31.5, z: 16.5, time: 165 };
-      return { x: 13.5, z: 25.8, yaw: 0 };
+      return { x: 13.5, z: 27.8, yaw: 0 };
     },
   },
   {
-    name: 'Random Raid', theme: 'raid', objective: 'clear', w: 40, h: 28, suspects: 7, civs: 4,
+    name: 'Random Raid', theme: 'raid', objective: 'clear', w: 40, h: 31, suspects: 7, civs: 4,
     brief: 'Dynamic tactical warrant in an unmapped compound. Every deployment generates a brand-new floorplan, locked doors, windows and threat positions. Expect the unexpected.',
     build(b, rng) {
       // Procedural BSP-style compound with central corridor + north/south wings
@@ -233,6 +237,7 @@ const SPECS: Spec[] = [
       const lx = 14 + Math.floor(rng() * 6);
       b.room(lx, cz + ch - 1, 10, 9, 'Entry Lobby', 'lobby', 'tile', false);
       b.door(lx + 4, cz + ch + 7);
+      b.win(lx + 2, cz + ch + 7); b.win(lx + 6, cz + ch + 7);
       b.door(lx + 4, cz + ch - 1);
 
       // North rooms split dynamically
@@ -277,7 +282,7 @@ const SPECS: Spec[] = [
       if (rng() < 0.4) {
         b.bomb = { x: 6.5, z: 7.5, time: 180 };
       }
-      return { x: lx + 4.5, z: cz + ch + 8.5, yaw: 0 };
+      return { x: lx + 4.5, z: cz + ch + 10.2, yaw: 0 };
     },
   },
 ];
