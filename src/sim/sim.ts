@@ -5,7 +5,11 @@ import { findPath, nearestWalkable, walkLine } from './nav';
 export type Team = 'A' | 'B';
 export type Action = 'follow' | 'hold' | 'move' | 'cover' | 'stack' | 'breach' | 'bang' | 'open' | 'close' | 'restrain' | 'fireFree' | 'fireHold' | 'report' | 'shout';
 export type Dir = 'left' | 'right' | 'forward' | 'back' | 'there';
-export interface Command { team: Team | 'ALL'; action: Action; dir?: Dir; }
+/** `who` = one officer (index into Sim.officers) instead of a whole team. */
+export interface Command { team: Team | 'ALL'; action: Action; dir?: Dir; who?: number; }
+export const OFFICER_NAMES = ['Ken', 'Maya', 'Jack', 'Zoe']; // A1, A2, B1, B2
+/** A team, or one officer working on an order of their own. */
+type Grp = Team | Actor;
 export type Kind = 'player' | 'officer' | 'suspect' | 'civ';
 
 export interface Order {
@@ -16,7 +20,7 @@ export interface Order {
 export type Ev =
   | { t: 'shot'; by: Actor; x: number; y: number; z: number; x2: number; y2: number; z2: number; hit: 'wall' | 'actor' | 'none' }
   | { t: 'hurt'; a: Actor; head: boolean } | { t: 'death'; a: Actor }
-  | { t: 'door'; door: Door; open: boolean } | { t: 'say'; a: Actor; text: string; shout?: boolean }
+  | { t: 'door'; door: Door; open: boolean; kick?: boolean } | { t: 'say'; a: Actor; text: string; shout?: boolean }
   | { t: 'shout'; a: Actor } | { t: 'bang'; x: number; z: number } | { t: 'throw'; x: number; z: number }
   | { t: 'cuff'; a: Actor; by: Actor } | { t: 'surrender'; a: Actor } | { t: 'marker'; x: number; z: number; team: Team }
   | { t: 'bark'; a: Actor; kind: 'spot' | 'surrender' | 'pain' | 'die' | 'panic' | 'unrest' }
@@ -29,6 +33,8 @@ export class Actor {
   target: Actor | null = null; aimT = 0; fireCd = 0; burst = 0; ammo = 30; reloadT = 0; lastShotT = -9;
   hostile = false; hasFired = false; react = -1; alertT = 0; lastSeen: Pt | null = null; hunter = false; timer = 0; lostT = 0;
   challengeT = -9; firstChallengeT = Infinity; unwatchedT = 0; panicT = 0; seeT = 0; room = -1;
+  /** An order given to this officer alone; until the team gets a new order they act apart from it. */
+  solo: { order: Order; cuffSay?: number } | null = null;
   team: Team = 'A'; ti = 0; slot = 0; cuff: Actor | null = null; cuffT = 0; claimedBy: Actor | null = null;
   prone = false; jumpY = 0; /** footstep-noise bookkeeping */ nx = 0; nz = 0; nd = 0; nt = 0;
   percT = 0; deadT = 0; crouch = false; variant = 0; flash = 0; pitch = 0; trail: Pt[] = []; bangs = 3; pi = 0;
@@ -58,8 +64,7 @@ export class Sim {
     const l = this.level, sp = l.playerSpawn; let id = 0;
     this.player = new Actor(id++, 'player', 'You'); Object.assign(this.player, { x: sp.x, z: sp.z, yaw: sp.yaw, armed: true });
     this.actors.push(this.player); this.players.push(this.player); this.player.trail.push({ x: sp.x, z: sp.z });
-    const names = ['A1', 'A2', 'B1', 'B2'];
-    names.forEach((n, i) => {
+    OFFICER_NAMES.forEach((n, i) => {
       const o = new Actor(id++, 'officer', n); o.team = i < 2 ? 'A' : 'B'; o.ti = i % 2; o.slot = i; o.armed = true; o.speed = 3.9;
       const p = nearestWalkable(l, sp.x + (i % 2 ? 0.9 : -0.9), sp.z + 1.1 + Math.floor(i / 2) * 1.0) ?? sp;
       o.x = sp.x + (i % 2 ? 0.8 : -0.8); o.z = sp.z + 1.0 + Math.floor(i / 2) * 0.9; if (this.solidCell(Math.floor(o.x), Math.floor(o.z))) { o.x = p.x; o.z = p.z; }
@@ -228,10 +233,10 @@ export class Sim {
     a.moving = true; a.walk += moved * 2.4;
     if (moved < mv * 0.3) a.stuckT += dt; else a.stuckT = Math.max(0, a.stuckT - dt * 0.5);
   }
-  setDoor(door: Door, open: boolean) {
+  setDoor(door: Door, open: boolean, kick = false) {
     const t = open ? 1 : 0; if (door.target === t) return;
     if (!open && this.actors.some(a => a.alive && Math.floor(a.x) === door.cx && Math.floor(a.z) === door.cz)) return;
-    door.target = t; this.events.push({ t: 'door', door, open });
+    door.target = t; this.events.push({ t: 'door', door, open, kick });
   }
 
   // ---------- combat ----------
@@ -348,7 +353,10 @@ export class Sim {
   // ---------- speech ----------
   say(a: Actor, text: string, shout = false) { this.events.push({ t: 'say', a, text, shout }); }
   private lead(team: Team) { return this.officers.find(o => o.alive && o.team === team); }
-  members(team: Team) { return this.officers.filter(o => o.alive && o.team === team); }
+  /** Living officers that act on the group's order (an officer with an order of their own is not counted in the team). */
+  members(g: Grp) { return typeof g === 'string' ? this.officers.filter(o => o.alive && o.team === g && !o.solo) : g.alive ? [g] : []; }
+  private st(g: Grp) { return typeof g === 'string' ? this.teams[g] : g.solo!; }
+  private idx(m: Actor) { return m.solo ? 0 : m.ti; }
 
   // ---------- orders ----------
   nearestDoor(to: Pt, maxD: number): Door | null {
@@ -414,16 +422,21 @@ export class Sim {
 
   command(cmd: Command, aim: Pt | null = null, by: Actor = this.player): boolean {
     if (this.over) return false;
-    const teams: Team[] = cmd.team === 'ALL' ? ['A', 'B'] : [cmd.team]; let any = false;
-    for (const team of teams) {
-      const lead = this.lead(team); if (!lead) continue; any = true;
-      const off = cmd.team === 'ALL' && team === 'B' ? 2 : 0, T = this.teams[team];
-      const set = (o: Order) => { for (const m of this.members(team)) { m.path = null; m.goal = null; if (m.cuff && o.type !== 'restrain') { m.cuff.claimedBy = null; m.cuff = null; } } T.order = o; };
-      const tag = `Team ${team}: `;
+    let any = false; const one = cmd.who != null ? this.officers[cmd.who] : null, soloOrder = cmd.action !== 'report' && cmd.action !== 'fireHold' && cmd.action !== 'fireFree' && cmd.action !== 'shout';
+    if (cmd.who != null && (!one || !one.alive)) return false;
+    const groups: Grp[] = one ? [soloOrder ? one : one.team] : cmd.team === 'ALL' ? ['A', 'B'] : [cmd.team];
+    for (const g of groups) {
+      const team = typeof g === 'string' ? g : g.team;
+      if (typeof g === 'string') { if (soloOrder) for (const o of this.officers) if (o.team === g) o.solo = null; } // a team order brings everyone back into the team
+      else if (!g.solo) g.solo = { order: { type: 'follow', phase: 0, t: 0, leader: by } };
+      const lead = typeof g === 'string' ? this.lead(g) : g; if (!lead) continue; any = true;
+      const off = !one && cmd.team === 'ALL' && team === 'B' ? 2 : 0, T = this.st(g);
+      const set = (o: Order) => { for (const m of this.members(g)) { m.path = null; m.goal = null; if (m.cuff && o.type !== 'restrain') { m.cuff.claimedBy = null; m.cuff = null; } } T.order = o; };
+      const tag = typeof g === 'string' ? `Team ${team}: ` : '';
       switch (cmd.action) {
         case 'follow': set({ type: 'follow', phase: 0, t: 0, leader: by }); this.say(lead, tag + 'Copy, following you.'); break;
         case 'cover': set({ type: 'cover', phase: 0, t: 0, leader: by }); this.say(lead, tag + 'Covering you.'); break;
-        case 'hold': set({ type: 'hold', phase: 0, t: 0, pts: this.officers.filter(o => o.team === team).map(o => ({ x: o.x, z: o.z })) }); this.say(lead, tag + 'Holding position.'); break;
+        case 'hold': set({ type: 'hold', phase: 0, t: 0, pts: (typeof g === 'string' ? this.officers.filter(o => o.team === team) : [g]).map(o => ({ x: o.x, z: o.z })) }); this.say(lead, tag + 'Holding position.'); break;
         case 'move': {
           const tg = this.dirTarget(cmd.dir ?? 'forward', aim, by);
           if (!tg) { this.say(lead, tag + "Can't get there."); break; }
@@ -433,7 +446,11 @@ export class Sim {
           this.say(lead, tag + ({ left: 'Moving left.', right: 'Moving right.', forward: 'Moving up.', back: 'Falling back.', there: 'Moving to that position.' } as const)[cmd.dir ?? 'forward']); break;
         }
         case 'stack': case 'breach': case 'bang': case 'open': case 'close': {
-          const door = this.aimedDoor(by); if (!door) { this.say(lead, tag + "I don't see a door."); break; }
+          const door = this.aimedDoor(by);
+          if (!door && typeof g !== 'string' && cmd.action === 'bang' && aim && dist(g, aim) > 2.5 && this.los(g.x, g.z, aim.x, aim.z)) { // no door: one officer throws it where the player aims
+            const d = dist(g, aim), dx = (aim.x - g.x) / d, dz = (aim.z - g.z) / d; g.yaw = Math.atan2(dx, dz) ; this.throwBang(g.x + dx * 0.4, 1.4, g.z + dz * 0.4, dx, 0.1, dz, Math.min(11, 3 + d * 0.9)); this.say(g, 'Flashbang out!'); break;
+          }
+          if (!door) { this.say(lead, tag + "I don't see a door."); break; }
           const side = this.doorSide(door, by), pts = this.stackPts(door, side, off);
           const c = { x: door.cx + 0.5, z: door.cz + 0.5 }; this.events.push({ t: 'marker', x: c.x, z: c.z, team });
           if (cmd.action === 'stack') { set({ type: 'stack', phase: 0, t: 0, pts, door, side }); this.say(lead, tag + 'Stacking up on the door.'); }
@@ -442,22 +459,22 @@ export class Sim {
           break;
         }
         case 'restrain': {
-          const n = this.assignCuffs(team, 16);
-          if (n) { if (T.order.type !== 'restrain') set({ type: 'restrain', phase: 0, t: 0, prev: T.order }); this.assignCuffs(team, 16); this.say(lead, tag + 'Securing.'); }
+          const n = this.assignCuffs(g, 16);
+          if (n) { if (T.order.type !== 'restrain') set({ type: 'restrain', phase: 0, t: 0, prev: T.order }); this.assignCuffs(g, 16); this.say(lead, tag + 'Securing.'); }
           else this.say(lead, tag + 'Nobody to secure here.');
           break;
         }
-        case 'fireHold': T.fire = 'hold'; this.say(lead, tag + 'Cease fire. Returning fire only.'); break;
-        case 'fireFree': T.fire = 'free'; this.say(lead, tag + 'Weapons free.'); break;
-        case 'report': { const m = this.members(team); this.say(lead, tag + `${m.length} up. ${m.some(o => o.hp < 60) ? 'We have wounded.' : 'No injuries.'}`); break; }
+        case 'fireHold': this.teams[team].fire = 'hold'; this.say(lead, tag + 'Cease fire. Returning fire only.'); break;
+        case 'fireFree': this.teams[team].fire = 'free'; this.say(lead, tag + 'Weapons free.'); break;
+        case 'report': { const m = this.officers.filter(o => o.alive && o.team === team); this.say(lead, tag + `${m.length} up. ${m.some(o => o.hp < 60) ? 'We have wounded.' : 'No injuries.'}`); break; }
         case 'shout': break;
       }
     }
     return any;
   }
-  private assignCuffs(team: Team, range: number) {
+  private assignCuffs(g: Grp, range: number) {
     let n = 0;
-    for (const o of this.members(team)) {
+    for (const o of this.members(g)) {
       if (o.cuff && o.cuff.alive && !o.cuff.restrained) { n++; continue; }
       o.cuff = null;
       let best: Actor | null = null, bd = range;
@@ -470,32 +487,34 @@ export class Sim {
     return n;
   }
 
-  private updateTeam(team: Team, dt: number) {
-    const T = this.teams[team], o = T.order, mem = this.members(team); if (!mem.length) return;
+  private updateGroup(g: Grp, dt: number) {
+    const T = this.st(g), o = T.order, mem = this.members(g), tag = typeof g === 'string' ? `Team ${g}: ` : '', alone = typeof g !== 'string'; if (!mem.length) return;
     o.t += dt;
     // officers cuff anyone who has given up nearby without being told (otherwise civilians run off again)
     if ((o.type === 'follow' || o.type === 'hold' || o.type === 'cover' || o.type === 'move') && Math.floor(this.time * 2) !== Math.floor((this.time - dt) * 2) && !mem.some(m => m.target)) {
-      const had = mem.filter(m => m.cuff).length; if (this.assignCuffs(team, 7) > had && this.time - (T.cuffSay ?? -99) > 6) { T.cuffSay = this.time; this.say(mem[0], `Team ${team}: Securing them.`); }
+      const had = mem.filter(m => m.cuff).length; if (this.assignCuffs(g, 7) > had && this.time - (T.cuffSay ?? -99) > 6) { T.cuffSay = this.time; this.say(mem[0], tag + 'Securing them.'); }
     }
-    const arrived = () => mem.every(m => dist(m, o.pts![m.ti] ?? m) < 0.7);
+    const arrived = () => mem.every(m => dist(m, o.pts![this.idx(m)] ?? m) < 0.7);
     if (o.type === 'door') {
       if (arrived() || o.t > 6) { this.setDoor(o.door!, !!o.open); T.order = { type: 'stack', phase: 0, t: 0, pts: o.pts, door: o.door, side: o.side }; }
     } else if (o.type === 'breach') {
       const door = o.door!, c = { x: door.cx + 0.5, z: door.cz + 0.5 }, side = o.side!;
       if (o.phase === 0 && (arrived() || o.t > 6)) {
-        o.phase = 1; o.t = 0; this.setDoor(door, true);
+        o.phase = 1; o.t = 0; this.setDoor(door, true, !o.bang);
         if (o.bang) { const d = door.horiz ? { x: 0, z: -side } : { x: -side, z: 0 }; this.grenades.push({ x: c.x + d.x * 0.7, y: 1.0, z: c.z + d.z * 0.7, vx: d.x * 5.5, vy: 1, vz: d.z * 5.5, t: 1.3 }); this.events.push({ t: 'throw', x: c.x, z: c.z }); this.say(mem[0], 'Flashbang out!'); }
+      } else if (o.phase === 1 && alone && o.bang && o.t > 1.45) { // one officer told to throw a flashbang stays at the door instead of going in alone
+        T.order = { type: 'stack', phase: 0, t: 0, pts: o.pts, door, side };
       } else if (o.phase === 1 && o.t > (o.bang ? 1.45 : 0.45)) {
         o.phase = 2; o.t = 0; o.pts = this.clearPts(door, side, o.off ?? 0);
         for (const m of mem) { m.path = null; m.goal = null; }
       } else if (o.phase === 2 && ((arrived() && o.t > 1.5) || o.t > 9) && !mem.some(m => m.target)) {
-        const got = this.assignCuffs(team, 9);
-        this.say(mem[0], `Team ${team}: Room clear.` + (got ? ' Securing them.' : ''));
+        const got = this.assignCuffs(g, 9);
+        this.say(mem[0], tag + 'Room clear.' + (got ? ' Securing them.' : ''));
         const hold: Order = { type: 'hold', phase: 0, t: 0, pts: o.pts };
         T.order = got ? { type: 'restrain', phase: 0, t: 0, prev: hold } : hold;
       }
     } else if (o.type === 'restrain') {
-      if (!mem.some(m => m.cuff) && !this.assignCuffs(team, 9)) { T.order = o.prev ?? { type: 'follow', phase: 0, t: 0, leader: o.leader }; T.order.t = 0; for (const m of mem) { m.path = null; m.goal = null; } }
+      if (!mem.some(m => m.cuff) && !this.assignCuffs(g, 9)) { T.order = o.prev ?? { type: 'follow', phase: 0, t: 0, leader: o.leader }; T.order.t = 0; for (const m of mem) { m.path = null; m.goal = null; } }
     }
   }
 
@@ -511,7 +530,7 @@ export class Sim {
   }
   private updateOfficer(o: Actor, dt: number) {
     if (o.stun > 0) { o.stun -= dt; o.moving = false; return; }
-    const T = this.teams[o.team], ord = T.order;
+    const T = this.teams[o.team], ord = (o.solo ?? T).order;
     o.percT -= dt; if (o.percT <= 0) { o.percT = 0.12; o.target = this.pickThreat(o); }
     const th = o.target;
     if (th && th.alive && !th.down) {
@@ -533,7 +552,7 @@ export class Sim {
     const p = this.leaderOf(ord.type === 'restrain' && ord.prev ? ord.prev : ord);
     if (ord.type === 'follow' || ord.type === 'restrain') { dest = this.trailPoint(1.4 + o.slot * 1.05, p); if (dist(o, p) < 1.3 + o.slot * 0.5 && !o.path) dest = null; }
     else if (ord.type === 'cover') { dest = this.trailPoint(1.1 + o.ti * 0.9, p); face = p.yaw + Math.PI + (o.ti ? 0.9 : -0.9); if (dist(o, p) < 1.4 + o.ti * 0.6 && !o.path) dest = null; }
-    else if (ord.pts) { dest = ord.pts[o.ti] ?? ord.pts[0]; face = ord.face ?? null; }
+    else if (ord.pts) { dest = ord.pts[this.idx(o)] ?? ord.pts[0]; face = ord.face ?? null; }
     if (ord.type === 'breach' && ord.phase === 1) { dest = null; }
     if ((ord.type === 'stack' || ord.type === 'door' || (ord.type === 'breach' && ord.phase < 2)) && ord.door) face = yawTo(ord.door.cx + 0.5 - o.x, ord.door.cz + 0.5 - o.z);
     const arrived = dest ? this.goTo(o, dest.x, dest.z, dt, ord.type === 'breach' && ord.phase === 2 ? 1.15 : 1) : (o.moving = false, true);
@@ -672,7 +691,7 @@ export class Sim {
         else { p.cuffT += dt; if (p.cuffT > 1.6) { this.restrain(c, p); p.cuff = null; } }
       }
     }
-    this.updateTeam('A', dt); this.updateTeam('B', dt);
+    this.updateGroup('A', dt); this.updateGroup('B', dt); for (const o of this.officers) if (o.solo) this.updateGroup(o, dt);
     for (const a of this.actors) {
       a.fireCd -= dt; if (a.reloadT > 0) a.reloadT -= dt;
       if (!a.alive) { a.deadT += dt; continue; }

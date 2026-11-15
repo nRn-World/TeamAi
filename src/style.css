@@ -187,3 +187,5 @@ ul.credits li { position:relative; padding:10px 96px 10px 0; border-top:1px soli
 ul.credits li b { color:#fff; font-weight:600; } ul.credits li span { color:#8d99a4; margin-left:8px; }
 ul.credits .by { color:#c3ccd4; } ul.credits .src { color:#74808b; font-size:12.5px; overflow-wrap:anywhere; }
 ul.credits em { position:absolute; right:0; top:11px; font:600 12px/1 var(--hd); font-style:normal; letter-spacing:.1em; color:#c3ccd4; border:1px solid #33414f; padding:4px 7px; white-space:nowrap; }
+
+.mem span { min-width:74px; white-space:nowrap; } .mem span em { font-style:normal; font-size:9px; letter-spacing:.06em; color:var(--acc); margin-left:5px; }

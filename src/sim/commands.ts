@@ -9,12 +9,15 @@ const TEAM_A = fix(/\b(team|teem|tim|squad|group|element)\s*(a|ay|eh|hey|alpha|a
 const TEAM_B = fix(/\b(team|teem|tim|squad|group|element)\s*(b|be|bee|bravo|two|2|blue)\b|\b(bravo|blue team|b team|b-team|teamb)\b/);
 const TEAM_ALL = fix(/\b(everyone|everybody|all teams|both teams|all of you|whole team|all|team)\b/);
 
+// One officer by name (same order as OFFICER_NAMES), with the spellings speech recognition tends to produce.
+const NAMES = [/\b(ken|kenn|kent|kenny|kenneth|kan)\b|^ (can) /, /\b(maya|maia|mya|mayer|myer|maja|my a)\b/, /\b(jack|jak|jacques|jacks|jac)\b|^ (jock) /, /\b(zoe|zoey|zooey|zoë|zoie|zoé|zo e)\b|^ (joey) /].map(fix);
+
 // Ordered by priority: first match wins.
 const RULES: [Action, RegExp, Dir?][] = ([
   ['shout', /\b(police|hands up|hands in the air|show me your hands|drop (the|your|that) (gun|weapon)|drop it|put (the|your) (gun|weapon) down|put it down|get down|on the ground|on your knees|give up|surrender|freeze)\b/],
   ['fireHold', /\b(hold fire|hold your fire|cease fire|ceasefire|don't shoot|do not shoot|weapons tight|weapons hold)\b/],
   ['fireFree', /\b(weapons free|fire at will|open fire|free fire|engage)\b/],
-  ['bang', /\b(flashbang|flash bang|flash and clear|bang and clear|bang|grenade|stun grenade|flash)\b/],
+  ['bang', /\b(flashbang|flash bang|flash and clear|bang and clear|bang|grenade|stun grenade|flash|flush|flesh)\b/],
   ['breach', /\b(breach|breaching|storm|clear|clear the room|move in|go in|get in|enter|take the room|kick it|kick the door)\b/],
   ['stack', /\b(stack up|stack|line up|on the door|at the door|to the door)\b/],
   ['close', /\b(close|shut)\b/],
@@ -32,16 +35,24 @@ const RULES: [Action, RegExp, Dir?][] = ([
   ['stack', /\b(door)\b/],
 ] as [Action, RegExp, Dir?][]).map(([a, re, d]) => [a, fix(re), d]);
 
-export function parseCommand(text: string, lastTeam: Team | 'ALL' = 'ALL'): Command | null {
+/** `lastWho`: the officer the previous order went to, so that «you cover us» keeps talking to the same one. */
+export function parseCommand(text: string, lastTeam: Team | 'ALL' = 'ALL', lastWho: number | null = null): Command | null {
   let s = norm(text);
   const a = TEAM_A.exec(s), b = TEAM_B.exec(s);
-  let team: Team | 'ALL' | null = null;
-  if (a && b) team = 'ALL'; else if (a) team = 'A'; else if (b) team = 'B'; else if (TEAM_ALL.test(s)) team = 'ALL';
+  let team: Team | 'ALL' | null = null, who: number | undefined;
+  if (a && b) team = 'ALL'; else if (a) team = 'A'; else if (b) team = 'B';
   // strip team words so e.g. "team b" is not parsed as something else
   s = s.replace(TEAM_A, ' ').replace(TEAM_B, ' ');
+  if (!team) {
+    const named = NAMES.map((re, i) => (re.test(s) ? i : -1)).filter(i => i >= 0);
+    if (named.length === 1) { who = named[0]; s = s.replace(NAMES[who], ' '); }
+    else if (TEAM_ALL.test(s)) team = 'ALL';
+    else if (lastWho != null && / you /.test(s)) who = lastWho;
+  }
   for (const [action, re, dir] of RULES) {
     if (re.test(s)) {
-      if (action === 'shout') { if (team && team !== 'ALL') continue; return { team: 'ALL', action }; }
+      if (action === 'shout') { if ((team && team !== 'ALL') || who != null) continue; return { team: 'ALL', action }; }
+      if (who != null) return { team: who < 2 ? 'A' : 'B', action, dir, who };
       return { team: team ?? lastTeam, action, dir };
     }
   }
