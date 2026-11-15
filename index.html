@@ -104,7 +104,8 @@
   <div class="note">Quick keys (selected team): <kbd>3</kbd> Follow <kbd>4</kbd> Hold <kbd>5</kbd> Move where I aim <kbd>6</kbd> Cover me <kbd>7</kbd> Stack up <kbd>8</kbd> Breach <kbd>9</kbd> Bang and clear <kbd>0</kbd> Secure</div>
   <h2>Voice commands</h2>
   <p>Hold <kbd>V</kbd> while you speak and release it when you are done (can be changed to «always on» in Settings). Start with the team you mean – <b>«Team A»</b> (also «Alpha», «red team»), <b>«Team B»</b> («Bravo», «blue team») or <b>«Everyone»</b> – then say what they should do. Without a team name the order goes to the team you last spoke to.</p>
-  <p><b>Speech recognition runs on your own computer</b> (Whisper). The first time, the model is downloaded – the microphone line shows the progress. With <b>AI order reading</b> turned on in Settings, a small language model on your graphics card also reads freely worded orders, several orders in one sentence («Ken, cover the door while Team B goes in with a flash») and Swedish. All orders in one sentence are carried out at the same time. In an online game the model runs only for the player who speaks; the others receive the finished order.</p>
+  <p><b>Several orders in one sentence</b> work when each one names who it is for: «Ken, cover us while Team B goes in with a flash». They are carried out at the same time. The usual orders can also be said in Swedish («Ken, täck oss», «lag B följ mig», «släng flash») – choose Swedish as the language you speak in Settings.</p>
+  <p><b>Speech recognition runs on your own computer</b> (Whisper). The first time, the model is downloaded – the microphone line shows the progress. With <b>AI order reading</b> turned on in Settings, a small language model on your graphics card reads wording the fixed rules do not know («get yourselves through that door»). In an online game the models run only for the player who speaks; the others receive the finished order.</p>
   <p>You can also give an order to <b>one officer by name</b>: Team A is <b>Ken</b> and <b>Maya</b>, Team B is <b>Jack</b> and <b>Zoe</b>. «Ken, you cover us» · «Maya, go in» · «Jack, throw flash» · «Zoe, hold here». After that «you …» keeps talking to the same officer («you go in»). The officer acts alone until the team gets a new order, for example «Team A follow me». «Throw flash» at a door is thrown through that door; without a door it is thrown where you aim.</p>
   <table class="cmds">
     <tr><td>«go left / right / forward / back»</td><td>Moves that way as seen from you</td></tr>
@@ -136,8 +137,8 @@
     <label>Microphone mode <select id="sPtt"><option value="1">Hold V to talk</option><option value="0">Always on</option></select></label>
     <label>Speech recognition engine <select id="sAsr"><option value="local">On this computer (every browser, private)</option><option value="web">Browser service (Chrome and Edge)</option></select></label>
     <div id="asrInfo" class="note"></div>
-    <label>Language you speak <select id="sSpeak"><option value="en">English</option><option value="sv">Swedish (needs AI order reading)</option></select></label>
-    <label>AI order reading <select id="sAi"><option value="0">Off</option><option value="1">Small model (about 0.4 GB)</option><option value="2">Standard model (about 1 GB)</option></select></label>
+    <label>Language you speak <select id="sSpeak"><option value="en">English</option><option value="sv">Swedish</option></select></label>
+    <label>AI order reading <select id="sAi"><option value="0">Off</option><option value="1">On (downloads about 1 GB once)</option></select></label>
     <div id="aiInfo" class="note"></div>
     <label>Accent (browser service only) <select id="sLang"><option value="en-US">English (US)</option><option value="en-GB">English (UK)</option><option value="en-AU">English (Australia)</option><option value="en-IN">English (India)</option></select></label>
     <label>Spoken voices <select id="sTts"><option value="1">On</option><option value="0">Off</option></select></label>
@@ -174,7 +175,7 @@
     <ul class="credits">
       <li><div><b>Whisper</b><span>speech recognition model (base on the graphics card, tiny on the processor), ONNX conversions by Xenova and onnx-community</span></div><div class="by">OpenAI</div><div class="src">github.com/openai/whisper · huggingface.co/onnx-community/whisper-base · huggingface.co/Xenova/whisper-tiny</div><em>MIT</em></li>
       <li><div><b>Transformers.js</b> and <b>ONNX Runtime Web</b><span>run Whisper in the browser</span></div><div class="by">Hugging Face · Microsoft</div><div class="src">github.com/huggingface/transformers.js · github.com/microsoft/onnxruntime</div><em>Apache-2.0 · MIT</em></li>
-      <li><div><b>Qwen2.5 0.5B / 1.5B Instruct</b><span>language model for AI order reading (optional), MLC builds</span></div><div class="by">Alibaba Cloud</div><div class="src">huggingface.co/Qwen · huggingface.co/mlc-ai</div><em>Apache-2.0</em></li>
+      <li><div><b>Qwen2.5 1.5B Instruct</b><span>language model for AI order reading (optional), MLC builds</span></div><div class="by">Alibaba Cloud</div><div class="src">huggingface.co/Qwen · huggingface.co/mlc-ai</div><em>Apache-2.0</em></li>
       <li><div><b>WebLLM</b><span>runs the language model with WebGPU</span></div><div class="by">MLC AI</div><div class="src">github.com/mlc-ai/web-llm</div><em>Apache-2.0</em></li>
       <li><div><b>three.js</b><span>3D engine</span></div><div class="by">three.js authors</div><em>MIT</em></li>
       <li><div><b>Vite</b><span>build tool</span></div><div class="by">VoidZero Inc. and Vite contributors</div><em>MIT</em></li>

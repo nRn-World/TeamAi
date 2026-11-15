@@ -5,7 +5,8 @@
 import { pipeline } from '@huggingface/transformers';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { orderMessages, toCommands } from '../src/sim/aiorders';
+import { orderMessages, toAction } from '../src/sim/aiorders';
+import { splitOrders } from '../src/sim/commands';
 
 const out: string[] = [], log = (s: string) => { console.log(s); out.push(s); };
 const save = () => writeFileSync('ai-check.txt', out.join('\n'));
@@ -32,20 +33,23 @@ for (const [model, dtype] of [['onnx-community/whisper-base', { encoder_model: '
 }
 
 log('\n## Order reading');
+// Only wording the fixed rules cannot read reaches the model, one order at a time; the rules decide who it is for.
 const tests: [string, string][] = [
-  ['Ken cover the door while team B goes in with a flash', 'ALL'], ['you two stay put', 'A'], ['Jack get in there', 'ALL'], ['everybody come back to me', 'B'], ['Maya watch my back and Zoe open that door', 'ALL'],
-  ['team a take the left side and team b take the right', 'ALL'], ['nobody shoots unless they shoot first', 'ALL'], ['put the cuffs on them', 'Ken'], ['toss a flashbang in there Ken', 'ALL'], ['I wonder what is for lunch', 'ALL'],
-  ['hey what was that noise', 'A'], ['you go left', 'Jack'], ['both teams line up on that door', 'A'], ['Zoe hold your fire', 'ALL'],
-  ['Ken du täcker oss', 'ALL'], ['ni skyddar mig', 'B'], ['Zoe stäng dörren', 'ALL'], ['alla följ mig', 'A'], ['du går in', 'Ken'], ['Ken släng flash', 'ALL'], ['lag B följ med mig', 'ALL'], ['alla stannar här', 'ALL'], ['Maya öppna dörren och Jack skydda mig', 'ALL'], ['lag A gå till vänster', 'ALL'], ['sätt handbojor på dem', 'B'],
+  ['get yourselves through that door', 'breach'], ['you two stay put', 'hold'], ['nobody shoots unless they shoot first', 'fireHold'], ['put the bracelets on them', 'restrain'], ['toss one in before you enter', 'bang'],
+  ['I wonder what is for lunch', 'none'], ['hey what was that noise', 'none'], ['stick with me', 'follow'], ['keep me safe', 'cover'], ['head over to where I am pointing', 'move there'], ['slide over to the left side', 'move left'],
+  ['how are you doing', 'report'], ['take them into custody', 'restrain'], ['you are clear to fire', 'fireFree'], ['don\'t let anyone sneak up behind me', 'cover'], ['thank you', 'none'], ['nice work', 'none'],
+  ['håll er nära mig', 'follow'], ['rör er inte', 'hold'], ['ta er in i rummet', 'breach'], ['sätt handklovar på honom', 'restrain'], ['hur mår ni', 'report'], ['vad var det där', 'none'], ['flytta er åt vänster', 'move left'], ['ni får skjuta', 'fireFree'],
 ];
+let right = 0;
 for (const model of ['onnx-community/Qwen2.5-1.5B-Instruct']) {
   try {
-    const gen: any = await pipeline('text-generation', model, { dtype: model.includes('Phi') ? 'q4f16' : 'q4' } as any);
-    for (const [text, last] of tests) {
-      const t0 = Date.now(), r = await gen(orderMessages(text, last), { max_new_tokens: 140, do_sample: false }), ans = String(r[0].generated_text.at(-1).content);
-      const lw = ['Ken', 'Maya', 'Jack', 'Zoe'].indexOf(last), cmds = toCommands(ans, lw >= 0 ? (lw < 2 ? 'A' : 'B') : last as any, lw >= 0 ? lw : null);
-      log(`${model.split('/')[1]} | [${last}] ${text} => ${cmds.map(c => [c.who != null ? ['Ken', 'Maya', 'Jack', 'Zoe'][c.who] : c.team, c.action, c.dir].filter(Boolean).join(' ')).join(' + ') || '(none)'}   raw: ${ans.replace(/\s+/g, ' ').slice(0, 160)} (${Date.now() - t0} ms)`);
+    const gen: any = await pipeline('text-generation', model, { dtype: 'q4' } as any);
+    for (const [text, want] of tests) {
+      if (splitOrders(text).every(x => x.cmd)) { log(`(rules already read: ${text})`); continue; }
+      const t0 = Date.now(), r = await gen(orderMessages(text), { max_new_tokens: 40, do_sample: false }), ans = String(r[0].generated_text.at(-1).content), a = toAction(ans), got = a ? a.action + (a.dir ? ' ' + a.dir : '') : 'none';
+      if (got === want) right++; log(`${got === want ? 'ok  ' : 'MISS'} ${text} => ${got} (wanted ${want})   raw: ${ans.replace(/\s+/g, ' ').slice(0, 80)} (${Date.now() - t0} ms)`);
     }
+    log(`right: ${right}`);
   } catch (e) { log(`${model}: FAILED ${String((e as any)?.message ?? e).slice(0, 300)}`); }
   save();
 }

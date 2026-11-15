@@ -7,13 +7,12 @@ import { operatorEnv } from './game/operator';
 import { loadWeapons, weaponsReady, FpsArms, studioEnv } from './game/weapons';
 import { upgradeViewModel } from './game/world';
 import '@fontsource/barlow-condensed/500.css'; import '@fontsource/barlow-condensed/600.css'; import '@fontsource/barlow-condensed/700.css'; import '@fontsource/barlow/400.css'; import '@fontsource/barlow/600.css';
-import { parseCommand, ACTION_LABEL, DIR_LABEL } from './sim/commands';
+import { parseCommand, splitOrders, commandFor, ACTION_LABEL, DIR_LABEL } from './sim/commands';
 import { LevelView, ActorView, FX, makeViewModel, TEAM_COLOR } from './game/world';
 import { GameAudio, Speech } from './game/audio';
 import { Voice } from './game/voice';
 import { LocalVoice } from './ai/localvoice';
 import { Brain, BRAIN_MODELS } from './ai/brain';
-import { looksCompound } from './sim/aiorders';
 import { Net, Msg } from './game/net';
 import { encodeSnap, applySnap, encodeEv, decodeEv } from './sim/netstate';
 import type { DataConnection } from 'peerjs';
@@ -27,7 +26,7 @@ const AUTO = params.has('auto');
 const defaults = { sens: 1, vol: 0.8, mic: 1, ptt: 1, lang: 'en-US', asr: 'local', speak: 'en', ai: 0, tts: 1, head: 0, qual: 1, diff: 1, name: '' };
 type Settings = typeof defaults;
 const S: Settings = { ...defaults, ...JSON.parse(localStorage.getItem('teamai.settings') || '{}') };
-if (!String(S.lang).startsWith('en')) S.lang = 'en-US'; // the game is English only; older saves may hold another language
+if (!String(S.lang).startsWith('en')) S.lang = 'en-US'; if (+S.ai > 1) S.ai = 1; // the game is English only; older saves may hold another language
 const best: Record<string, number> = JSON.parse(localStorage.getItem('teamai.best') || '{}');
 if (params.has('q')) S.qual = +params.get('q')!;
 const saveSettings = () => localStorage.setItem('teamai.settings', JSON.stringify(S));
@@ -316,22 +315,30 @@ class Game {
     if (fromMic && !S.head && !S.ptt && this.speech.speaking) { // don't let the team's own radio voice trigger orders
       $('heard').textContent = '« ' + text.split('|')[0].trim() + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'Ignored – the team was talking at the same time (say it again)'; this.parsedT = 4; return;
     }
-    const alts = text.split('|').map(s => s.trim()).filter(Boolean); let cmd: Command | null = null;
-    for (const a of alts) { cmd = parseCommand(a, this.lastTeam, this.lastWho); if (cmd) break; }
+    const alts = text.split('|').map(s => s.trim()).filter(Boolean); let parts = splitOrders(alts[0], this.lastTeam, this.lastWho), heard = alts[0];
+    for (const a of alts) { const pa = splitOrders(a, this.lastTeam, this.lastWho); if (pa.length && pa.every(x => x.cmd)) { parts = pa; heard = a; break; } }
     $('heard').textContent = '« ' + alts[0] + ' »'; this.parsedT = 4;
-    const p = $('parsed');
-    if (S.ai && this.brain.ready && cmd?.action !== 'shout' && (!cmd || looksCompound(alts[0]))) { // free wording or several orders in one sentence: let the model read it
-      p.className = ''; p.textContent = 'AI is reading the order…'; this.parsedT = 9; const sim = this.sim, rule = cmd;
-      void this.brain.interpret(alts[0], this.lastTeam, this.lastWho).then(list => {
+    const p = $('parsed'), byKey = !fromMic, sim = this.sim;
+    const run = (cmds: Command[]) => { const said: string[] = []; for (const c of cmds.slice(0, 4)) { this.exec(c, byKey); said.push(p.textContent ?? ''); } if (said.length > 1) p.textContent = said.join('  ·  '); };
+    const open = parts.filter(x => !x.cmd);
+    if (!open.length && parts.length) { run(parts.map(x => x.cmd!)); return; }
+    if (S.ai && this.brain.ready && heard.split(/\s+/).length > 1) { // wording the fixed rules do not know: the language model names the action, the rules keep deciding who it is for
+      p.className = ''; p.textContent = 'AI is reading the order…'; this.parsedT = 12;
+      void (async () => {
+        const cmds: Command[] = []; let lt = this.lastTeam, lw = this.lastWho, late = false;
+        for (const x of parts.slice(0, 4)) {
+          let c = x.cmd;
+          if (!c) { const r = await this.brain.interpret(x.text); if (r === null) late = true; else if (r) c = commandFor(x, r.action, r.dir, lt, lw); }
+          if (c) { cmds.push(c); if (c.action !== 'shout') { lt = c.team; lw = c.who ?? null; } }
+        }
         if (this.sim !== sim || (this.state !== 'play' && this.state !== 'pause')) return;
-        if (list && list.length) { const said: string[] = []; for (const c of list) { this.exec(c, !fromMic); said.push(p.textContent ?? ''); } p.textContent = said.join('  ·  '); }
-        else if (rule) this.exec(rule, !fromMic);
-        else { p.className = 'bad'; p.textContent = list ? 'No order recognised' : 'AI did not answer in time – say it again'; this.parsedT = 4; this.audio.fail(); }
-      });
+        if (cmds.length) run(cmds); else { p.className = 'bad'; p.textContent = late ? 'AI did not answer in time – say it again' : 'No order recognised'; this.parsedT = 4; this.audio.fail(); }
+      })();
       return;
     }
-    if (!cmd) { p.className = 'bad'; p.textContent = S.speak === 'sv' && !this.brain.ready ? 'No order recognised – Swedish needs «AI order reading» in Settings' : 'No order recognised'; this.audio.fail(); return; }
-    this.exec(cmd, !fromMic);
+    const known = parts.filter(x => x.cmd).map(x => x.cmd!);
+    if (!known.length) { p.className = 'bad'; p.textContent = 'No order recognised'; this.audio.fail(); return; }
+    run(known);
   }
   exec(cmd: Command, byKey: boolean) {
     const sim = this.sim!; const p = $('parsed'); p.className = ''; this.parsedT = 4;
@@ -441,9 +448,9 @@ class Game {
     else a.textContent = lv.modelReady ? `Ready – Whisper runs on ${lv.device === 'webgpu' ? 'your graphics card' : 'your processor'}${lv.lastMs ? `, last answer took ${lv.lastMs} ms` : ''}. Nothing you say leaves this computer.` : lv.failed ? `Could not be loaded: ${lv.lastError}` : !S.mic ? 'Speech recognition is off.' : `Downloading the speech model${lv.sizeMb ? ` (about ${lv.sizeMb} MB, once)` : ''}: ${pct(lv.progress)}`;
     a.className = 'note' + (lv.failed ? ' warn' : '');
     const label = BRAIN_MODELS[br.size]?.label ?? '';
-    b.textContent = br.state === 'ready' ? `Ready (${label}) on your graphics card${br.lastMs ? `, last answer took ${br.lastMs} ms` : ''}. Sentences the fixed rules cannot read, and sentences with several orders, go to the model.`
+    b.textContent = br.state === 'ready' ? `Ready (${label}) on your graphics card${br.lastMs ? `, last answer took ${br.lastMs} ms` : ''}. Wording the fixed rules do not know goes to the model.`
       : br.state === 'loading' ? `Getting ${label} ready: ${pct(br.progress)} – ${br.note}` : br.state === 'error' ? `Could not start: ${br.note}` : br.state === 'unsupported' ? br.note
-      : 'Off – orders are read by the fixed rules: English, one order per sentence. Turning it on downloads the model once (small about 0.4 GB, standard about 1 GB).';
+      : 'Off – orders are read by the fixed rules, which know the usual wordings in English and Swedish. Turning it on downloads a language model once (about 1 GB) that also reads freer wording.';
     b.className = 'note' + (br.state === 'error' || br.state === 'unsupported' ? ' warn' : '');
   }
   micState(s: string, detail?: string) {

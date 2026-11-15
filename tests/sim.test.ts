@@ -1,6 +1,7 @@
 import { Sim, yawTo, fwd } from '../src/sim/sim';
-import { parseCommand } from '../src/sim/commands';
-import { toCommands, looksCompound, orderMessages, ORDER_SCHEMA } from '../src/sim/aiorders';
+import { parseCommand, splitOrders, commandFor } from '../src/sim/commands';
+import { toAction, orderMessages, ORDER_SCHEMA } from '../src/sim/aiorders';
+import type { Command } from '../src/sim/sim';
 import { findPath } from '../src/sim/nav';
 import { MISSIONS } from '../src/sim/level';
 import { encodeSnap, applySnap, encodeEv, decodeEv } from '../src/sim/netstate';
@@ -40,18 +41,22 @@ for (const [t, exp, last] of named) { const c = parseCommand(t, 'ALL', last ?? n
   console.log('solo flash without a door: grenades', sim.grenades.length - g0, 'order', sim.officers[2].solo?.order.type);
   ken.alive = false; ok(!sim.command({ team: 'A', action: 'follow', who: 0 }), 'a dead officer cannot take orders');
 }
-{ // answers of the language model → orders
-  const j = (c: any[]) => c.map(x => [x.who ?? x.team, x.action, x.dir].filter(v => v != null).join(' ')).join(', ');
-  const ai: [string, string, ('A' | 'B' | 'ALL')?, number?][] = [
-    ['{"orders":[{"to":"Ken","action":"cover","dir":""},{"to":"B","action":"bang","dir":""}]}', '0 cover, B bang'],
-    ['Sure! {"orders":[{"to":"Team A","action":"move","dir":"right"}]} done', 'A move right'],
-    ['{"orders":[{"to":"zoe","action":"HOLD"},{"to":"zoe","action":"follow"},{"to":"ALL","action":"none"}]}', '3 hold'],
-    ['{"orders":[{"to":"","action":"breach"}]}', '2 breach', 'B', 2], ['{"orders":[{"to":"?","action":"follow"}]}', 'B follow', 'B'],
-    ['{"orders":[{"to":"A","action":"move","dir":"up"},{"to":"B","action":"dance"}]}', ''], ['not json', ''], ['{"orders":[{"to":"Jack","action":"shout"}]}', 'ALL shout'],
+{ // several orders in one sentence, Swedish wordings, answers of the language model
+  const j = (c: (Command | null)[]) => c.map(x => x ? [x.who ?? x.team, x.action, x.dir].filter(v => v != null).join(' ') : '?').join(', ');
+  const multi: [string, string, ('A' | 'B' | 'ALL')?, number?][] = [
+    ['Ken cover the door while team B goes in with a flash', '0 cover, B bang'], ['team a bang and clear', 'A bang'], ['Maya open the door and go in', '1 breach'],
+    ['team a go left and team b go right', 'A move left, B move right'], ['Maya watch my back and Zoe open that door', '1 cover, 3 open'], ['everybody come back to me', 'ALL follow'],
+    ['Jack hold here then everyone else do a dance', '2 hold, ?'], ['Ken du täcker oss', '0 cover'], ['du går in', '0 breach', 'A', 0], ['Ken släng flash', '0 bang'], ['lag B följ med mig', 'B follow'],
+    ['alla stannar här', 'ALL hold'], ['Maya öppna dörren och Jack skydda mig', '1 open, 2 cover'], ['lag A gå till vänster', 'A move left'], ['sätt handbojor på dem', 'B restrain', 'B'],
+    ['ni skyddar mig', 'B cover', 'B'], ['Zoe stäng dörren', '3 close'], ['polis släpp vapnet', 'ALL shout'], ['Zoe hold your fire', '3 fireHold'], ['Ken get yourself inside and team b wait', '?, B hold'],
   ];
-  for (const [a, exp, lt, lw] of ai) { const got = j(toCommands(a, lt ?? 'ALL', lw ?? null)); ok(got === exp, `ai "${a}" => ${got} (expected ${exp})`); }
-  ok(looksCompound('Ken cover us and Jack go in') && !looksCompound('team a follow me'), 'compound sentences are detected');
-  ok(orderMessages('x', 'Ken').at(-1)!.content.includes('Ken') && JSON.parse(ORDER_SCHEMA).required[0] === 'orders', 'prompt and schema');
+  for (const [t, exp, lt, lw] of multi) { const got = j(splitOrders(t, lt ?? 'ALL', lw ?? null).map(x => x.cmd)); ok(got === exp, `orders "${t}" => ${got} (expected ${exp})`); }
+  const part = splitOrders('Ken get yourself inside and team b wait')[0];
+  ok(j([commandFor(part, 'breach', undefined, 'ALL', null)]) === '0 breach', 'the model names the action, the rules keep the addressee');
+  ok(j([commandFor(splitOrders('get yourself inside', 'B', 3)[0], 'breach', undefined, 'B', 3)]) === '3 breach', 'no addressee: the last officer spoken to');
+  const act = (a: string) => { const r = toAction(a); return r ? r.action + (r.dir ? ' ' + r.dir : '') : 'null'; };
+  ok(act('{"action":"breach","dir":""}') === 'breach' && act('ok {"action":"MOVE","dir":"Left"}"') === 'move left' && act('{"action":"move","dir":""}') === 'null' && act('{"action":"none","dir":""}') === 'null' && act('nope') === 'null' && act('{"action":"shout"}') === 'null', 'model answers');
+  ok(orderMessages('x').at(-1)!.content === 'x' && JSON.parse(ORDER_SCHEMA).required[0] === 'action', 'prompt and schema');
 }
 console.log('parser cases:', cases.length + named.length);
 
