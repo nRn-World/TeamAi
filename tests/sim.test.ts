@@ -82,6 +82,23 @@ function play(mission: number, seed: number, verbose = false) {
   host.damage(host.players[1], 9999, host.suspects[0], false); host.damage(host.players[2], 9999, host.suspects[0], false); ok(!!host.over && !host.over.win, 'mission fails when all players are down');
   console.log('co-op mirror test done');
 }
+{ // a kneeling or cuffed person in a doorway must give way instead of blocking it
+  let stuck = 0, cases = 0;
+  for (const m of [0, 1, 2]) {
+    const sim = new Sim(m, 3, 1) as any; const p = sim.player, c = sim.civs[0];
+    for (const o of sim.officers) { o.x = -50 - o.slot * 3; o.z = -50; }
+    for (const s of sim.suspects) s.alive = false; for (const x of sim.civs) if (x !== c) x.alive = false;
+    for (const d of sim.level.doors) for (const sign of [-1, 1]) for (const off of [0, 0.15, -0.25]) {
+      d.open = 1; d.target = 1; const ax = sim.solidCell(d.cx - 1, d.cz) ? [0, 1] : [1, 0];
+      c.x = d.cx + 0.5 + ax[1] * off; c.z = d.cz + 0.5 + ax[0] * off; c.surrendered = true; c.restrained = true;
+      p.x = d.cx + 0.5 - ax[0] * 1.2 * sign; p.z = d.cz + 0.5 - ax[1] * 1.2 * sign; const x0 = p.x, z0 = p.z;
+      for (let i = 0; i < 90; i++) { sim.movePlayer(ax[0] * sign * 0.07, ax[1] * sign * 0.07); sim.checkT = 9; sim.update(1 / 30); d.open = 1; d.target = 1; }
+      cases++; if ((p.x - x0) * ax[0] * sign + (p.z - z0) * ax[1] * sign < 2.4 || sim.solidCell(Math.floor(c.x), Math.floor(c.z))) stuck++;
+    }
+  }
+  ok(stuck === 0, `player blocked by a kneeling person in ${stuck}/${cases} doorway cases`);
+  console.log('doorway test done');
+}
 let wins = 0, n = 0;
 for (let m = 0; m < 3; m++) for (let s = 1; s <= 4; s++) { const sim = play(m, s, m === 0 && s === 1); n++; if (sim.over?.win) wins++; }
 console.log(`wins ${wins}/${n}`);

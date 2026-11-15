@@ -155,6 +155,18 @@ export class Sim {
       const d = Math.sqrt(d2); ex /= d; ez /= d; a.x = nx + ex * r; a.z = nz + ez * r;
     }
   }
+  /** Moves kneeling actor k clear of o: straight away if there is room, otherwise sideways along the wall. */
+  private giveWay(k: Actor, o: Actor) {
+    const min = k.r + o.r; let dx = k.x - o.x, dz = k.z - o.z, d = Math.hypot(dx, dz); if (d < 1e-5) { dx = 1; dz = 0; d = 1; }
+    dx /= d; dz /= d; const x0 = k.x, z0 = k.z, need = min - d;
+    let best = { x: x0, z: z0, d };
+    for (const [sx, sz] of [[dx, dz], [-dz, dx], [dz, -dx]]) {
+      k.x = x0 + sx * need * 1.5; k.z = z0 + sz * need * 1.5; this.resolve(k);
+      const e = Math.hypot(k.x - o.x, k.z - o.z); if (e > best.d + 1e-4 && !this.solidCell(Math.floor(k.x), Math.floor(k.z))) best = { x: k.x, z: k.z, d: e };
+      if (sx === dx && sz === dz && e >= min - 1e-3) break;
+    }
+    k.x = best.x; k.z = best.z;
+  }
   movePlayer(dx: number, dz: number) {
     const p = this.player; if (!p.alive) return;
     if (p.cuff) { dx *= 0.2; dz *= 0.2; }
@@ -672,6 +684,9 @@ export class Sim {
     for (let i = 0; i < A.length; i++) for (let j = i + 1; j < A.length; j++) {
       const a = A[i], b = A[j]; if (!a.alive || !b.alive) continue;
       const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz), min = a.r + b.r; if (d >= min || d < 1e-5) continue;
+      // someone kneeling or cuffed shuffles out of the way of police, so they can never block a doorway
+      const pa = a.kind === 'player' || a.kind === 'officer', pb = b.kind === 'player' || b.kind === 'officer';
+      if ((a.down && pb && !b.down) || (b.down && pa && !a.down)) { const k = a.down ? a : b, o = a.down ? b : a; this.giveWay(k, o); if (o.kind === 'officer' && dist(k, o) < min) { const e = Math.hypot(o.x - k.x, o.z - k.z) || 1, q = (min - e) * 0.5; o.x += ((o.x - k.x) / e) * q; o.z += ((o.z - k.z) / e) * q; this.resolve(o); } continue; }
       const fa = a.kind === 'player' || a.down ? 0 : 1, fb = b.kind === 'player' || b.down ? 0 : 1; if (!fa && !fb) { if (a.kind === 'player') { a.x -= (dx / d) * (min - d); a.z -= (dz / d) * (min - d); this.resolve(a); } continue; }
       const push = min - d, wa = fa / (fa + fb), wb = fb / (fa + fb);
       a.x -= (dx / d) * push * wa; a.z -= (dz / d) * push * wa; b.x += (dx / d) * push * wb; b.z += (dz / d) * push * wb;
