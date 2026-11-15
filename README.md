@@ -27,6 +27,8 @@ The lines in `voice/lines.json` are rendered by the workflow `.github/workflows/
 
 Each entry has the text `t`, the roles that speak it `r` (`p` player, `o` officer, `s` suspect, `c` civilian) and optionally `s: 1` for a shouted line. Every role has its own set of voices (`voice/make.py`), so the four officers, the suspects and the civilians all sound like different people, and women figures have women's voices. Shouted lines are spoken faster, pitch-raised, heavily compressed, given a presence boost, light overdrive and a short room echo. Lines without a clip are read by the browser's speech synthesis.
 
+All voice clips are measured when they are loaded and played at the same loudness, shouted or not: a shout differs in delivery, strain and room echo, not in volume. `LINE_LEVEL` and the `CH_*` constants in `src/game/audio.ts` set the levels.
+
 When you yell a challenge (key Q, or by saying «Police! Drop the weapon!» into the microphone) the game picks one of six shouted challenges at random.
 
 ## 3D characters

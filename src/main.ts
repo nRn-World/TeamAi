@@ -292,7 +292,7 @@ class Game {
     // every character has a voice of its own (the voice matches the figure: women sound like women)
     const voice = o.voice ?? (kind === 'officer' ? 'o' + ((a!.slot % 4) + 1) : kind === 'suspect' ? ['s1', 's2', 's4', 's3', 's5'][a!.id % 5] : kind === 'civ' ? 'c' + ((a!.id % 5) + 1) : 'p1');
     const rate = kind === 'player' && a && a !== this.sim?.player ? 0.94 + (a.pi % 3) * 0.06 : 1, loud = this.audio.isShout(clean);
-    const ms = this.audio.line(clean, { voice, rate, radio: kind === 'officer' && !loud, gruff: kind === 'suspect', gain: (o.gain ?? 1) * (loud ? 1.5 : 1), pan: o.pan, muffle: o.muffle });
+    const ms = this.audio.line(clean, { voice, rate, radio: kind === 'officer' && !loud, gruff: kind === 'suspect', shout: loud, gain: o.gain ?? 1, pan: o.pan, muffle: o.muffle });
     if (ms) this.speech.busy(ms); else this.speech.say(text, o.pitch ?? 1, o.rate ?? 1.2, o.gain ?? 0.9);
     return ms;
   }
