@@ -7,14 +7,15 @@ kbd { background:#1c2530; border:1px solid #3a4a5a; border-bottom-width:2px; bor
 
 /* ---------- HUD ---------- */
 #hud { position:fixed; inset:0; pointer-events:none; text-shadow:0 1px 2px #000; }
-#cross { position:absolute; left:50%; top:50%; --gap:8px; }
-#cross i { position:absolute; background:#e8f6ff; box-shadow:0 0 2px #000; opacity:.85; }
+#cross { position:absolute; left:50%; top:50%; --gap:8px; --arms-op:1; }
+#cross i { position:absolute; background:#e8f6ff; box-shadow:0 0 2px #000; opacity:calc(.85 * var(--arms-op)); }
 #cross i:nth-child(1) { width:2px; height:9px; left:-1px; top:calc(-9px - var(--gap)); }
 #cross i:nth-child(2) { width:2px; height:9px; left:-1px; top:var(--gap); }
 #cross i:nth-child(3) { width:9px; height:2px; top:-1px; left:calc(-9px - var(--gap)); }
 #cross i:nth-child(4) { width:9px; height:2px; top:-1px; left:var(--gap); }
 #cross b { position:absolute; width:2px; height:2px; left:-1px; top:-1px; background:#fff; }
-#cross.friend i, #cross.friend b { background:#5fe08a; }
+#cross.ads b { width:4px; height:4px; left:-2px; top:-2px; border-radius:50%; background:#ff3b30; box-shadow:0 0 5px rgba(255,59,48,.95), 0 0 2px #000; }
+#cross.friend i, #cross.friend b { background:#5fe08a; box-shadow:0 0 4px rgba(95,224,138,.85); }
 #hitmark { position:absolute; left:50%; top:50%; width:26px; height:26px; margin:-13px; opacity:0; background:
   linear-gradient(45deg, transparent 46%, #fff 46%, #fff 54%, transparent 54%), linear-gradient(-45deg, transparent 46%, #fff 46%, #fff 54%, transparent 54%);
   -webkit-mask: radial-gradient(circle, transparent 5px, #000 6px); mask: radial-gradient(circle, transparent 5px, #000 6px); }
