@@ -261,15 +261,103 @@ export class Sim {
     }
     return null;
   }
-  private hitExterior3D(x: number, y: number, z: number) {
+  private hitExterior3D(x: number, y: number, z: number, forRay = false) {
     const l = this.level;
-    if (l.vehicle && y < l.vehicle.h && pointInOBB(x, z, l.vehicle.x, l.vehicle.z, l.vehicle.hx, l.vehicle.hz, l.vehicle.yaw)) return true;
+    if (l.vehicle) {
+      let vh = l.vehicle.h;
+      if (forRay) {
+        const c = Math.cos(l.vehicle.yaw), s = Math.sin(l.vehicle.yaw);
+        const lx = (x - l.vehicle.x) * c - (z - l.vehicle.z) * s;
+        if (lx > l.vehicle.hx * 0.35) vh = Math.min(vh, 1.42); // sloping front hood
+      }
+      if (y < vh && pointInOBB(x, z, l.vehicle.x, l.vehicle.z, l.vehicle.hx, l.vehicle.hz, l.vehicle.yaw)) return true;
+    }
     for (const b of l.extBoxes) {
       if (y < (b.h ?? 3) && pointInOBB(x, z, b.x, b.z, b.hx, b.hz, b.yaw ?? 0)) return true;
     }
     for (const cr of l.extCircles) {
-      if (y < (cr.h ?? 3) && Math.hypot(x - cr.x, z - cr.z) < cr.r) return true;
+      const h = cr.h ?? 3;
+      if (y >= h) continue;
+      if (forRay && cr.r >= 0.4 && h >= 2.5 && h <= 2.85) {
+        // Courtyard tree: narrow trunk below crown, open canopy gaps above
+        const r = y < 1.45 ? 0.15 : 0.3;
+        if (Math.hypot(x - cr.x, z - cr.z) < r) return true;
+      } else if (Math.hypot(x - cr.x, z - cr.z) < cr.r) return true;
     }
+    return false;
+  }
+  private isCurtainWindow(cx: number, cz: number) {
+    const t = this.level.theme;
+    if (t !== 'office' && t !== 'hotel' && t !== 'club') return false;
+    return this.cell(cx, cz + 1) === OUT || this.cell(cx, cz - 1) === OUT || this.cell(cx + 1, cz) === OUT || this.cell(cx - 1, cz) === OUT;
+  }
+  private rayPropHit(cx: number, cz: number, x: number, y: number, z: number, breakGlass: boolean): boolean {
+    const pr = this.level.propAt.get(cz * this.level.w + cx);
+    if (!pr) return y < 0.85;
+    const pk = pr.cz * this.level.w + pr.cx;
+    const broken = this.brokenProps.has(pk);
+    const pcx = pr.cx + (pr.w ?? 1) / 2, pcz = pr.cz + (pr.d ?? 1) / 2;
+    if (pr.kind === 'pc' || pr.kind === 'desk') {
+      if (y <= 0.78) return true;
+      if (!broken && y <= 1.24 && Math.hypot(x - pcx, z - pcz) < 0.34) {
+        if (breakGlass) this.breakProp(cx, cz, x, y, z);
+        return true;
+      }
+      return false;
+    }
+    if (pr.kind === 'plant') {
+      const hit = broken ? (y < 0.28 && Math.hypot(x - pcx, z - pcz) < 0.34) : (y < 0.78 && Math.hypot(x - pcx, z - pcz) < 0.28);
+      if (hit && breakGlass && !broken) this.breakProp(cx, cz, x, y, z);
+      return hit;
+    }
+    if (pr.kind === 'bed') return y < 0.58;
+    if (pr.kind === 'chair' || pr.kind === 'sofa') return y < 0.56;
+    if (pr.kind === 'bar') return y < 1.08;
+    if (pr.kind === 'server' || pr.kind === 'shelf' || pr.kind === 'locker') {
+      if (y >= 2.08) return false;
+      if (breakGlass && pr.kind === 'server' && !broken) this.breakProp(cx, cz, x, y, z);
+      return true;
+    }
+    return y < 2.2;
+  }
+  private raySolidAt(x: number, y: number, z: number, breakGlass: boolean): boolean {
+    if (y <= 0) return true;
+    const l = this.level;
+    const cx = Math.floor(x), cz = Math.floor(z);
+    if (cx < 0 || cz < 0 || cx >= l.w || cz >= l.h) return false; // open sky/street outside bounds
+    const c = l.cells[cz * l.w + cx];
+    const perim = cx === 0 || cz === 0 || cx === l.w - 1 || cz === l.h - 1;
+    if (perim) return y < (l.theme === 'club' ? 2.6 : 0.85);
+    if (y >= 3) return c !== OUT;
+    if (c === WINDOW) {
+      const cw = this.isCurtainWindow(cx, cz);
+      const minY = cw ? 0.12 : 0.9, maxY = cw ? 2.75 : 2.3;
+      if (y >= minY && y <= maxY) {
+        if (breakGlass) this.breakWindow(cx, cz);
+        return false; // bullets pass through window glass!
+      }
+      return true;
+    }
+    if (c === WALL) return true;
+    if (c === DOOR && y >= 2.2) return true;
+    if (c === LOW || c === HIGH) return this.rayPropHit(cx, cz, x, y, z, breakGlass);
+    const hitDoor = this.hitDoorLeaf3D(x, y, z);
+    if (hitDoor) {
+      if (this.isGlassDoor(hitDoor) && y >= 0.08 && y <= 2.12) {
+        const seg = doorLeafSegment(hitDoor);
+        const distHinge = Math.hypot(x - seg.hx, z - seg.hz);
+        if (distHinge > 0.07 && distHinge < 0.87) {
+          if (breakGlass && !this.brokenDoorGlass.has(hitDoor.id)) {
+            this.brokenDoorGlass.add(hitDoor.id);
+            this.events.push({ t: 'glass', x, z });
+            this.noise(x, z, 16);
+          }
+          return false; // bullets pass through shattered door glass pane!
+        }
+      }
+      return true;
+    }
+    if (this.hitExterior3D(x, y, z, true)) return true;
     return false;
   }
 
@@ -279,46 +367,18 @@ export class Sim {
     const cand = this.actors.filter(a => a.alive && a !== ignore);
     for (let d = 0; d < maxD; d += step) {
       x += dx * step; y += dy * step; z += dz * step;
-      if (y <= 0) return { kind: 'wall' as const, x, y: 0, z, d, actor: null, head: false };
-      const cx = Math.floor(x), cz = Math.floor(z), c = this.cell(cx, cz);
-      if (y >= 3 && c !== 0) return { kind: 'wall' as const, x, y: 3, z, d, actor: null, head: false };
       if (y > 12) break;
-      if (c === WINDOW && y >= 0.9 && y <= 2.3) {
-        if (breakGlass) this.breakWindow(cx, cz);
-        continue; // bullets pass through window glass!
-      }
-      if (c === LOW && y >= 0.72 && y <= 1.38) {
-        const pr = this.level.propAt.get(cz * this.level.w + cx);
-        if (pr && (pr.kind === 'pc' || pr.kind === 'desk')) {
-          const pcx = pr.cx + (pr.w ?? 1) / 2, pcz = pr.cz + (pr.d ?? 1) / 2;
-          if (Math.hypot(x - pcx, z - pcz) < 0.72) {
-            if (breakGlass) this.breakProp(cx, cz, x, y, z);
-            return { kind: 'wall' as const, x, y, z, d, actor: null, head: false };
-          }
+      if (this.raySolidAt(x, y, z, breakGlass)) {
+        // Refine impact surface to < 1mm so bullet holes & sparks never float in midair
+        let lo = d, hi = d + step;
+        for (let i = 0; i < 6; i++) {
+          const mid = (lo + hi) * 0.5;
+          if (this.raySolidAt(ox + dx * mid, oy + dy * mid, oz + dz * mid, false)) hi = mid;
+          else lo = mid;
         }
+        const hx = ox + dx * hi, hy = Math.max(0, oy + dy * hi), hz = oz + dz * hi;
+        return { kind: 'wall' as const, x: hx, y: hy, z: hz, d: hi, actor: null, head: false };
       }
-      if (y < 3 && (c === WALL || (c === WINDOW && y < 0.9) || (c === WINDOW && y > 2.3) || (c === HIGH && y < 2.2) || (c === LOW && y < 0.85) || (c === DOOR && y >= 2.2))) {
-        if (breakGlass && (c === LOW || c === HIGH)) this.breakProp(cx, cz, x, y, z);
-        return { kind: 'wall' as const, x, y, z, d, actor: null, head: false };
-      }
-      const hitDoor = this.hitDoorLeaf3D(x, y, z);
-      if (hitDoor) {
-        if (this.isGlassDoor(hitDoor) && y >= 0.12 && y <= 2.1) {
-          const seg = doorLeafSegment(hitDoor);
-          const distHinge = Math.hypot(x - seg.hx, z - seg.hz);
-          if (distHinge > 0.07 && distHinge < 0.87) {
-            if (breakGlass && !this.brokenDoorGlass.has(hitDoor.id)) {
-              this.brokenDoorGlass.add(hitDoor.id);
-              this.events.push({ t: 'glass', x, z });
-              this.noise(x, z, 16);
-            }
-            continue; // bullets pass through shattered door glass pane!
-          }
-        }
-        return { kind: 'wall' as const, x, y, z, d, actor: null, head: false };
-      }
-      if (this.hitExterior3D(x, y, z))
-        return { kind: 'wall' as const, x, y, z, d, actor: null, head: false };
       for (const a of cand) {
         const ex = x - a.x, ez = z - a.z;
         if (ex * ex + ez * ez < 0.1 && y < this.height(a)) return { kind: 'actor' as const, x, y, z, d, actor: a, head: y > this.height(a) - 0.3 };

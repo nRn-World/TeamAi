@@ -790,7 +790,13 @@ export class FX {
     const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(this.col, 3));
     this.pos.fill(-999); this.pts = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.05, vertexColors: true, transparent: true, depthWrite: false })); this.pts.frustumCulled = false; this.group.add(this.pts);
     const hg = new THREE.BufferGeometry(); this.hpos.fill(-999); hg.setAttribute('position', new THREE.BufferAttribute(this.hpos, 3));
-    this.holes = new THREE.Points(hg, new THREE.PointsMaterial({ size: 0.07, color: 0x070707 })); this.holes.frustumCulled = false; this.group.add(this.holes);
+    const hc = document.createElement('canvas'); hc.width = hc.height = 32;
+    const hctx = hc.getContext('2d')!;
+    const hgrad = hctx.createRadialGradient(16, 16, 1, 16, 16, 15);
+    hgrad.addColorStop(0, 'rgba(6,6,6,0.95)'); hgrad.addColorStop(0.55, 'rgba(18,16,14,0.85)'); hgrad.addColorStop(1, 'rgba(0,0,0,0)');
+    hctx.fillStyle = hgrad; hctx.fillRect(0, 0, 32, 32);
+    const holeTex = new THREE.CanvasTexture(hc);
+    this.holes = new THREE.Points(hg, new THREE.PointsMaterial({ size: 0.045, map: holeTex, transparent: true, alphaTest: 0.12, depthWrite: false })); this.holes.frustumCulled = false; this.group.add(this.holes);
     for (let i = 0; i < 24; i++) { const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]); const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xffe2a0, transparent: true, opacity: 0.7 })); line.visible = false; line.frustumCulled = false; this.group.add(line); this.tracers.push({ line, t: 0 }); }
     this.group.add(this.light);
     const ng = new THREE.CylinderGeometry(0.035, 0.035, 0.13, 8), nm = std({ color: 0x3a4a3a, metalness: 0.5, roughness: 0.4 });

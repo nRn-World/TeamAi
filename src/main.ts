@@ -820,12 +820,21 @@ class Game {
     switch (e.t) {
       case 'shot': {
         const own = e.by === p, a = new THREE.Vector3(e.x, e.y, e.z), b = new THREE.Vector3(e.x2, e.y2, e.z2);
-        if (own) { const r = fwd(this.yaw); a.set(p.x + r.x * 0.5 - r.z * 0.12, this.eye - 0.12, p.z + r.z * 0.5 + r.x * 0.12); } else this.views.get(e.by)?.muzzle();
+        if (own) {
+          const r = fwd(this.yaw), ak = this.aimK;
+          a.set(p.x + r.x * 0.5 - r.z * (0.12 * (1 - ak)), this.eye - (0.12 - 0.07 * ak), p.z + r.z * 0.5 + r.x * (0.12 * (1 - ak)));
+        } else this.views.get(e.by)?.muzzle();
         fx.tracer(a, b); const pn = this.pan(e.x, e.z);
         if (own && this.preShot) this.preShot = false;
         else if (!(own && this.mirror)) this.audio.shot(pn.d, pn.pan, own, own ? (this.weapon === 0 && !this.weaponSpecs[0].shield ? 'rifle' : 'pistol') : e.by.kind === 'suspect' ? 'smg' : 'rifle');
         fx.flashAt(a.x, a.y, a.z, own ? 14 : 22);
-        if (e.hit === 'wall') { fx.burst(e.x2, e.y2, e.z2, 7, 0xb8b0a0, 2.2, 6, 0.35); fx.burst(e.x2, e.y2, e.z2, 2, 0xffd080, 4, 9, 0.15); fx.hole(e.x2 - (e.x2 - e.x) * 0.002, e.y2, e.z2 - (e.z2 - e.z) * 0.002); const q = this.pan(e.x2, e.z2); if (q.d < 12) this.audio.impact(q.d, q.pan); }
+        if (e.hit === 'wall') {
+          fx.burst(e.x2, e.y2, e.z2, 7, 0xb8b0a0, 2.2, 6, 0.35);
+          fx.burst(e.x2, e.y2, e.z2, 2, 0xffd080, 4, 9, 0.15);
+          const dx = e.x2 - e.x, dy = e.y2 - e.y, dz = e.z2 - e.z, len = Math.hypot(dx, dy, dz) || 1;
+          fx.hole(e.x2 - (dx / len) * 0.012, e.y2 - (dy / len) * 0.012, e.z2 - (dz / len) * 0.012);
+          const q = this.pan(e.x2, e.z2); if (q.d < 12) this.audio.impact(q.d, q.pan);
+        }
         else if (e.hit === 'actor') fx.burst(e.x2, e.y2, e.z2, 12, 0x8a0f0f, 2.4, 7, 0.5);
         break;
       }
