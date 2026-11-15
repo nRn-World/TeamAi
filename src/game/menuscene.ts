@@ -7,8 +7,8 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
 const HERO = [[-0.65, 2.0, 0.25], [0.45, 1.15, -0.15], [-1.75, 0.9, 0.45]]; // x, z, yaw — framed left-center so right briefing card never covers the squad
-const TRUCK = [0.35, -3.9, 3.48, 2.3, 0.9, 2.05, 1.42]; // Paramount Marauder: x, z, yaw, fallback roof height, light bar x, lettering x & y
-const PATROL = [3.15, -6.0, -0.58]; // Police SUV cruiser: x, z, yaw (right-rear of Marauder, clear of #armoryCard)
+const TRUCK = [0.05, -4.05, 3.48, 2.3, 0.9, 2.05, 1.42]; // Paramount Marauder: x, z, yaw, fallback roof height, light bar x, lettering x & y
+const PATROL = [2.65, -8.1, -0.44]; // Police SUV cruiser: visible in open street corridor right-rear of Marauder
 const PAINT: Record<string, [number, number, number]> = { Body_2: [0x2c3648, 0.36, 0.55], Metal_UP_5: [0x394354, 0.42, 0.62] };
 
 function loadTex(url: string, rx: number, ry: number, srgb = true) {
@@ -31,20 +31,24 @@ function glowTex(inner: string, outer: string) {
   });
 }
 
-function windowMaskTex(seed: number) {
-  return T.make('winmask_' + seed, 128, 256, (g, w, h) => {
-    g.fillStyle = '#000000';
+/** Subtle interior room glow atlas rendered behind the 3D Poly Haven glass window panes. */
+function nightRoomTex(seed: number, dim = 1) {
+  return T.make('night_rooms_' + seed + '_' + dim, 128, 128, (g, w, h) => {
+    g.fillStyle = '#090d14';
     g.fillRect(0, 0, w, h);
     let r = seed * 9301 + 49297;
     const rnd = () => { r = (r * 9301 + 49297) % 233280; return r / 233280; };
-    const cols = 8, rows = 20, cw = w / cols, rh = h / rows;
-    for (let y = 1; y < rows - 1; y++) {
-      const floorLit = rnd() > 0.35;
+    const cols = 6, rows = 6, cw = w / cols, rh = h / rows;
+    for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
-        if (rnd() > (floorLit ? 0.55 : 0.85)) {
-          const warm = rnd() > 0.45;
-          g.fillStyle = warm ? `rgba(255,215,155,${0.28 + rnd() * 0.45})` : `rgba(145,195,255,${0.22 + rnd() * 0.35})`;
-          g.fillRect(x * cw + 2, y * rh + 3, cw - 4, rh - 6);
+        if (rnd() > 0.62) {
+          const warm = rnd() > 0.35;
+          const alpha = (0.28 + rnd() * 0.48) * dim;
+          const gr = g.createLinearGradient(x * cw, y * rh, x * cw, (y + 1) * rh);
+          gr.addColorStop(0, warm ? `rgba(255,212,148,${alpha})` : `rgba(155,204,255,${alpha * 0.85})`);
+          gr.addColorStop(1, warm ? `rgba(140,102,58,${alpha * 0.45})` : `rgba(60,92,135,${alpha * 0.4})`);
+          g.fillStyle = gr;
+          g.fillRect(x * cw + 1, y * rh + 1, cw - 2, rh - 2);
         }
       }
     }
@@ -77,7 +81,6 @@ function skyTex() {
     gr.addColorStop(1.0, '#0c1522');
     g.fillStyle = gr;
     g.fillRect(0, 0, w, h);
-    // Subtle overcast storm clouds
     for (let i = 0; i < 36; i++) {
       const cx = ((i * 73) % w), cy = h * 0.42 + ((i * 29) % 70);
       const rad = 55 + (i % 5) * 28;
@@ -90,31 +93,19 @@ function skyTex() {
   });
 }
 
-function makeJerseyBarrier(mat: THREE.Material, stripeMat: THREE.Material) {
-  const g = new THREE.Group();
-  const shape = new THREE.Shape();
-  shape.moveTo(-0.30, 0);
-  shape.lineTo(0.30, 0);
-  shape.lineTo(0.24, 0.18);
-  shape.lineTo(0.11, 0.46);
-  shape.lineTo(0.08, 0.84);
-  shape.lineTo(-0.08, 0.84);
-  shape.lineTo(-0.11, 0.46);
-  shape.lineTo(-0.24, 0.18);
-  shape.closePath();
-  const geo = new THREE.ExtrudeGeometry(shape, { depth: 2.1, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 1 });
-  geo.translate(0, 0, -1.05);
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.castShadow = mesh.receiveShadow = true;
-  mesh.rotation.y = Math.PI / 2;
-  g.add(mesh);
-  const cap = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.08, 0.18), stripeMat);
-  cap.position.set(0, 0.86, 0);
-  g.add(cap);
-  return g;
+interface FacadeModule {
+  nodes: THREE.Object3D[];
+  origin: THREE.Matrix4;
+  width: number;
 }
 
-/** Live 3D backdrop for the main menu: rainy Nordic night urban police perimeter with SWAT squad, Marauder & Police SUV. */
+interface InstEntry {
+  mesh: THREE.Mesh;
+  mats: THREE.Matrix4[];
+  shadow: boolean;
+}
+
+/** Live 3D backdrop for the main menu: rainy Nordic night urban police perimeter with Poly Haven modular architecture, SWAT squad, Marauder & Police SUV. */
 export class MenuScene {
   scene = new THREE.Scene();
   cam = new THREE.PerspectiveCamera(31, 1, 0.1, 160);
@@ -139,7 +130,7 @@ export class MenuScene {
   constructor() {
     const s = this.scene;
     s.background = new THREE.Color(0x08101b);
-    s.fog = new THREE.FogExp2(0x09111d, 0.021);
+    s.fog = new THREE.FogExp2(0x09111d, 0.017);
 
     const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial(o);
     const box = (parent: THREE.Object3D, w: number, h: number, d: number, m: THREE.Material, x: number, y: number, z: number) => {
@@ -157,9 +148,9 @@ export class MenuScene {
     s.add(sky);
 
     // Wet reflective asphalt street (Poly Haven CC0 textures)
-    const roadColor = loadTex('./textures/menu/road_color.webp', 10, 18, true);
-    const roadNorm = loadTex('./textures/menu/road_normal.webp', 10, 18, false);
-    const roadRough = loadTex('./textures/menu/road_rough.webp', 10, 18, false);
+    const roadColor = loadTex('./textures/menu/road_color.webp', 10, 20, true);
+    const roadNorm = loadTex('./textures/menu/road_normal.webp', 10, 20, false);
+    const roadRough = loadTex('./textures/menu/road_rough.webp', 10, 20, false);
     const roadMat = std({
       map: roadColor,
       normalMap: roadNorm,
@@ -170,9 +161,9 @@ export class MenuScene {
       metalness: 0.36,
       envMapIntensity: 1.25,
     });
-    const road = new THREE.Mesh(new THREE.PlaneGeometry(36, 92), roadMat);
+    const road = new THREE.Mesh(new THREE.PlaneGeometry(36, 108), roadMat);
     road.rotation.x = -Math.PI / 2;
-    road.position.set(0, 0, -28);
+    road.position.set(0, 0, -34);
     road.receiveShadow = true;
     s.add(road);
 
@@ -193,172 +184,58 @@ export class MenuScene {
     }
 
     // Raised concrete sidewalks & granite kerbs
-    const swColor = loadTex('./textures/menu/sidewalk_color.webp', 4, 22, true);
-    const swNorm = loadTex('./textures/menu/sidewalk_normal.webp', 4, 22, false);
-    const swMat = std({ map: swColor, normalMap: swNorm, color: 0x707884, roughness: 0.45, metalness: 0.12 });
+    const swColor = loadTex('./textures/menu/sidewalk_color.webp', 5, 28, true);
+    const swNorm = loadTex('./textures/menu/sidewalk_normal.webp', 5, 28, false);
+    const swMat = std({ map: swColor, normalMap: swNorm, color: 0x727a86, roughness: 0.45, metalness: 0.12 });
     const kerbMat = std({ color: 0x4b535e, roughness: 0.65 });
     for (const side of [-1, 1]) {
-      box(s, 9, 0.14, 92, swMat, side * 11.4, 0.07, -28);
-      box(s, 0.22, 0.15, 92, kerbMat, side * 6.9, 0.075, -28);
+      box(s, 14, 0.14, 108, swMat, side * 13.9, 0.07, -34);
+      box(s, 0.24, 0.16, 108, kerbMat, side * 6.9, 0.08, -34);
     }
 
-    // Concrete Jersey barriers & yellow police tape perimeter
-    const barrierMat = std({ map: loadTex('./textures/menu/wall_concrete.webp', 2, 1, true), color: 0x8d959e, roughness: 0.85 });
-    const hazardMat = std({ color: 0xd49c1a, roughness: 0.55 });
-    const barrierPositions: [number, number, number][] = [
-      [-4.9, -0.6, 0.28],
-      [-5.65, -3.1, 0.12],
-      [5.5, -2.2, -0.35],
-      [6.2, -5.0, -0.15],
-    ];
-    for (const [bx, bz, bry] of barrierPositions) {
-      const jb = makeJerseyBarrier(barrierMat, hazardMat);
-      jb.position.set(bx, 0, bz);
-      jb.rotation.y = bry;
-      s.add(jb);
-    }
-
-    // Chain-link security fence posts + police caution tape along left and right edges
+    // Chain-link security fence posts + police caution tape along left & right perimeter
     const postMat = std({ color: 0x2e3640, roughness: 0.45, metalness: 0.75 });
-    const meshWireMat = std({ color: 0x5c6978, roughness: 0.5, metalness: 0.7, wireframe: true, transparent: true, opacity: 0.5 });
+    const meshWireMat = std({ color: 0x5c6978, roughness: 0.5, metalness: 0.7, wireframe: true, transparent: true, opacity: 0.42 });
     const tapeMat = new THREE.MeshBasicMaterial({ map: cautionTapeTex(), side: THREE.DoubleSide });
     const fenceLine = (x0: number, z0: number, x1: number, z1: number, segs: number, withMesh = true) => {
       for (let i = 0; i <= segs; i++) {
         const f = i / segs, px = x0 + (x1 - x0) * f, pz = z0 + (z1 - z0) * f;
-        box(s, 0.06, 2.05, 0.06, postMat, px, 1.02, pz);
+        box(s, 0.06, 2.0, 0.06, postMat, px, 1.0, pz);
       }
       const dx = x1 - x0, dz = z1 - z0, len = Math.hypot(dx, dz), ang = Math.atan2(dx, dz);
       if (withMesh) {
-        const panel = new THREE.Mesh(new THREE.PlaneGeometry(len, 1.9, Math.max(4, segs * 4), 6), meshWireMat);
-        panel.position.set((x0 + x1) / 2, 1.02, (z0 + z1) / 2);
+        const panel = new THREE.Mesh(new THREE.PlaneGeometry(len, 1.85, Math.max(4, segs * 4), 6), meshWireMat);
+        panel.position.set((x0 + x1) / 2, 1.0, (z0 + z1) / 2);
         panel.rotation.y = ang + Math.PI / 2;
         s.add(panel);
       }
       const tape = new THREE.Mesh(new THREE.PlaneGeometry(len, 0.08), tapeMat);
-      tape.position.set((x0 + x1) / 2, 0.96, (z0 + z1) / 2);
+      tape.position.set((x0 + x1) / 2, 0.94, (z0 + z1) / 2);
       tape.rotation.y = ang + Math.PI / 2;
       s.add(tape);
     };
-    fenceLine(-6.3, 2.2, -6.5, -11.5, 4, true);
-    fenceLine(5.9, 0.8, 6.4, -10.5, 4, false);
-
-    // Streetlamps with emissive luminaires & atmospheric mist halos
-    const lampMat = std({ color: 0x1b222b, roughness: 0.4, metalness: 0.8 });
-    const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfff0d4 });
-    const haloTex = glowTex('rgba(255,236,198,0.65)', 'rgba(130,175,235,0.16)');
-    for (const [lx, lz, dir] of [[-6.8, -2.5, 1], [-6.8, -14.5, 1], [-6.8, -28, 1], [6.8, -6.5, -1], [6.8, -19.5, -1], [6.8, -33, -1]] as const) {
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 5.4, 8), lampMat);
-      pole.position.set(lx, 2.7, lz);
-      pole.castShadow = true;
-      s.add(pole);
-      const arm = box(s, 1.6, 0.08, 0.08, lampMat, lx + dir * 0.72, 5.32, lz);
-      arm.castShadow = false;
-      const head = box(s, 0.44, 0.06, 0.22, bulbMat, lx + dir * 1.38, 5.26, lz);
-      head.castShadow = false;
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.68 }));
-      sp.position.set(lx + dir * 1.38, 5.1, lz);
-      sp.scale.set(3.2, 3.2, 1);
-      s.add(sp);
-      if (lz > -20) {
-        const pl = new THREE.PointLight(lz < -10 ? 0xa6c4ec : 0xffe4b8, lz < -10 ? 18 : 26, 17, 1.6);
-        pl.position.set(lx + dir * 1.35, 4.9, lz);
-        s.add(pl);
-      }
-    }
-
-    // Modern Nordic glass office towers & brick buildings lining the rainy street
-    const facadeTex = loadTex('./textures/menu/facade_modern.webp', 2, 3, true);
-    const brickTex = loadTex('./textures/menu/wall_brick.webp', 3, 4, true);
-    const concreteTex = loadTex('./textures/menu/wall_concrete.webp', 2, 3, true);
-    const bldgSpecs: [number, number, number, number, number, 'glass' | 'brick' | 'concrete', number, boolean][] = [
-      // Left street block (visible behind Marauder & SWAT squad)
-      [-12.5, -10.5, 9, 10.5, 10, 'glass', 1, true],
-      [-13.0, -23.5, 10, 14.5, 12, 'concrete', 2, true],
-      [-13.5, -38.0, 11, 13.5, 13, 'brick', 3, true],
-      [-12.0, -53.0, 10, 18.0, 12, 'glass', 4, false],
-      // Center-distant skyline closing the avenue in mist
-      [-4.2, -39.0, 9.5, 12.0, 8, 'glass', 5, true],
-      [4.4, -44.0, 10, 15.5, 9, 'concrete', 6, true],
-      [-0.5, -56.0, 16, 19.5, 10, 'glass', 7, true],
-      // Right side kept darker so the mission briefing card remains legible
-      [13.0, -13.0, 9.5, 11.0, 11, 'concrete', 8, false],
-      [13.5, -26.5, 10, 13.5, 12, 'brick', 9, false],
-      [14.0, -41.0, 11, 16.0, 13, 'glass', 10, false],
-    ];
-    for (const [bx, bz, bw, bh, bd, kind, seed, lit] of bldgSpecs) {
-      const map = kind === 'glass' ? facadeTex : kind === 'brick' ? brickTex : concreteTex;
-      const win = lit ? windowMaskTex(seed) : null;
-      const mat = std({
-        map,
-        color: kind === 'glass' ? 0x3b4d63 : kind === 'brick' ? 0x4b3f3c : 0x3c434d,
-        roughness: kind === 'glass' ? 0.28 : 0.78,
-        metalness: kind === 'glass' ? 0.55 : 0.1,
-        emissive: lit ? new THREE.Color(0xffffff) : new THREE.Color(0x000000),
-        emissiveMap: win,
-        emissiveIntensity: lit ? 0.85 : 0,
-      });
-      const b = box(s, bw, bh, bd, mat, bx, bh / 2, bz);
-      b.castShadow = false;
-      // Rooftop parapet trim
-      box(s, bw + 0.25, 0.35, bd + 0.25, std({ color: 0x1a2029, roughness: 0.7 }), bx, bh + 0.15, bz);
-    }
-
-    // Subtle glowing rooftop sign on distant left-center office tower (reminiscent of Stockholm/Kista skyline)
-    const signTex = T.make('sky_sign', 192, 48, (g, w, h) => {
-      g.fillStyle = '#070b12'; g.fillRect(0, 0, w, h);
-      g.fillStyle = '#8cc2ff'; g.font = 'bold 26px "Barlow Condensed", system-ui, sans-serif';
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText('KISTA CORP', w / 2, h / 2 + 1);
-    });
-    const skySign = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 1.0), new THREE.MeshBasicMaterial({ map: signTex }));
-    skySign.position.set(-4.2, 11.2, -34.9);
-    s.add(skySign);
-
-    // Urban street trees in sidewalk planters (midground)
-    const trunkMat = std({ color: 0x221d1a, roughness: 0.9 });
-    const leafMat = std({ color: 0x16241f, roughness: 0.85 });
-    for (const [tx, tz] of [[-8.1, -7.2], [-8.1, -18.5], [8.1, -10.5]]) {
-      const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.16, 2.2, 7), trunkMat);
-      tr.position.set(tx, 1.2, tz);
-      s.add(tr);
-      for (let k = 0; k < 3; k++) {
-        const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(1.15 - k * 0.16, 1), leafMat);
-        crown.position.set(tx + (k - 1) * 0.35, 2.75 + (k % 2) * 0.45, tz + (k === 1 ? 0.3 : -0.2));
-        s.add(crown);
-      }
-    }
-
-    // Real CC0 Kenney 3D traffic cones along the police perimeter
-    void new GLTFLoader().loadAsync('./models/props/traffic_cone.glb').then(g => {
-      const proto = g.scene;
-      proto.traverse((o: any) => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } });
-      for (const [cx, cz, sMul] of [[-3.75, 0.7, 1.15], [-4.45, -1.65, 1.15], [4.55, -1.35, 1.15], [5.15, -3.75, 1.15]]) {
-        const c = proto.clone(true);
-        c.position.set(cx, 0, cz);
-        c.scale.setScalar(sMul);
-        s.add(c);
-      }
-    }).catch(() => { /* optional cone props */ });
+    fenceLine(-6.35, 2.2, -6.55, -10.5, 4, true);
+    fenceLine(5.95, 0.8, 6.45, -9.8, 4, false);
 
     // Outdoor night lighting: cool skylight + key backlight rim on operators + emergency light bounces
-    s.add(new THREE.HemisphereLight(0x6385b0, 0x0e141e, 1.05));
-    const moonKey = new THREE.DirectionalLight(0xc2d8ff, 1.55);
-    moonKey.position.set(-7.5, 11.5, 6.5);
+    s.add(new THREE.HemisphereLight(0x6d92be, 0x101722, 1.15));
+    const moonKey = new THREE.DirectionalLight(0xc2d8ff, 1.65);
+    moonKey.position.set(-7.5, 13.5, 7.5);
     moonKey.castShadow = true;
     moonKey.shadow.mapSize.set(1024, 1024);
     moonKey.shadow.camera.near = 1;
-    moonKey.shadow.camera.far = 35;
-    moonKey.shadow.camera.left = -9; moonKey.shadow.camera.right = 9;
-    moonKey.shadow.camera.top = 8; moonKey.shadow.camera.bottom = -8;
+    moonKey.shadow.camera.far = 42;
+    moonKey.shadow.camera.left = -12; moonKey.shadow.camera.right = 12;
+    moonKey.shadow.camera.top = 12; moonKey.shadow.camera.bottom = -8;
     moonKey.shadow.bias = -0.0015;
     s.add(moonKey);
 
-    const warmFill = new THREE.SpotLight(0xffdfb8, 115, 22, 0.65, 0.75, 1.5);
+    const warmFill = new THREE.SpotLight(0xffdfb8, 115, 24, 0.65, 0.75, 1.5);
     warmFill.position.set(-4.8, 4.4, 5.2);
     warmFill.target.position.set(-0.5, 1.05, 1.1);
     s.add(warmFill, warmFill.target);
 
-    const coolRim = new THREE.SpotLight(0x529dff, 175, 24, 0.7, 0.75, 1.5);
+    const coolRim = new THREE.SpotLight(0x529dff, 175, 26, 0.7, 0.75, 1.5);
     coolRim.position.set(3.2, 3.8, -5.5);
     coolRim.target.position.set(-0.6, 1.1, 1.2);
     s.add(coolRim, coolRim.target);
@@ -373,7 +250,7 @@ export class MenuScene {
     for (let i = 0; i < rc; i++) {
       const rx = (Math.random() - 0.5) * 24;
       const ry = Math.random() * 11;
-      const rz = -12 + Math.random() * 20;
+      const rz = -14 + Math.random() * 22;
       const len = 0.24 + Math.random() * 0.18;
       this.rainPos[i * 6] = rx; this.rainPos[i * 6 + 1] = ry; this.rainPos[i * 6 + 2] = rz;
       this.rainPos[i * 6 + 3] = rx - 0.04; this.rainPos[i * 6 + 4] = ry - len; this.rainPos[i * 6 + 5] = rz + 0.02;
@@ -392,10 +269,316 @@ export class MenuScene {
     }
     const dg = new THREE.BufferGeometry();
     dg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    this.mist = new THREE.Points(dg, new THREE.PointsMaterial({ color: 0xb6cde8, size: 0.03, transparent: true, opacity: 0.26, depthWrite: false }));
+    this.mist = new THREE.Points(dg, new THREE.PointsMaterial({ color: 0xb6cde8, size: 0.03, transparent: true, opacity: 0.24, depthWrite: false }));
     s.add(this.mist);
 
+    // Load real photorealistic Poly Haven CC0 buildings, streetlights, concrete barriers & urban props
+    void this.buildCity();
+
     window.addEventListener('mousemove', e => { this.mx = e.clientX / innerWidth - 0.5; this.my = e.clientY / innerHeight - 0.5; });
+  }
+
+  /** Assembles real Poly Haven CC0 modular apartment & industrial buildings, cast-iron streetlamps, concrete barriers and street props. */
+  private async buildCity() {
+    const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+    const cityFiles = [
+      'modular_urban_apartments_facade',
+      'modular_factory_facade',
+      'street_lamp_01',
+      'street_lamp_02',
+      'concrete_road_barrier',
+      'concrete_road_barrier_02',
+      'fire_hydrant',
+      'metal_trash_can',
+      'exterior_aircon_unit',
+    ] as const;
+
+    const kits: Record<string, THREE.Group> = {};
+    await Promise.all(cityFiles.map(async name => {
+      try {
+        const g = await loader.loadAsync(`./models/city/${name}.glb`);
+        const sc = g.scene;
+        sc.updateMatrixWorld(true);
+        sc.traverse((o: any) => {
+          if (!o.isMesh) return;
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          for (const m of mats) {
+            if (!m) continue;
+            m.envMapIntensity = /glass/i.test(m.name) ? 1.65 : 0.9;
+            if (m.name === 'street_lamp_01_glass' || /lamp.*glass/i.test(m.name)) {
+              m.emissive = new THREE.Color(0xffe4b5);
+              m.emissiveIntensity = 3.4;
+            }
+          }
+        });
+        kits[name] = sc;
+      } catch (e) {
+        console.warn('city asset failed:', name, e);
+      }
+    }));
+
+    const inst = new Map<string, InstEntry>();
+    const modCache: Record<string, FacadeModule | null> = {};
+    const propCache: Record<string, { nodes: THREE.Object3D[]; origin: THREE.Matrix4 } | null> = {};
+
+    const placeNodes = (nodes: THREE.Object3D[], originM: THREE.Matrix4, M: THREE.Matrix4, shadow = true) => {
+      const inv = originM.clone().invert();
+      for (const n of nodes) {
+        n.traverse((o: any) => {
+          if (!o.isMesh) return;
+          const key = o.uuid + (shadow ? 's' : 'n');
+          let e = inst.get(key);
+          if (!e) { e = { mesh: o, mats: [], shadow }; inst.set(key, e); }
+          e.mats.push(new THREE.Matrix4().multiplyMatrices(M, inv).multiply(o.matrixWorld));
+        });
+      }
+    };
+
+    const getMod = (kitName: string, wallName: string): FacadeModule | null => {
+      const key = kitName + '/' + wallName;
+      if (key in modCache) return modCache[key];
+      const kit = kits[kitName];
+      if (!kit) return (modCache[key] = null);
+      const wall = kit.getObjectByName(wallName);
+      if (!wall) return (modCache[key] = null);
+      const wb = new THREE.Box3().setFromObject(wall);
+      const nodes: THREE.Object3D[] = [wall];
+      for (const c of kit.children) {
+        if (c === wall || /^(wall_|cornice|crown|dado|base)/.test(c.name)) continue;
+        const b = new THREE.Box3().setFromObject(c);
+        const ctr = b.getCenter(new THREE.Vector3());
+        if (ctr.x > wb.min.x && ctr.x < wb.max.x && ctr.y > wb.min.y && ctr.y < wb.max.y && ctr.z > wb.max.z - 1.2 && ctr.z < wb.max.z + 0.6) {
+          nodes.push(c);
+        }
+      }
+      const origin = new THREE.Matrix4().makeTranslation(wb.min.x, wb.min.y, wb.max.z);
+      return (modCache[key] = { nodes, origin, width: Math.round(wb.max.x - wb.min.x) });
+    };
+
+    const getTrim = (kitName: string, name: string) => {
+      const kit = kits[kitName];
+      if (!kit) return null;
+      const n = kit.getObjectByName(name);
+      if (!n) return null;
+      const b = new THREE.Box3().setFromObject(n);
+      return { nodes: [n], origin: new THREE.Matrix4().makeTranslation(b.min.x, b.min.y, 0) };
+    };
+
+    const q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
+    const buildBlock = (x0: number, z0: number, x1: number, z1: number, floors: number, kit: 'apt' | 'fac', seed: number, lightDim = 1) => {
+      const K = kit === 'apt' ? 'modular_urban_apartments_facade' : 'modular_factory_facade';
+      if (!kits[K]) return;
+      let rs = seed * 9301 + 49297;
+      const rnd = () => ((rs = (rs * 9301 + 49297) % 233280) / 233280);
+      const ground = kit === 'apt'
+        ? ['wall_door_centered_large_01', 'wall_standard_standard_01', 'wall_door_centered_small_01', 'wall_standard_standard_01', 'wall_door_centered_small_02', 'wall_standard_standard_01']
+        : ['wall_door_recessed_large_01', 'wall_standard_standard_01', 'wall_door_recessed_small_01', 'wall_door_garage_door_01', 'wall_standard_standard_01', 'wall_door_centered_small_01'];
+      const upperSets = kit === 'apt'
+        ? [['wall_window_centered_large_01', 'wall_window_centered_large_02'], ['wall_window_centered_double_01', 'wall_window_centered_double_02'], ['wall_window_centered_small_01', 'wall_window_centered_small_02'], ['wall_door_window_small_01', 'wall_window_centered_large_01'], ['wall_window_offset_small_01', 'wall_window_offset_small_03']]
+        : [['wall_window_centered_large_01', 'wall_window_centered_large_02'], ['wall_window_tall_large_01', 'wall_window_tall_large_02'], ['wall_window_centered_medium_01', 'wall_window_centered_medium_02'], ['wall_window_centered_double_01', 'wall_window_centered_double_02'], ['wall_window_tall_small_01', 'wall_window_tall_small_02']];
+      const upper = upperSets[(rnd() * upperSets.length) | 0];
+      const H = floors * 3;
+      const faces = [
+        { len: x1 - x0, at: (i: number) => new THREE.Vector3(x0 + i, 0, z1), rot: 0 },
+        { len: x1 - x0, at: (i: number) => new THREE.Vector3(x1 - i, 0, z0), rot: Math.PI },
+        { len: z1 - z0, at: (i: number) => new THREE.Vector3(x1, 0, z1 - i), rot: Math.PI / 2 },
+        { len: z1 - z0, at: (i: number) => new THREE.Vector3(x0, 0, z0 + i), rot: -Math.PI / 2 },
+      ];
+      const corn = getTrim(K, kit === 'apt' ? 'cornice_standard_standard_01' : 'cornice02_standard_standard_01');
+      const crown = getTrim(K, 'crown_standard_standard_01');
+      for (const f of faces) {
+        q.setFromAxisAngle(up, f.rot);
+        for (let fl = 0; fl < floors; fl++) {
+          let u = 0;
+          while (u < f.len - 0.01) {
+            const name = fl === 0 ? ground[(rnd() * ground.length) | 0] : upper[fl % 2];
+            let m = getMod(K, name);
+            if (!m || u + m.width > f.len + 0.01) m = getMod(K, fl === 0 ? 'wall_standard_standard_01' : upper[0]);
+            if (!m) break;
+            const p = f.at(u); p.y = fl * 3 + 0.14;
+            placeNodes(m.nodes, m.origin, new THREE.Matrix4().compose(p, q, one), true);
+            u += Math.max(1, m.width);
+          }
+          if (fl > 0 && corn) {
+            for (let u2 = 0; u2 < f.len - 0.01; u2 += 3) {
+              const p = f.at(u2); p.y = fl * 3 + 0.04;
+              placeNodes(corn.nodes, corn.origin, new THREE.Matrix4().compose(p, q, one), false);
+            }
+          }
+        }
+        if (crown) {
+          for (let u2 = 0; u2 < f.len - 0.01; u2 += 3) {
+            const p = f.at(u2); p.y = H + 0.14;
+            placeNodes(crown.nodes, crown.origin, new THREE.Matrix4().compose(p, q, one), false);
+          }
+        }
+      }
+      const pier = kits[K].getObjectByName('wall_pier_corner_01');
+      if (pier) {
+        const pb = new THREE.Box3().setFromObject(pier);
+        const pc = pb.getCenter(new THREE.Vector3());
+        const po = new THREE.Matrix4().makeTranslation(pc.x, pb.min.y, pc.z);
+        for (const [cx, cz] of [[x0, z0], [x1, z0], [x0, z1], [x1, z1]]) {
+          for (let fl = 0; fl < floors; fl++) {
+            placeNodes([pier], po, new THREE.Matrix4().makeTranslation(cx, fl * 3 + 0.14, cz), true);
+          }
+        }
+      }
+      // Interior lit-room core visible behind the 3D transparent glass window panes
+      const roomTex = nightRoomTex(seed, lightDim);
+      const innerMat = new THREE.MeshStandardMaterial({
+        color: 0x10151e,
+        roughness: 0.95,
+        emissive: new THREE.Color(0xffffff),
+        emissiveMap: roomTex,
+        emissiveIntensity: 0.9 * lightDim,
+      });
+      const inner = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0 - 0.65, H - 0.1, z1 - z0 - 0.65), innerMat);
+      inner.position.set((x0 + x1) / 2, H / 2 + 0.14, (z0 + z1) / 2);
+      this.scene.add(inner);
+
+      const roof = new THREE.Mesh(
+        new THREE.BoxGeometry(x1 - x0 - 0.1, 0.3, z1 - z0 - 0.1),
+        new THREE.MeshStandardMaterial({ color: 0x262b33, roughness: 0.9 }),
+      );
+      roof.position.set((x0 + x1) / 2, H + 0.14, (z0 + z1) / 2);
+      this.scene.add(roof);
+    };
+
+    const placeProp = (file: string, filter: string, x: number, z: number, rot = 0, y = 0, scale = 1) => {
+      const kit = kits[file];
+      if (!kit) return;
+      const key = file + '|' + filter;
+      let pc = propCache[key];
+      if (pc === undefined) {
+        const rx = new RegExp(filter);
+        const nodes = kit.children.filter(c => rx.test(c.name));
+        if (!nodes.length) { propCache[key] = null; return; }
+        const b = new THREE.Box3();
+        nodes.forEach(n => b.expandByObject(n));
+        const ctr = b.getCenter(new THREE.Vector3());
+        pc = propCache[key] = { nodes, origin: new THREE.Matrix4().makeTranslation(ctr.x, b.min.y, ctr.z) };
+      }
+      if (!pc) return;
+      const qProp = new THREE.Quaternion().setFromAxisAngle(up, rot);
+      placeNodes(pc.nodes, pc.origin, new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), qProp, new THREE.Vector3(scale, scale, scale)), true);
+    };
+
+    // Real Poly Haven urban buildings lining the rainy street (18m/24m multiples for seamless 3m modular fit)
+    buildBlock(-25.5, -20, -7.5, -2, 4, 'apt', 11, 1.0);
+    buildBlock(-25.5, -40, -7.5, -22, 4, 'fac', 22, 0.95);
+    buildBlock(-25.5, -60, -7.5, -42, 5, 'apt', 33, 0.85);
+
+    buildBlock(-12, -63, 12, -45, 5, 'fac', 44, 0.8);
+    buildBlock(-31, -65, -13, -47, 5, 'apt', 55, 0.75);
+    buildBlock(13, -65, 31, -47, 5, 'apt', 66, 0.45);
+
+    buildBlock(7.5, -21, 25.5, -3, 4, 'fac', 77, 0.35);
+    buildBlock(7.5, -41, 25.5, -23, 5, 'apt', 88, 0.3);
+
+    // Ornate Poly Haven cast-iron streetlamps along both sidewalks + glowing warm light pools
+    const haloTex = glowTex('rgba(255,232,188,0.68)', 'rgba(130,175,235,0.16)');
+    const lampSpecs: [number, number, number, boolean][] = [
+      [-7.25, -3.5, Math.PI / 2, true],
+      [-7.25, -17.5, Math.PI / 2, true],
+      [-7.25, -31.5, Math.PI / 2, false],
+      [7.25, -5.5, -Math.PI / 2, true],
+      [7.25, -19.5, -Math.PI / 2, false],
+      [7.25, -33.5, -Math.PI / 2, false],
+    ];
+    for (const [lx, lz, rot, withLight] of lampSpecs) {
+      placeProp('street_lamp_01', '^street_lamp_01$', lx, lz, rot, 0.14, 1.15);
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.72 }));
+      sp.position.set(lx, 4.1, lz);
+      sp.scale.set(2.9, 2.9, 1);
+      this.scene.add(sp);
+      if (withLight) {
+        const pl = new THREE.PointLight(0xffdfb4, lz < -10 ? 18 : 26, 17, 1.55);
+        pl.position.set(lx + (lx < 0 ? 0.55 : -0.55), 4.05, lz);
+        this.scene.add(pl);
+      }
+    }
+
+    // Wall-mounted street lamps & AC units on the left apartment/office facades
+    for (const [wx, wy, wz] of [[-7.45, 3.3, -6.5], [-7.45, 3.3, -13.5], [-7.45, 3.3, -25.0]]) {
+      placeProp('street_lamp_02', '.', wx, wz, Math.PI / 2, wy, 1.0);
+      const wl = new THREE.PointLight(0xffd7a3, 10, 10, 1.6);
+      wl.position.set(wx + 0.6, wy - 0.1, wz);
+      this.scene.add(wl);
+    }
+    for (const [ax, ay, az] of [[-7.4, 4.1, -9.5], [-7.4, 7.1, -11.5], [-7.4, 4.2, -28.5]]) {
+      placeProp('exterior_aircon_unit', '^exterior_aircon_unit$', ax, az, Math.PI / 2, ay, 1.0);
+    }
+
+    // Real Poly Haven concrete road barriers along the police cordon
+    const barrierSpots: [string, number, number, number][] = [
+      ['concrete_road_barrier', -4.85, -0.7, 0.25],
+      ['concrete_road_barrier_02', -5.55, -2.5, 0.12],
+      ['concrete_road_barrier', 5.35, -2.1, -0.34],
+      ['concrete_road_barrier_02', 5.95, -4.1, -0.15],
+    ];
+    for (const [kitName, bx, bz, rot] of barrierSpots) {
+      placeProp(kitName, '.', bx, bz, rot, 0, 1.0);
+    }
+
+    // Sidewalk urban details (hydrants & trash cans)
+    placeProp('fire_hydrant', '^fire_hydrant(?!.*aged)', -7.3, -1.3, Math.PI / 2, 0.14, 1.05);
+    placeProp('fire_hydrant', '^fire_hydrant(?!.*aged)', 7.3, -10.5, -Math.PI / 2, 0.14, 1.05);
+    placeProp('metal_trash_can', '^metal_trash_can(?!_rust)', -8.35, -8.8, 0.4, 0.14, 1.0);
+    placeProp('metal_trash_can', '^metal_trash_can(?!_rust)', 8.35, -14.2, -0.3, 0.14, 1.0);
+
+    // Finalize all instanced meshes cleanly
+    for (const e of inst.values()) {
+      const im = new THREE.InstancedMesh(e.mesh.geometry, e.mesh.material, e.mats.length);
+      e.mats.forEach((m, i) => im.setMatrixAt(i, m));
+      im.instanceMatrix.needsUpdate = true;
+      im.castShadow = e.shadow;
+      im.receiveShadow = true;
+      im.computeBoundingSphere();
+      this.scene.add(im);
+    }
+
+    // Real CC0 Kenney 3D traffic cones along the perimeter cordon
+    try {
+      const cg = await loader.loadAsync('./models/props/traffic_cone.glb');
+      const proto = cg.scene;
+      proto.traverse((o: any) => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } });
+      for (const [cx, cz, sMul] of [[-3.75, 0.7, 1.15], [-4.45, -1.65, 1.15], [4.45, -1.35, 1.15], [5.05, -3.55, 1.15]]) {
+        const c = proto.clone(true);
+        c.position.set(cx, 0, cz);
+        c.scale.setScalar(sMul);
+        this.scene.add(c);
+      }
+    } catch { /* optional cones */ }
+
+    // Parked CC0 Innerscene sedan further down the wet curb for street depth
+    try {
+      const sg = await loader.loadAsync('./models/vehicle/sedan_parked.glb');
+      const car = sg.scene;
+      car.updateMatrixWorld(true);
+      const rb = new THREE.Box3().setFromObject(car);
+      const sz = rb.getSize(new THREE.Vector3());
+      const sf = 4.4 / (Math.max(sz.x, sz.z) || 1);
+      car.scale.multiplyScalar(sf);
+      car.updateMatrixWorld(true);
+      const fb = new THREE.Box3().setFromObject(car);
+      car.position.y -= fb.min.y;
+      car.traverse((o: any) => {
+        if (!o.isMesh) return;
+        o.castShadow = o.receiveShadow = true;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (!m) continue;
+          if (m.name === 'Paint') { m.color.setHex(0x28323e); m.roughness = 0.3; m.metalness = 0.55; }
+          if (m.name === 'Taillight') { m.emissive = new THREE.Color(0xff2218); m.emissiveIntensity = 1.6; }
+        }
+      });
+      const wrap = new THREE.Group();
+      wrap.add(car);
+      wrap.position.set(-5.0, 0, -16.5);
+      wrap.rotation.y = 0.05;
+      this.scene.add(wrap);
+    } catch { /* optional parked sedan */ }
   }
 
   /** Put the fallback squad in the scene if detailed operators cannot be loaded. */
@@ -481,7 +664,6 @@ export class MenuScene {
       this.blue.position.set(-0.6, 0.55, 0.3); this.red.position.set(0.6, 0.55, 0.3);
       bar.add(this.blue, this.red);
 
-      // Subtle Marauder LED headlights glowing on the wet road
       const boxM = new THREE.Box3().setFromObject(v);
       const frontX = boxM.max.x > Math.abs(boxM.min.x) ? boxM.max.x : boxM.min.x;
       const headGlowTex = glowTex('rgba(255,244,225,0.9)', 'rgba(180,215,255,0.2)');
@@ -515,10 +697,9 @@ export class MenuScene {
       v.position.y -= box.min.y;
       v.updateMatrixWorld(true);
 
-      // Dark tactical police livery + glowing headlights, taillights & roof beacons
       this.suvBeacons = [];
-      let headBox = new THREE.Box3();
-      let beaconBox = new THREE.Box3();
+      const headBox = new THREE.Box3();
+      const beaconBox = new THREE.Box3();
       v.traverse((o: any) => {
         if (!o.isMesh) return;
         o.castShadow = o.receiveShadow = true;
@@ -555,11 +736,10 @@ export class MenuScene {
       this.scene.add(w);
       this.patrol = w;
 
-      // Headlight beam pools & wet-asphalt reflection bounce
       if (!headBox.isEmpty()) {
         const hc = headBox.getCenter(new THREE.Vector3());
         const forwardSign = hc.z >= 0 ? 1 : -1;
-        const spot = new THREE.SpotLight(0xfff1dc, 55, 16, 0.58, 0.72, 1.4);
+        const spot = new THREE.SpotLight(0xfff1dc, 62, 18, 0.58, 0.72, 1.4);
         spot.position.set(0, hc.y + 0.05, hc.z + forwardSign * 0.1);
         spot.target.position.set(0, 0.05, hc.z + forwardSign * 6.5);
         w.add(spot, spot.target);
@@ -591,7 +771,6 @@ export class MenuScene {
 
   env(r: THREE.WebGLRenderer) {
     if (this.scene.environment) return;
-    // Cool night environment reflection for wet asphalt, glass towers & vehicles
     const envScene = new THREE.Scene();
     envScene.background = new THREE.Color(0x0c1624);
     const hemi = new THREE.HemisphereLight(0x4b74a8, 0x0b1118, 1.4);
@@ -646,7 +825,7 @@ export class MenuScene {
         const dy = rp[i + 1] - rp[i + 4];
         const nx = (Math.random() - 0.5) * 24;
         const ny = 9.5 + Math.random() * 2;
-        const nz = -12 + Math.random() * 20;
+        const nz = -14 + Math.random() * 22;
         rp[i] = nx; rp[i + 1] = ny; rp[i + 2] = nz;
         rp[i + 3] = nx - 0.04; rp[i + 4] = ny - dy; rp[i + 5] = nz + 0.02;
       }

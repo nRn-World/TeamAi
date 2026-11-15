@@ -1,0 +1,18 @@
+City Architecture & Street Furniture 3D Models — Licenses & Attributions
+===========================================================================
+
+1. Poly Haven (CC0 1.0 Universal — Public Domain)
+   Source: https://polyhaven.com/ (meshopt/WebP mobile builds adapted via https://github.com/zeyadpublish/swat-shooter)
+   - modular_urban_apartments_facade.glb   (Modular Urban Apartments Facade)
+   - modular_factory_facade.glb            (Modular Factory Facade)
+   - concrete_road_barrier.glb             (Concrete Road Barrier)
+   - concrete_road_barrier_02.glb          (Concrete Road Barrier 02)
+   - fire_hydrant.glb                      (Fire Hydrant)
+   - metal_trash_can.glb                   (Metal Trash Can)
+   - exterior_aircon_unit.glb              (Exterior Aircon Unit)
+
+2. Josh Dean / Poly Haven (CC0 1.0 Universal — Public Domain)
+   Sources:
+   - https://polyhaven.com/a/street_lamp_01
+   - https://polyhaven.com/a/street_lamp_02
+   Files: street_lamp_01.glb, street_lamp_02.glb
