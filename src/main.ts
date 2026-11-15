@@ -7,10 +7,12 @@ import { operatorEnv } from './game/operator';
 import { loadWeapons, weaponsReady, FpsArms, studioEnv } from './game/weapons';
 import { upgradeViewModel } from './game/world';
 import '@fontsource/barlow-condensed/500.css'; import '@fontsource/barlow-condensed/600.css'; import '@fontsource/barlow-condensed/700.css'; import '@fontsource/barlow/400.css'; import '@fontsource/barlow/600.css';
-import { parseCommand, ACTION_LABEL, DIR_LABEL } from './sim/commands';
+import { parseCommand, splitOrders, commandFor, ACTION_LABEL, DIR_LABEL } from './sim/commands';
 import { LevelView, ActorView, FX, makeViewModel, TEAM_COLOR } from './game/world';
 import { GameAudio, Speech } from './game/audio';
 import { Voice } from './game/voice';
+import { LocalVoice } from './ai/localvoice';
+import { Brain, BRAIN_MODELS } from './ai/brain';
 import { Net, Msg } from './game/net';
 import { encodeSnap, applySnap, encodeEv, decodeEv } from './sim/netstate';
 import type { DataConnection } from 'peerjs';
@@ -21,10 +23,10 @@ const params = new URLSearchParams(location.search);
 const AUTO = params.has('auto');
 
 // ---------------- settings ----------------
-const defaults = { sens: 1, vol: 0.8, mic: 1, ptt: 1, lang: 'en-US', tts: 1, head: 0, qual: 1, diff: 1, name: '' };
+const defaults = { sens: 1, vol: 0.8, mic: 1, ptt: 1, lang: 'en-US', asr: 'local', speak: 'en', ai: 0, tts: 1, head: 0, qual: 1, diff: 1, name: '' };
 type Settings = typeof defaults;
 const S: Settings = { ...defaults, ...JSON.parse(localStorage.getItem('teamai.settings') || '{}') };
-if (!String(S.lang).startsWith('en')) S.lang = 'en-US'; // the game is English only; older saves may hold another language
+if (!String(S.lang).startsWith('en')) S.lang = 'en-US'; if (+S.ai > 1) S.ai = 1; // the game is English only; older saves may hold another language
 const best: Record<string, number> = JSON.parse(localStorage.getItem('teamai.best') || '{}');
 if (params.has('q')) S.qual = +params.get('q')!;
 const saveSettings = () => localStorage.setItem('teamai.settings', JSON.stringify(S));
@@ -44,7 +46,7 @@ class Game {
   viewScene = new THREE.Scene(); viewCam = new THREE.PerspectiveCamera(52, 1, 0.01, 10); vm = makeViewModel();
   torch = new THREE.SpotLight(0xfff0d6, 22, 32, 0.5, 0.6, 1.2);
   sim: Sim | null = null; level: LevelView | null = null; views = new Map<Actor, ActorView>(); fx = new FX();
-  audio = new GameAudio(); speech = new Speech(); voice = new Voice();
+  audio = new GameAudio(); speech = new Speech(); webVoice = new Voice(); localVoice = new LocalVoice(); voice: Voice | LocalVoice = this.webVoice; brain = new Brain();
   net = new Net(); connIdx = new Map<DataConnection, number>(); connName = new Map<DataConnection, string>(); snapT = 0; inT = 0; stepPh = new Map<Actor, number>(); lobbyMission = 0; lobbyNames: string[] = [];
   state: 'menu' | 'play' | 'pause' | 'end' = 'menu'; mission = 0; seed = 1;
   yaw = 0; pitch = 0; keys = new Set<string>(); mouseDown = false; eye = 1.62; bob = 0; stepAcc = 0; recoil = 0; vmKick = 0; sway = new THREE.Vector2();
@@ -59,12 +61,18 @@ class Game {
     this.viewScene.add(new THREE.AmbientLight(0xffffff, 1.1)); const vl = new THREE.DirectionalLight(0xffffff, 1.6); vl.position.set(0.5, 1, 0.6); this.viewScene.add(vl);
     window.addEventListener('resize', () => this.resize()); this.resize();
     this.bindInput(); this.bindUI(); this.buildMenu();
-    this.voice.onFinal = t => this.heard(t, true); this.voice.onInterim = t => { $('heard').textContent = '« ' + t + ' … »'; this.parsedT = Math.max(this.parsedT, 3); };
-    this.voice.onState = (s, d) => this.micState(s, d);
-    this.voice.onIgnored = t => { // heard an order while V was not held: tell the player instead of silently dropping it
-      if (this.state !== 'play' || !t || !parseCommand(t, this.lastTeam, this.lastWho)) return;
-      $('heard').textContent = '« ' + t + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'HOLD V WHILE YOU SPEAK – the order was not sent'; this.parsedT = 5; this.audio.fail();
-    };
+    for (const v of [this.webVoice, this.localVoice]) {
+      v.onFinal = t => this.heard(t, true); v.onInterim = t => { $('heard').textContent = '« ' + t + ' … »'; this.parsedT = Math.max(this.parsedT, 3); };
+      v.onState = (st, d) => { if (v === this.voice) this.micState(st, d); };
+      v.onIgnored = t => { // heard an order while V was not held: tell the player instead of silently dropping it
+        if (this.state !== 'play' || !t || !parseCommand(t, this.lastTeam, this.lastWho)) return;
+        $('heard').textContent = '« ' + t + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'HOLD V WHILE YOU SPEAK – the order was not sent'; this.parsedT = 5; this.audio.fail();
+      };
+    }
+    this.localVoice.onNote = t => { if (this.state !== 'play') return; $('heard').textContent = ''; const q = $('parsed'); q.className = 'bad'; q.textContent = t; this.parsedT = 4; };
+    this.localVoice.onFail = () => { this.applySettings(); if (this.state === 'play' && S.mic && this.voice !== this.localVoice) { this.voice.start(); this.log('The local speech model could not be loaded – using the browser speech service instead.', 'warn'); } }; // fall back rather than leave the player without a voice
+    this.brain.onState = () => this.aiInfo();
+    setInterval(() => { if (!$('settings').classList.contains('hidden')) this.aiInfo(); }, 500);
     this.applySettings();
     requestAnimationFrame(() => this.frame());
     if (AUTO) this.start(+(params.get('auto') || 0), +(params.get('seed') || 1));
@@ -74,9 +82,13 @@ class Game {
     this.camera.aspect = this.viewCam.aspect = w / h; this.camera.updateProjectionMatrix(); this.viewCam.updateProjectionMatrix();
   }
   applySettings() {
-    this.audio.setVolume(S.vol); this.speech.enabled = !!S.tts; this.speech.lang = S.lang; this.voice.setLang(S.lang); this.voice.ptt = !!S.ptt; this.micState(this.voice.state);
+    this.audio.setVolume(S.vol); this.speech.enabled = !!S.tts; this.speech.lang = S.lang; const local = LocalVoice.supported && ((S.asr === 'local' && !this.localVoice.failed) || !Voice.supported), nv = local ? this.localVoice : this.webVoice;
+    if (nv !== this.voice) { this.voice.stop(); this.voice = nv; }
+    this.webVoice.setLang(S.lang); this.localVoice.setLang(S.speak === 'sv' ? 'sv' : 'en'); this.voice.ptt = !!S.ptt; this.micState(this.voice.state);
+    if (local && S.mic && !AUTO) this.localVoice.preload();
+    if (!AUTO) void this.brain.load(+S.ai); this.aiInfo();
     ($('sSens') as HTMLInputElement).value = String(S.sens); ($('sVol') as HTMLInputElement).value = String(S.vol);
-    for (const [id, k] of [['sMic', 'mic'], ['sPtt', 'ptt'], ['sLang', 'lang'], ['sTts', 'tts'], ['sHead', 'head'], ['sQual', 'qual'], ['sDiff', 'diff']] as const) ($(id) as HTMLSelectElement).value = String(S[k]);
+    for (const [id, k] of [['sMic', 'mic'], ['sPtt', 'ptt'], ['sLang', 'lang'], ['sAsr', 'asr'], ['sSpeak', 'speak'], ['sAi', 'ai'], ['sTts', 'tts'], ['sHead', 'head'], ['sQual', 'qual'], ['sDiff', 'diff']] as const) ($(id) as HTMLSelectElement).value = String(S[k]);
     if (!S.mic) this.voice.stop(); else if (this.state === 'play') this.voice.start();
     this.resize();
   }
@@ -95,11 +107,11 @@ class Game {
       box.appendChild(b);
     });
     const done = MISSIONS.filter((_, i) => best[i] != null).length; $('mBest').textContent = `${done}/${MISSIONS.length} missions completed`;
-    $('mMic').textContent = Voice.supported ? 'Voice control ready' : 'No voice control'; $('mMic').className = Voice.supported ? 'ok' : 'bad';
+    const canVoice = Voice.supported || LocalVoice.supported; $('mMic').textContent = canVoice ? 'Voice control ready' : 'No voice control'; $('mMic').className = canVoice ? 'ok' : 'bad';
     document.querySelectorAll<HTMLElement>('.mnav [data-tab]').forEach(n => n.onclick = () => { this.audio.init(); this.audio.ui();
       document.querySelectorAll('.mnav [data-tab]').forEach(o => o.classList.toggle('on', o === n)); for (const id of ['tabPlay', 'tabMp']) show(id, id === n.dataset.tab); });
     const w = $('micwarn');
-    if (!Voice.supported) { w.className = 'note warn'; w.textContent = 'Your browser has no speech recognition (Web Speech API). Use Chrome or Edge for voice control – otherwise give orders with Enter or the quick keys.'; }
+    if (!canVoice) { w.className = 'note warn'; w.textContent = 'Your browser cannot record the microphone, so there is no voice control here – give orders with Enter or the quick keys.'; }
     else { w.className = 'note'; w.textContent = 'Voice control: allow the microphone when the browser asks. If the game is embedded in another page and the microphone is blocked – open it in its own tab.'; }
   }
   /** Blueprint-style floor plan of a mission, drawn for the menu card / briefing. */
@@ -127,7 +139,7 @@ class Game {
     document.querySelectorAll<HTMLElement>('.stabs button').forEach(b => b.onclick = () => { document.querySelectorAll<HTMLElement>('.stabs button').forEach(o => { o.classList.toggle('on', o === b); $(o.dataset.stab!).classList.toggle('hidden', o !== b); }); });
     document.querySelectorAll<HTMLElement>('.close').forEach(b => b.onclick = () => { b.closest('.screen')!.classList.add('hidden'); this.audio.ui(); });
     const bind = (id: string, k: keyof Settings, num = true) => $(id).addEventListener('input', e => { (S as any)[k] = num ? +(e.target as HTMLInputElement).value : (e.target as HTMLInputElement).value; saveSettings(); this.applySettings(); });
-    bind('sSens', 'sens'); bind('sVol', 'vol'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff');
+    bind('sSens', 'sens'); bind('sVol', 'vol'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sAsr', 'asr', false); bind('sSpeak', 'speak', false); bind('sAi', 'ai'); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff');
   }
   toMenu() { document.body.classList.remove('ingame'); this.net.close(); show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief']) show(id, false); this.buildMenu(); show('menu', true); if (document.pointerLockElement) document.exitPointerLock(); }
   // ---------------- online co-op ----------------
@@ -303,12 +315,30 @@ class Game {
     if (fromMic && !S.head && !S.ptt && this.speech.speaking) { // don't let the team's own radio voice trigger orders
       $('heard').textContent = '« ' + text.split('|')[0].trim() + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'Ignored – the team was talking at the same time (say it again)'; this.parsedT = 4; return;
     }
-    const alts = text.split('|').map(s => s.trim()).filter(Boolean); let cmd: Command | null = null;
-    for (const a of alts) { cmd = parseCommand(a, this.lastTeam, this.lastWho); if (cmd) break; }
+    const alts = text.split('|').map(s => s.trim()).filter(Boolean); let parts = splitOrders(alts[0], this.lastTeam, this.lastWho), heard = alts[0];
+    for (const a of alts) { const pa = splitOrders(a, this.lastTeam, this.lastWho); if (pa.length && pa.every(x => x.cmd)) { parts = pa; heard = a; break; } }
     $('heard').textContent = '« ' + alts[0] + ' »'; this.parsedT = 4;
-    const p = $('parsed');
-    if (!cmd) { p.className = 'bad'; p.textContent = 'No order recognised'; this.audio.fail(); return; }
-    this.exec(cmd, !fromMic);
+    const p = $('parsed'), byKey = !fromMic, sim = this.sim;
+    const run = (cmds: Command[]) => { const said: string[] = []; for (const c of cmds.slice(0, 4)) { this.exec(c, byKey); said.push(p.textContent ?? ''); } if (said.length > 1) p.textContent = said.join('  ·  '); };
+    const open = parts.filter(x => !x.cmd);
+    if (!open.length && parts.length) { run(parts.map(x => x.cmd!)); return; }
+    if (S.ai && this.brain.ready && heard.split(/\s+/).length > 1) { // wording the fixed rules do not know: the language model names the action, the rules keep deciding who it is for
+      p.className = ''; p.textContent = 'AI is reading the order…'; this.parsedT = 12;
+      void (async () => {
+        const cmds: Command[] = []; let lt = this.lastTeam, lw = this.lastWho, late = false;
+        for (const x of parts.slice(0, 4)) {
+          let c = x.cmd;
+          if (!c) { const r = await this.brain.interpret(x.text); if (r === null) late = true; else if (r) c = commandFor(x, r.action, r.dir, lt, lw); }
+          if (c) { cmds.push(c); if (c.action !== 'shout') { lt = c.team; lw = c.who ?? null; } }
+        }
+        if (this.sim !== sim || (this.state !== 'play' && this.state !== 'pause')) return;
+        if (cmds.length) run(cmds); else { p.className = 'bad'; p.textContent = late ? 'AI did not answer in time – say it again' : 'No order recognised'; this.parsedT = 4; this.audio.fail(); }
+      })();
+      return;
+    }
+    const known = parts.filter(x => x.cmd).map(x => x.cmd!);
+    if (!known.length) { p.className = 'bad'; p.textContent = 'No order recognised'; this.audio.fail(); return; }
+    run(known);
   }
   exec(cmd: Command, byKey: boolean) {
     const sim = this.sim!; const p = $('parsed'); p.className = ''; this.parsedT = 4;
@@ -411,6 +441,18 @@ class Game {
   }
 
   // ---------------- HUD ----------------
+  /** Status lines under Settings for the local speech model and the order-reading model. */
+  aiInfo() {
+    const lv = this.localVoice, a = $('asrInfo'), b = $('aiInfo'), br = this.brain, pct = (v: number) => Math.round(v * 100) + ' %';
+    if (this.voice !== lv) a.textContent = lv.failed ? `The local model could not be loaded (${lv.lastError || 'unknown error'}) – the browser speech service is used instead.` : 'Browser speech service: only in Chrome and Edge, and what you say is sent to the browser maker for recognition.';
+    else a.textContent = lv.modelReady ? `Ready – Whisper runs on ${lv.device === 'webgpu' ? 'your graphics card' : 'your processor'}${lv.lastMs ? `, last answer took ${lv.lastMs} ms` : ''}. Nothing you say leaves this computer.` : lv.failed ? `Could not be loaded: ${lv.lastError}` : !S.mic ? 'Speech recognition is off.' : `Downloading the speech model${lv.sizeMb ? ` (about ${lv.sizeMb} MB, once)` : ''}: ${pct(lv.progress)}`;
+    a.className = 'note' + (lv.failed ? ' warn' : '');
+    const label = BRAIN_MODELS[br.size]?.label ?? '';
+    b.textContent = br.state === 'ready' ? `Ready (${label}) on your graphics card${br.lastMs ? `, last answer took ${br.lastMs} ms` : ''}. Wording the fixed rules do not know goes to the model.`
+      : br.state === 'loading' ? `Getting ${label} ready: ${pct(br.progress)} – ${br.note}` : br.state === 'error' ? `Could not start: ${br.note}` : br.state === 'unsupported' ? br.note
+      : 'Off – orders are read by the fixed rules, which know the usual wordings in English and Swedish. Turning it on downloads a language model once (about 1 GB) that also reads freer wording.';
+    b.className = 'note' + (br.state === 'error' || br.state === 'unsupported' ? ' warn' : '');
+  }
   micState(s: string, detail?: string) {
     if (detail === undefined && s === this.micS) detail = this.micD; this.micS = s; this.micD = detail;
     const ptt = !!S.ptt, held = this.voice.held;
@@ -419,6 +461,8 @@ class Game {
       iframe: ['MICROPHONE BLOCKED BY THE PREVIEW – pause (Esc) and choose «Open in its own tab»', 'The game is embedded in another page, and that page does not pass the microphone through. Allowing the microphone in the browser does not help – open the game in its own tab with the button below.'],
       mic: ['MICROPHONE DENIED – pause (Esc) for help', 'The browser denies the microphone for this page. Click the icon to the left of the address, set Microphone to «Allow», reload the page and try again. Also check that the operating system lets the browser use the microphone.'],
       service: ['SPEECH SERVICE DENIED BY THE BROWSER – pause (Esc) for help', 'The microphone works, but the browser does not allow its speech recognition service. This happens in Brave, Opera and sometimes Edge. Use Google Chrome, and turn off VPN/ad blockers for this page.'],
+      model: [`LOADING SPEECH MODEL ${Math.round(this.localVoice.progress * 100)} % – type orders with Enter meanwhile`, 'The speech model is being downloaded to this computer. That happens once; after that it starts in a few seconds. Until it is ready you can type orders with Enter or use the quick keys.'],
+      modelfail: ['SPEECH MODEL COULD NOT BE LOADED – pause (Esc) for help', 'The local speech model could not be downloaded or started. Check the internet connection and reload the page, or choose «Browser service» under Settings → Speech recognition engine.'],
       nomic: ['NO MICROPHONE FOUND', 'No microphone found. Connect one and select it as the recording device in the system sound settings.'],
       busy: ['MICROPHONE IS BUSY', 'The microphone is used by another program or cannot be read. Close other programs that use it and try again.'],
       network: ['SPEECH SERVICE UNREACHABLE (NETWORK)', 'The browser’s speech recognition cannot reach its cloud service. Check your internet, VPN, firewall and ad blocker.'],
@@ -430,7 +474,7 @@ class Game {
       off: ['MICROPHONE OFF – press Enter to type an order', 'The microphone is off.'], unsupported: ['VOICE CONTROL NOT SUPPORTED HERE – use Chrome', 'This browser has no speech recognition. Use Google Chrome.'],
     };
     const m = (detail && why[detail]) || base[s] || ['MICROPHONE ERROR' + (detail ? ' (' + detail + ')' : ''), 'Unknown microphone error' + (detail ? ': ' + detail : '') + '.'];
-    txt.textContent = m[0]; $('micHelp').textContent = m[1] + (this.voice.lastHeard ? ` Last words heard by the microphone: «${this.voice.lastHeard}».` : ' The microphone has not picked up any words yet.') + (this.voice.lastError ? ` Last error from the speech service: ${this.voice.lastError}.` : ''); $('micHelp').className = 'note' + (dot.className === 'err' ? ' warn' : '');
+    txt.textContent = m[0]; $('micHelp').textContent = m[1] + (this.voice.lastHeard ? ` Last words heard by the microphone: «${this.voice.lastHeard}».` : ' The microphone has not picked up any words yet.') + (this.voice.lastError ? ` Last error from the speech service: ${this.voice.lastError}.` : '') + (this.voice === this.localVoice ? ` Engine: local Whisper${this.localVoice.device ? ' on ' + this.localVoice.device : ''}${this.localVoice.lastMs ? `, ${this.localVoice.lastMs} ms` : ''}.` : ' Engine: browser speech service.') + (this.brain.ready ? ` AI order reading: on${this.brain.lastMs ? `, ${this.brain.lastMs} ms` : ''}.` : ''); $('micHelp').className = 'note' + (dot.className === 'err' ? ' warn' : '');
   }
   buildMap() {
     const sim = this.sim!, l = sim.level, k = 4, c = document.createElement('canvas'); c.width = l.w * k; c.height = l.h * k; const g = c.getContext('2d')!;
