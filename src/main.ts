@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Sim, Actor, Command, Team, Ev, fwd } from './sim/sim';
 import { MISSIONS, WALL, DOOR, LOW, HIGH, buildLevel } from './sim/level';
 import { MenuScene } from './game/menuscene';
+import { operatorEnv } from './game/operator';
 import { loadWeapons, weaponsReady, FpsArms, studioEnv } from './game/weapons';
 import { upgradeViewModel } from './game/world';
 import '@fontsource/barlow-condensed/500.css'; import '@fontsource/barlow-condensed/600.css'; import '@fontsource/barlow-condensed/700.css'; import '@fontsource/barlow/400.css'; import '@fontsource/barlow/600.css';
@@ -123,6 +124,7 @@ class Game {
     this.bindNet();
     for (const id of ['btnHelp', 'btnHelp2']) click(id, () => show('help', true));
     for (const id of ['btnSettings', 'btnSettings2']) click(id, () => show('settings', true));
+    document.querySelectorAll<HTMLElement>('.stabs button').forEach(b => b.onclick = () => { document.querySelectorAll<HTMLElement>('.stabs button').forEach(o => { o.classList.toggle('on', o === b); $(o.dataset.stab!).classList.toggle('hidden', o !== b); }); });
     document.querySelectorAll<HTMLElement>('.close').forEach(b => b.onclick = () => { b.closest('.screen')!.classList.add('hidden'); this.audio.ui(); });
     const bind = (id: string, k: keyof Settings, num = true) => $(id).addEventListener('input', e => { (S as any)[k] = num ? +(e.target as HTMLInputElement).value : (e.target as HTMLInputElement).value; saveSettings(); this.applySettings(); });
     bind('sSens', 'sens'); bind('sVol', 'vol'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff');
@@ -555,5 +557,5 @@ loadWeapons().then(async () => {
     game.vm.rifle.clear(); game.vm.pistol.clear(); game.viewCam.add(game.arms.root); game.viewScene.environment = studioEnv(game.renderer); game.viewScene.environmentIntensity = 0.5;
   }
 });
-loadModels().then(() => { game.menu.squad(); if (S.qual > 0) { game.menu.env(game.renderer); game.menu.hero('./models/operator/scene.gltf', 3); } $('modelStatus').textContent = modelsReady ? '' : 'The 3D characters could not be loaded – built-in figures are used.'; });
+loadModels().then(() => { game.menu.squad(); if (S.qual > 0) { game.menu.env(game.renderer); operatorEnv(game.menu.scene.environment); game.menu.hero(3); game.menu.vehicle('./models/vehicle/marauder.glb'); } $('modelStatus').textContent = modelsReady ? '' : 'The 3D characters could not be loaded – built-in figures are used.'; });
 (window as any).__ta = game;

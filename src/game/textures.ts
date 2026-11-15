@@ -89,3 +89,5 @@ export const bloodTex = () => make('blood', 128, 128, (g, w, h) => {
   blob(64, 64, 34, 0.95); for (let i = 0; i < 9; i++) { const an = r() * 6.3, d = 14 + r() * 20; blob(64 + Math.cos(an) * d, 64 + Math.sin(an) * d, 12 + r() * 14, 0.9); }
   for (let i = 0; i < 16; i++) { const an = r() * 6.3, d = 44 + r() * 16; blob(64 + Math.cos(an) * d, 64 + Math.sin(an) * d, 1.5 + r() * 3.5, 0.9); }
 });
+/** White block lettering on a transparent background (vehicle markings). */
+export const textTex = (text: string) => make('text' + text, 1024, 204, (g, w, h) => { g.clearRect(0, 0, w, h); g.fillStyle = '#e4e8ee'; g.font = '700 170px "Barlow Condensed", "Arial Narrow", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; try { (g as any).letterSpacing = '26px'; } catch { /* older browsers */ } g.fillText(text, w / 2, h / 2 + 8); });

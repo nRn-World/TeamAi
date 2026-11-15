@@ -3,14 +3,19 @@ import * as T from './textures';
 import { ActorView } from './world';
 import { Actor } from '../sim/sim';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { loadOperator, menuOperator } from './operator';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { clone as skinnedClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
 const HERO = [[0.75, 2.2, -0.1], [1.75, 1.0, -0.4], [-0.45, 0.6, 0.2]]; // x, z, yaw
+const TRUCK = [2.5, -3.7, 3.56, 2.3, 0.9, 2.05, 1.42]; // x, z, yaw, fallback roof height, light bar position along the roof, lettering position along the flank and its height
+// police livery: paint and trim by material name -> colour, roughness, metalness
+const PAINT: Record<string, [number, number, number]> = { Body_2: [0x4a566e, 0.5, 0.55], Metal_UP_5: [0x596273, 0.55, 0.6] };
 /** Live 3D backdrop for the main menu: the squad waiting in a parking garage, lit by a patrol car's light bar. */
 export class MenuScene {
   scene = new THREE.Scene(); cam = new THREE.PerspectiveCamera(30, 1, 0.1, 80);
   private views: ActorView[] = []; private t = 0; private blue: THREE.PointLight; private red: THREE.PointLight; private dust: THREE.Points;
+  private truck?: THREE.Group; private lens: THREE.MeshStandardMaterial[] = [];
   private heroes: THREE.Group[] = []; private mixers: THREE.AnimationMixer[] = [];
   private mx = 0; private my = 0; private cx = 0; private cy = 0;
   constructor() {
@@ -30,7 +35,7 @@ export class MenuScene {
     const steel = std({ color: 0x3a4149, roughness: 0.45, metalness: 0.7 });
     for (let i = 0; i < 14; i++) box(6.4, 0.2, 0.08, steel, 3.2, 0.3 + i * 0.24, -8.75);
     box(6.8, 0.25, 0.3, yellow, 3.2, 3.75, -8.7);
-    for (const [x, z, r] of [[-3.4, -2.6, 0.25], [5.6, -2.2, -0.3]]) { const b = box(2.4, 0.85, 0.5, std({ color: 0x7c8087, roughness: 0.95 }), x, 0.425, z); b.rotation.y = r; }
+    for (const [x, z, r] of [[-3.4, -2.6, 0.25]]) { const b = box(2.4, 0.85, 0.5, std({ color: 0x7c8087, roughness: 0.95 }), x, 0.425, z); b.rotation.y = r; }
     // lights
     s.add(new THREE.HemisphereLight(0xa9c0e0, 0x1a1d22, 1.1));
     const key = new THREE.SpotLight(0xffe2bd, 250, 30, 0.6, 0.6, 1.6); key.position.set(-2.5, 4.1, 6); key.target.position.set(1.6, 1, 0); key.castShadow = true; key.shadow.mapSize.set(1024, 1024); key.shadow.bias = -0.002; s.add(key, key.target);
@@ -56,20 +61,42 @@ export class MenuScene {
     });
   }
   /** Replace the stand-in squad with the detailed operator model (CC BY, see credits). Keeps the stand-ins if it cannot be loaded. */
-  async hero(url: string, count: number) {
+  async hero(count: number) {
+    if (!(await loadOperator())) return false;
+    for (const v of this.views) this.scene.remove(v.root); this.views = [];
+    for (const h of this.heroes) this.scene.remove(h); this.heroes = []; this.mixers = [];
+    const spots = (window as any).__spots ?? HERO;
+    for (let i = 0; i < Math.min(count, spots.length); i++) {
+      const [x, z, yaw] = spots[i], m = menuOperator(i * 2.3)!, w = new THREE.Group(); w.add(m.obj); w.position.set(x, 0, z); w.rotation.y = yaw; this.scene.add(w); this.heroes.push(w);
+      if (m.mixer) this.mixers.push(m.mixer);
+    }
+    return true;
+  }
+  /** The squad's armoured truck behind them («Paramount Marauder», CC BY, see credits), with a light bar on the roof. */
+  async vehicle(url: string) {
     try {
-      const g = await new GLTFLoader().loadAsync(url), tpl = g.scene;
-      tpl.updateMatrixWorld(true); const bb = new THREE.Box3().setFromObject(tpl), k = 1.84 / (bb.max.y - bb.min.y);
-      tpl.traverse((o: any) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; if (o.material) { o.material.envMapIntensity = 0.6; if (o.material.name === 'eyes') o.material.color.setScalar(0.5); } } });
-      for (const v of this.views) this.scene.remove(v.root); this.views = [];
-      for (const h of this.heroes) this.scene.remove(h); this.heroes = []; this.mixers = [];
-      const spots = (window as any).__spots ?? HERO;
-      for (let i = 0; i < Math.min(count, spots.length); i++) {
-        const [x, z, yaw] = spots[i], o = skinnedClone(tpl), w = new THREE.Group(); o.scale.setScalar(k); o.position.y = -bb.min.y * k; w.add(o); w.position.set(x, 0, z); w.rotation.y = yaw; this.scene.add(w); this.heroes.push(w);
-        if (g.animations[0]) { const m = new THREE.AnimationMixer(o); m.clipAction(g.animations[0]).play(); m.setTime(i * 2.3); this.mixers.push(m); }
+      const g = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(url), v = g.scene, C = (window as any).__truck ?? TRUCK;
+      v.traverse((o: any) => { if (!o.isMesh) return; o.castShadow = true; o.receiveShadow = true; const m = o.material as THREE.MeshStandardMaterial; m.envMapIntensity = 0.9; const tint = PAINT[m.name]; if (tint) { m.color.setHex(tint[0]); m.roughness = tint[1]; m.metalness = tint[2]; } });
+      const w = new THREE.Group(); w.add(v); w.position.set(C[0], 0, C[1]); w.rotation.y = C[2]; this.scene.add(w); this.truck = w;
+      w.updateMatrixWorld(true);
+      const meshes: THREE.Mesh[] = []; v.traverse((o: any) => { if (o.isMesh) meshes.push(o); });
+      const ray = new THREE.Raycaster(), hit = (from: THREE.Vector3, dir: THREE.Vector3) => { ray.set(w.localToWorld(from), dir.transformDirection(w.matrixWorld)); return ray.intersectObjects(meshes, false)[0]; };
+      // lettering on both flanks, laid onto the armour where a ray from the side meets it
+      const tex = T.textTex('POLICE');
+      for (const sgn of [-1, 1]) {
+        const h = hit(new THREE.Vector3(C[5], C[6], sgn * 4), new THREE.Vector3(0, 0, -sgn)); if (!h || !h.face) continue;
+        const n = h.face.normal.clone().transformDirection(h.object.matrixWorld), d = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.2), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.6, metalness: 0, polygonOffset: true, polygonOffsetFactor: -4 }));
+        d.position.copy(h.point).addScaledVector(n, 0.012); d.lookAt(h.point.clone().add(n)); this.scene.add(d); w.attach(d);
       }
+      // light bar sitting on the roof
+      const top = hit(new THREE.Vector3(C[4], 6, 0), new THREE.Vector3(0, -1, 0)), bar = new THREE.Group(); bar.position.set(C[4], (top ? w.worldToLocal(top.point.clone()).y : C[3]) + 0.05, 0); bar.rotation.y = Math.PI / 2; w.add(bar);
+      const dark = new THREE.MeshStandardMaterial({ color: 0x0c0e11, roughness: 0.4, metalness: 0.6 }); bar.add(new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 0.3), dark));
+      for (const x of [-0.6, 0.6]) { const foot = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.3), dark); foot.position.set(x, -0.05, 0); bar.add(foot); }
+      this.lens = [0x2a6bff, 0xff2a2a].map((c, i) => { const m = new THREE.MeshStandardMaterial({ color: 0x111418, emissive: c, emissiveIntensity: 0, roughness: 0.25 }); const b = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.1, 0.24), m); b.position.set(i ? 0.37 : -0.37, 0.075, 0); bar.add(b); return m; });
+      const mid = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.11, 0.26), dark); mid.position.y = 0.075; bar.add(mid);
+      this.blue.position.set(-0.6, 0.5, 0.3); this.red.position.set(0.6, 0.5, 0.3); bar.add(this.blue, this.red);
       return true;
-    } catch (e) { console.warn('operator model', e); return false; }
+    } catch (e) { console.warn('vehicle model', e); return false; }
   }
   /** Soft studio reflections so the metal and fabric of the detailed model read properly. */
   env(r: THREE.WebGLRenderer) { if (this.scene.environment) return; const pm = new THREE.PMREMGenerator(r); this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; this.scene.environmentIntensity = 0.35; pm.dispose(); }
@@ -81,6 +108,7 @@ export class MenuScene {
     // light bar: alternating double flashes
     const ph = (t * 1.3) % 1, fl = (p: number) => (p < 0.08 || (p > 0.14 && p < 0.22) ? 1 : 0);
     this.blue.intensity = fl(ph) * 55; this.red.intensity = fl((ph + 0.5) % 1) * 40;
+    if (this.lens.length) { this.lens[0].emissiveIntensity = 0.25 + fl(ph) * 5; this.lens[1].emissiveIntensity = 0.25 + fl((ph + 0.5) % 1) * 5; }
     this.dust.rotation.y = t * 0.012; this.dust.position.y = Math.sin(t * 0.2) * 0.1;
     this.cx += (this.mx - this.cx) * Math.min(1, dt * 2); this.cy += (this.my - this.cy) * Math.min(1, dt * 2);
     const wide = this.cam.aspect >= 1.3;
