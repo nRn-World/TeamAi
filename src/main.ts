@@ -649,17 +649,43 @@ class Game {
     if (this.ammo[this.weapon] <= 0) { if (!this.semiLock) { this.audio.dry(); this.semiLock = true; this.reload(); } return; }
     this.ammo[this.weapon]--; this.fireCd = w.rate;
     const moving = this.keys.has('KeyW') || this.keys.has('KeyA') || this.keys.has('KeyS') || this.keys.has('KeyD');
-    const sp = (w.spread * (moving ? 2.6 : 1) * (p.crouch ? 0.6 : 1) + this.recoil * 0.25) * (1 - this.aimK * 0.65);
     const pellets = w.pellets ?? 1;
+    const ak = this.aimK;
+    const moveMul = moving ? (2.6 - ak * 1.5) : 1;
+    const crouchMul = p.crouch ? 0.6 : 1;
+    const adsSpreadMul = pellets > 1 ? (1 - ak * 0.42) : (1 - ak * 0.96);
+    const adsRecoilMul = 1 - ak * 0.78;
+    const firstAimedShot = pellets === 1 && ak > 0.82 && this.recoil <= w.kick * 1.15;
+    const sp = firstAimedShot ? 0 : (w.spread * moveMul * crouchMul * adsSpreadMul + this.recoil * 0.25 * adsRecoilMul);
+
+    // Sync camera world matrix so ADS shots originate at the exact optical screen center
+    const bobScale = 1 - ak * 0.85;
+    const ox = p.x, oy = this.eye + Math.sin(this.bob * 2) * 0.022 * bobScale, oz = p.z;
+    this.camera.position.set(ox, oy, oz);
+    this.camera.rotation.set(this.pitch, this.yaw, !p.alive ? 0.5 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale));
+    this.camera.updateMatrixWorld();
+    const baseDir = new THREE.Vector3();
+    this.camera.getWorldDirection(baseDir);
+
     for (let i = 0; i < pellets; i++) {
-      const d = this.aimDir();
-      d.x += (Math.random() - 0.5) * sp * 2; d.y += (Math.random() - 0.5) * sp * 2; d.z += (Math.random() - 0.5) * sp * 2; d.normalize();
-      if (this.mirror) { this.net.send({ t: 'fire', o: [p.x, this.eye, p.z], d: [d.x, d.y, d.z], dmg: w.dmg, nl: !!w.nonLethal, ts: !!w.taser }); }
-      else sim.fire(p, p.x, this.eye, p.z, d.x, d.y, d.z, w.dmg, { nonLethal: !!w.nonLethal, taser: !!w.taser });
+      const d = baseDir.clone();
+      if (sp > 0) {
+        d.x += (Math.random() - 0.5) * sp * 2;
+        d.y += (Math.random() - 0.5) * sp * 2;
+        d.z += (Math.random() - 0.5) * sp * 2;
+        d.normalize();
+      }
+      if (this.mirror) { this.net.send({ t: 'fire', o: [ox, oy, oz], d: [d.x, d.y, d.z], dmg: w.dmg, nl: !!w.nonLethal, ts: !!w.taser }); }
+      else sim.fire(p, ox, oy, oz, d.x, d.y, d.z, w.dmg, { nonLethal: !!w.nonLethal, taser: !!w.taser });
     }
     if (this.mirror && !this.preShot && !w.taser) this.audio.shot(0, 0, true, this.weapon === 0 && !w.shield ? 'rifle' : 'pistol');
     this.preShot = false;
-    this.recoil = Math.min(0.11, this.recoil + w.kick); this.pitch = Math.min(1.45, this.pitch + w.kick * 0.55); this.yaw += (Math.random() - 0.5) * w.kick * 0.5; this.vmKick = 1; if (!w.shield) this.arms.fire();
+    const kickScale = 1 - ak * 0.35;
+    this.recoil = Math.min(0.11, this.recoil + w.kick * kickScale);
+    this.pitch = Math.min(1.45, this.pitch + w.kick * 0.55 * kickScale);
+    this.yaw += (Math.random() - 0.5) * w.kick * 0.5 * (1 - ak * 0.6);
+    this.vmKick = 1;
+    if (!w.shield) this.arms.fire();
     if (!w.taser) { this.vm.flash.visible = true; this.vm.flash.material.rotation = Math.random() * 6; setTimeout(() => { this.vm.flash.visible = false; }, 45); }
   }
 
@@ -913,7 +939,8 @@ class Game {
     this.recoil = Math.max(0, this.recoil - dt * 0.22); this.dmgFx = Math.max(0, this.dmgFx - dt * 1.4); this.hitFx = Math.max(0, this.hitFx - dt * 5);
     const targetEye = (!p.alive ? 0.35 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive ? p.jumpY : 0); this.eye += (targetEye - this.eye) * Math.min(1, dt * (p.jumpY > 0 ? 30 : 9));
     { const st = $('stance'), run = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch, t = !p.alive ? '' : p.prone ? 'CRAWLING · SILENT' : p.crouch ? 'CROUCHING · SILENT' : run ? 'RUNNING · HEARD FAR AWAY' : this.slow ? 'SNEAKING · SILENT' : ''; if (st.textContent !== t) { st.textContent = t; st.className = run ? 'loud' : ''; } }
-    this.camera.position.set(p.x, this.eye + Math.sin(this.bob * 2) * 0.022, p.z); this.camera.rotation.set(this.pitch, this.yaw, !p.alive ? 0.5 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004));
+    const bobScale = 1 - this.aimK * 0.85;
+    this.camera.position.set(p.x, this.eye + Math.sin(this.bob * 2) * 0.022 * bobScale, p.z); this.camera.rotation.set(this.pitch, this.yaw, !p.alive ? 0.5 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale));
     { const sprint = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch && (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD'));
       const want = this.ads && p.alive && this.reloadT <= 0 && !sprint && !this.typing && !!document.pointerLockElement || (AUTO && this.ads) ? 1 : 0;
       this.aimK += (want - this.aimK) * Math.min(1, dt * 12); if (Math.abs(want - this.aimK) < 0.002) this.aimK = want;
@@ -925,20 +952,25 @@ class Game {
     const g = this.vm.group; this.vmKick += (0 - this.vmKick) * Math.min(1, dt * 14); this.sway.multiplyScalar(Math.max(0, 1 - dt * 9));
     const rl = this.reloadT > 0 ? Math.sin(Math.min(1, this.reloadT / ws0.reload) * Math.PI) : 0;
     const ak = this.aimK, AIM = AIMPOS;
-    g.position.set(0.17 * (1 - ak) - this.sway.x + Math.sin(this.bob) * 0.006, -0.16 + ak * 0.075 + this.sway.y - rl * 0.16 + Math.abs(Math.cos(this.bob)) * 0.006 + Math.min(0, this.vmKick) * 0.2, -0.5 + Math.max(0, this.vmKick) * 0.05);
-    g.rotation.set(Math.max(0, this.vmKick) * 0.07 - rl * 0.7, 0.03 + this.sway.x * 2, rl * 0.5);
+    g.position.set(0.17 * (1 - ak) - this.sway.x * (1 - ak * 0.8) + Math.sin(this.bob) * 0.006 * bobScale, -0.16 + ak * 0.075 + this.sway.y * (1 - ak * 0.8) - rl * 0.16 + Math.abs(Math.cos(this.bob)) * 0.006 * bobScale + Math.min(0, this.vmKick) * 0.2, -0.5 + Math.max(0, this.vmKick) * 0.05);
+    g.rotation.set(Math.max(0, this.vmKick) * 0.07 - rl * 0.7, 0.03 * (1 - ak) + this.sway.x * 2 * (1 - ak * 0.8), rl * 0.5);
     this.vm.rifle.visible = this.weapon === 0 && !ws0.shield; this.vm.pistol.visible = this.weapon === 1 || !!ws0.shield; this.vm.shield.visible = !!ws0.shield; g.visible = p.alive;
     if (this.arms.ready) { // animated arms: the clips do the reloading and walking, the code only adds sway and recoil
       const a = this.arms.root, rf = this.weapon === 0 && !ws0.shield, dip = 0, mv = !p.alive || this.typing || !(K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD')) ? 0 : (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.crouch && !p.prone ? 2 : 1;
       const wIdx = rf ? 0 : 1;
-      const am = AIM[wIdx]; a.position.set(-this.sway.x * (1 - ak * 0.7) + am[0] * ak, this.sway.y * (1 - ak * 0.7) + Math.min(0, this.vmKick) * 0.2 - dip * 0.16 + am[1] * ak, Math.max(0, this.vmKick) * 0.035 + am[2] * ak);
-      a.rotation.set(Math.max(0, this.vmKick) * 0.035 * (1 - ak * 0.6) - dip * 0.7 + am[3] * ak, this.sway.x * 2 * (1 - ak * 0.7) + am[4] * ak, dip * 0.5); a.visible = p.alive && !ws0.shield;
+      const am = AIM[wIdx]; a.position.set(-this.sway.x * (1 - ak * 0.85) + am[0] * ak, this.sway.y * (1 - ak * 0.85) + Math.min(0, this.vmKick) * 0.2 - dip * 0.16 + am[1] * ak, Math.max(0, this.vmKick) * 0.035 + am[2] * ak);
+      a.rotation.set(Math.max(0, this.vmKick) * 0.035 * (1 - ak * 0.6) - dip * 0.7 + am[3] * ak, this.sway.x * 2 * (1 - ak * 0.85) + am[4] * ak, dip * 0.5); a.visible = p.alive && !ws0.shield;
       this.arms.update(dt, wIdx, mv); a.updateMatrixWorld(true); this.vm.flash.position.copy(g.worldToLocal(this.arms.muzzle.getWorldPosition(new THREE.Vector3())));
     }
     // overlays
     $('dmg').style.opacity = String(Math.max(this.dmgFx, p.hp < 35 && p.alive ? 0.35 : 0, p.alive ? 0 : 0.8)); $('flash').style.opacity = String(Math.min(1, p.flash * 1.6));
     const hm = $('hitmark'); hm.style.opacity = String(this.hitFx);
-    const gap = 6 + this.recoil * 260 + (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD') ? 7 : 0) - (p.crouch ? 2 : 0); $('cross').style.setProperty('--gap', gap * (1 - this.aimK * 0.5) + 'px'); $('cross').style.opacity = String(1 - this.aimK); // both primary and tactical RMR pistol aim down sights
+    const cross = $('cross');
+    const gap = 6 + this.recoil * 260 + (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD') ? 7 : 0) - (p.crouch ? 2 : 0);
+    cross.style.setProperty('--gap', gap * (1 - this.aimK * 0.55) + 'px');
+    cross.style.setProperty('--arms-op', String(1 - this.aimK));
+    cross.classList.toggle('ads', this.aimK > 0.35);
+    cross.style.opacity = p.alive ? '1' : '0'; // keep crisp optical center dot visible when zooming down sights
     if (this.parsedT > 0) { this.parsedT -= dt; if (this.parsedT <= 0) { $('parsed').textContent = ''; $('heard').textContent = ''; } }
     this.updateHud(); this.drawMap();
     if (this.endT > 0) { this.endT -= dt; if (this.endT <= 0) this.debrief(); }
