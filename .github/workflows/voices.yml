@@ -3,7 +3,7 @@ name: Generate voices
 on:
   push:
     branches: ['arena/**']
-    paths: ['voice/**', '.github/workflows/voices.yml']
+    paths: ['voice/**']
   workflow_dispatch:
 permissions:
   contents: write
@@ -25,7 +25,8 @@ jobs:
       - name: Save the clips in the project
         if: always()
         run: |
-          git config user.name "teamai-voices"
-          git config user.email "actions@users.noreply.github.com"
+          # commit as the person who pushed, so that Vercel accepts the commit for its preview build
+          git config user.name "$(git log -1 --format=%an)"
+          git config user.email "$(git log -1 --format=%ae)"
           git add -A public/voice
           git diff --cached --quiet || (git commit -m "Generated voice clips [skip ci]" && git push)
