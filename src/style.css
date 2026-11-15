@@ -192,3 +192,40 @@ ul.credits .by { color:#c3ccd4; } ul.credits .src { color:#74808b; font-size:12.
 ul.credits em { position:absolute; right:0; top:11px; font:600 12px/1 var(--hd); font-style:normal; letter-spacing:.1em; color:#c3ccd4; border:1px solid #33414f; padding:4px 7px; white-space:nowrap; }
 
 .mem span { min-width:74px; white-space:nowrap; } .mem span em { font-style:normal; font-size:9px; letter-spacing:.06em; color:var(--acc); margin-left:5px; }
+
+/* 6-mission grid & career */
+#missions { grid-template-columns:repeat(3, minmax(0, 360px)); gap:11px; }
+.mission canvas { width:136px; height:106px; }
+.mstat .rank { color:var(--acc); font:700 14px/1 var(--hd); letter-spacing:.12em; text-transform:uppercase; }
+
+/* briefing loadout */
+.loadout { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line); }
+.loadout label { display:flex; flex-direction:column; gap:5px; font:600 12px/1 var(--hd); letter-spacing:.14em; text-transform:uppercase; color:#9aa6b0; }
+.loadout select { width:100%; height:36px; font-size:13.5px; }
+.squadroles { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-top:12px; }
+.squadroles div { padding:7px 9px; background:rgba(255,255,255,.04); border:1px solid var(--line); font-size:11.5px; line-height:1.35; color:#9aa6b0; }
+.squadroles b { display:block; color:#fff; font:600 13px/1.2 var(--hd); letter-spacing:.08em; text-transform:uppercase; }
+
+/* bomb timer */
+#bombtimer { position:fixed; top:52px; left:50%; transform:translateX(-50%); padding:6px 16px; background:rgba(140,20,20,.88); border:1px solid #ff5a5a; color:#fff; font:700 18px/1 var(--hd); letter-spacing:.14em; text-transform:uppercase; z-index:8; box-shadow:0 0 18px rgba(255,60,60,.4); }
+
+/* NVG & Bodycam overlays */
+#nvg { position:fixed; inset:0; pointer-events:none; z-index:3; background:radial-gradient(circle, rgba(90,255,140,.18) 38%, rgba(8,28,16,.78) 92%); mix-blend-mode:screen; box-shadow:inset 0 0 90px rgba(0,255,110,.25); }
+#nvg::after { content:"NVG ACTIVE"; position:absolute; top:14px; left:50%; transform:translateX(-50%); font:700 12px/1 var(--hd); letter-spacing:.22em; color:#7affaa; opacity:.8; }
+#bodycam { position:fixed; inset:0; pointer-events:none; z-index:4; background:radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,.62) 100%), repeating-linear-gradient(0deg, rgba(255,255,255,.02) 0 1px, transparent 1px 3px); }
+#bodycam .bc-top { position:absolute; top:18px; right:26px; text-align:right; font:600 13px/1.35 monospace; color:#e6eef5; text-shadow:0 1px 3px #000; }
+#bodycam .bc-rec { color:#ff4747; font-weight:700; letter-spacing:.12em; }
+#bodycam .bc-frame { position:absolute; inset:14px; border:1px solid rgba(255,255,255,.12); border-radius:26px; }
+
+/* Radial command wheel */
+#wheel { position:fixed; inset:0; z-index:20; display:flex; align-items:center; justify-content:center; background:rgba(6,10,15,.45); }
+.wring { position:relative; width:340px; height:340px; border-radius:50%; background:radial-gradient(circle, rgba(16,22,30,.92) 34%, rgba(10,15,21,.96) 100%); border:1px solid rgba(255,255,255,.22); box-shadow:0 16px 50px rgba(0,0,0,.7); }
+.wcenter { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:108px; height:108px; border-radius:50%; background:#0f1620; border:1px solid var(--acc); display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; font:700 13px/1.2 var(--hd); letter-spacing:.12em; text-transform:uppercase; color:#fff; pointer-events:none; }
+.wcenter small { font:500 10px/1.2 "Barlow", sans-serif; color:#9aa6b0; margin-top:3px; text-transform:none; letter-spacing:0; }
+.wslice { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:94px; padding:7px 4px; text-align:center; background:rgba(24,33,44,.9); border:1px solid rgba(255,255,255,.16); color:#e6edf3; font:600 12px/1.1 var(--hd); letter-spacing:.08em; text-transform:uppercase; cursor:pointer; }
+.wslice:hover { background:var(--acc); color:#0b1015; border-color:#fff; }
+
+/* Debrief tactical notes */
+#debNotes { margin:12px 0 4px; padding:10px 12px; background:rgba(255,255,255,.04); border-left:2px solid var(--acc); font-size:13px; line-height:1.5; color:#c8d3dc; }
+#debNotes div + div { margin-top:4px; }
+

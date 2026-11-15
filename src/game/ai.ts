@@ -26,7 +26,7 @@ export interface AiResult {
 }
 
 const VALID_ACTIONS = new Set<Action>([
-  'follow', 'hold', 'move', 'cover', 'stack', 'breach', 'bang', 'open', 'close', 'restrain', 'fireFree', 'fireHold', 'report', 'shout', 'joinTeam',
+  'follow', 'hold', 'move', 'cover', 'stack', 'breach', 'bang', 'open', 'close', 'restrain', 'fireFree', 'fireHold', 'report', 'shout', 'joinTeam', 'peek', 'c2', 'wedge', 'defuse',
 ]);
 const VALID_DIRS = new Set<Dir>(['left', 'right', 'forward', 'back', 'there']);
 
@@ -82,12 +82,13 @@ Output ONLY a single valid JSON object with this exact schema:
   "relayTo": "Ken|Maya|Jack|Zoe|Team A|Team B|ALL|null",
   "relayMsg": "short relayed message to other SWAT or null",
   "commands": [
-    { "team": "A|B|ALL", "who": 0|1|2|3|null, "action": "follow|hold|move|cover|stack|breach|bang|open|close|restrain|fireFree|fireHold|report|shout|joinTeam", "dir": "left|right|forward|back|there|null" }
+    { "team": "A|B|ALL", "who": 0|1|2|3|null, "action": "follow|hold|move|cover|stack|breach|bang|open|close|restrain|fireFree|fireHold|report|shout|joinTeam|peek|c2|wedge|defuse", "dir": "left|right|forward|back|there|null" }
   ]
 }
 
 Rules:
 - "action" MUST be one of the exact allowed values. Use "move" only with "dir".
+- Use "peek" for optiwand/checking under a door, "c2" for explosive door breach, "wedge" to block a door, and "defuse" to disarm a bomb.
 - For "joinTeam", set "team" to the destination team ("A" or "B") and "who" to the officer slot (0=Ken, 1=Maya, 2=Jack, 3=Zoe).
 - Use "who" (0..3) when addressing one specific officer; otherwise null to command the whole team.
 - Keep "commands": [] if the player is only asking a question ("status?", "do you see any suspects?").

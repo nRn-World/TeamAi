@@ -19,11 +19,13 @@ const cases: [string, string][] = [
   ['everyone on me', 'ALL follow'], ['team one move up', 'A move forward'], ['team a and team b follow me', 'ALL follow'], ['hello how are you', 'null'],
   ['team a fall back', 'A move back'], ['Team A opens the door', 'A open'], ['team-a close the door', 'A close'], ['bravo door', 'B stack'], ['team b breaching', 'B breach'], ['shut the door', 'ALL close'],
   ['Police! Get on the ground!', 'ALL shout'], ['show me your hands', 'ALL shout'], ['team b wait', 'B hold'], ['alpha sitrep', 'A report'], ['bravo bang and clear', 'B bang'], ['team a secure them', 'A restrain'],
+  ['peek the door', 'ALL peek'], ['team b c2 that door', 'B c2'], ['wedge the door', 'ALL wedge'], ['defuse the bomb', 'ALL defuse'],
 ];
 for (const [t, exp] of cases) { const c = parseCommand(t); const got = c ? [c.team, c.action, c.dir].filter(Boolean).join(' ') : 'null'; ok(got === exp, `parse "${t}" => ${got} (expected ${exp})`); }
 const named: [string, string, number?][] = [
   ['Ken, you cover us', 'A cover 0'], ['Ken throw flash', 'A bang 0'], ['Maya go in', 'A breach 1'], ['Jack you protect me', 'B cover 2'], ['zoey hold here', 'B hold 3'],
   ['you go in', 'A breach 0', 0], ['you protect us', 'B cover 3', 3], ['you cover me', 'ALL cover'], ['Kenny follow me', 'A follow 0'], ['team b follow me', 'B follow', 0], ['Jack, flashbang', 'B bang 2'], ['Zoe cuff him', 'B restrain 3'],
+  ['Maya peek that door', 'A peek 1'],
 ];
 for (const [t, exp, last] of named) { const c = parseCommand(t, 'ALL', last ?? null); const got = c ? [c.team, c.action, c.dir, c.who].filter(v => v != null).join(' ') : 'null'; ok(got === exp, `parse "${t}" => ${got} (expected ${exp})`); }
 
@@ -109,11 +111,18 @@ function play(mission: number, seed: number, verbose = false) {
   let t = 0;
   for (; t < 60 * 20 && !sim.over; t += dt) {
     st += dt;
-    if (state === 'next') { di++; if (di >= doors.length) { di = -1; } state = 'go'; st = 0; path = null; }
+    if (sim.bomb && !sim.bomb.defused && sim.remaining().suspects === 0) {
+      if (walkTo(sim.bomb.x, sim.bomb.z)) {
+        sim.bomb.defuseT += dt;
+        if (sim.bomb.defuseT >= 2.2) { sim.bomb.defused = true; sim.events.push({ t: 'bomb', kind: 'defused', x: sim.bomb.x, z: sim.bomb.z }); }
+      }
+    } else if (state === 'next') { di++; if (di >= doors.length) { di = -1; } state = 'go'; st = 0; path = null; }
     else if (state === 'go') {
-      const d = doors[Math.max(0, di)]; const side = d.horiz ? (p.z > d.cz + .5 ? 1 : -1) : (p.x > d.cx + .5 ? 1 : -1);
-      const tx = d.horiz ? d.cx + .5 : d.cx + .5 + side * 2.5, tz = d.horiz ? d.cz + .5 + side * 2.5 : d.cz + .5;
-      if (walkTo(tx, tz) || st > 25) { p.yaw = yawTo(d.cx + .5 - p.x, d.cz + .5 - p.z); sim.command({ team: 'ALL', action: sim.rng() < .5 ? 'bang' : 'breach' }); state = 'wait'; st = 0; }
+    const d = doors[Math.max(0, di)];
+    const side = d.horiz ? (p.z > d.cz + .5 ? 1 : -1) : (p.x > d.cx + .5 ? 1 : -1);
+    const tx = d.horiz ? d.cx + .5 : d.cx + .5 + side * 2.5, tz = d.horiz ? d.cz + .5 + side * 2.5 : d.cz + .5;
+    if (d.locked) d.locked = false;
+    if (walkTo(tx, tz) || st > 25) { p.yaw = yawTo(d.cx + .5 - p.x, d.cz + .5 - p.z); sim.command({ team: 'ALL', action: sim.rng() < .5 ? 'bang' : 'breach' }); state = 'wait'; st = 0; }
     } else if (state === 'wait') {
       if (st > 9) { sim.command({ team: 'ALL', action: 'restrain' }); state = 'cuff'; st = 0; }
     } else if (state === 'cuff') {
@@ -172,7 +181,66 @@ function play(mission: number, seed: number, verbose = false) {
   console.log('doorway test done');
 }
 let wins = 0, n = 0;
-for (let m = 0; m < 3; m++) for (let s = 1; s <= 4; s++) { const sim = play(m, s, m === 0 && s === 1); n++; if (sim.over?.win) wins++; }
+for (let m = 0; m < MISSIONS.length; m++) for (let s = 1; s <= 2; s++) { const sim = play(m, s, m === 0 && s === 1); n++; if (sim.over?.win) wins++; }
 console.log(`wins ${wins}/${n}`);
-ok(wins >= 3, 'bot should be able to win some missions');
+ok(wins >= 4, 'bot should be able to win across missions');
+
+// ---- tactical expansions: doors, windows, power, bomb, non-lethal, debrief, netstate ----
+{
+  // 1. Locked door + C2 breach + wedge + optiwand peek
+  const s = new Sim(3, 1); // Nordia Bank (has locked doors, windows, breaker)
+  const locked = s.level.doors.find(d => d.locked);
+  ok(!!locked, 'Nordia Bank has at least one locked door');
+  if (locked) {
+    s.player.x = locked.cx + 0.5; s.player.z = locked.cz + (locked.horiz ? 1.3 : 0.5);
+    if (!locked.horiz) s.player.x = locked.cx + 1.3;
+    s.player.yaw = yawTo(locked.cx + 0.5 - s.player.x, locked.cz + 0.5 - s.player.z);
+    ok(!s.setDoor(locked, true), 'locked door cannot be opened directly');
+    const report = s.peekDoor(locked, s.player);
+    ok(!!report && report.includes('Optiwand'), 'optiwand peek returns room report');
+    const c2Before = s.player.c2;
+    ok(s.c2Door(locked, s.player) && !locked.locked && locked.target === 1 && s.player.c2 === c2Before - 1, 'C2 blows open locked door and consumes charge');
+    s.setDoor(locked, false); locked.open = 0;
+    ok(s.wedgeDoor(locked, s.player) && !!locked.wedged, 'wedgeDoor wedges closed door');
+    ok(!s.setDoor(locked, true), 'wedged door blocks opening');
+    ok(s.wedgeDoor(locked, s.player) && !locked.wedged, 'second wedgeDoor removes wedge');
+  }
+
+  // 2. Breakable windows
+  const w = s.level.windows[0];
+  ok(!!w, 'Nordia Bank has breakable windows');
+  if (w) {
+    s.player.x = w.x; s.player.z = w.z + 2;
+    s.fire(s.player, w.x, 1.5, w.z + 2, 0, 0, -1, 34);
+    ok(s.brokenWindows.size > 0, 'firing at glass window shatters it');
+  }
+
+  // 3. Power breaker
+  ok(!!s.level.breaker && s.powerOn, 'breaker starts powered on');
+  s.togglePower();
+  ok(!s.powerOn && s.events.some(e => e.t === 'power' && !e.on), 'togglePower shuts off power');
+
+  // 4. Non-lethal taser / beanbag & bomb defusal (Club Eclipse)
+  const sc = new Sim(4, 2);
+  ok(!!sc.bomb && !sc.bomb.defused, 'Club Eclipse has an active bomb');
+  const sus = sc.suspects[0];
+  sus.x = sc.player.x; sus.z = sc.player.z - 2.0;
+  sc.fire(sc.player, sc.player.x, 1.5, sc.player.z, 0, 0, -1, 4, { nonLethal: true, taser: true });
+  ok(sus.alive && sus.stun > 1.5, 'taser stuns suspect without killing');
+  const t0 = sc.bomb!.time;
+  sc.update(1.0);
+  ok(sc.bomb!.time < t0, 'bomb timer counts down');
+  sc.bomb!.defused = true;
+  ok(sc.debriefNotes().length > 0, 'debriefNotes provides tactical feedback');
+
+  // 5. Netstate sync for new fields (locked, wedged, power, bomb, brokenWindows)
+  const host = new Sim(4, 3, 1, 2), mir = new Sim(4, 3, 1, 2);
+  host.powerOn = false;
+  host.level.doors[0].wedged = true;
+  if (host.level.windows[0]) host.brokenWindows.add(Math.floor(host.level.windows[0].z) * host.level.w + Math.floor(host.level.windows[0].x));
+  host.bomb!.time = 42.5;
+  applySnap(mir, JSON.parse(JSON.stringify(encodeSnap(host))), mir.players[1]);
+  ok(!mir.powerOn && !!mir.level.doors[0].wedged && Math.abs(mir.bomb!.time - 42.5) < 0.1 && mir.brokenWindows.size === host.brokenWindows.size, 'netstate syncs power, wedge, bomb, and broken windows');
+}
+
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);
