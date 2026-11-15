@@ -434,7 +434,7 @@ class Game {
   }
 
   // ---------------- commands ----------------
-  lastSay = ''; lastSayT = 0; micS = ''; micD: string | undefined;
+  lastSay = ''; lastSayT = 0; lastInfo = ''; lastInfoT = 0; micS = ''; micD: string | undefined;
   aiState(s: AiState, detail = '') {
     const badge = $('aibadge'), info = $('aiInfo');
     const mp = this.net.online;
@@ -675,7 +675,13 @@ class Game {
       case 'cuff': { const q = this.pan(e.a.x, e.a.z); if (q.d < 10) this.audio.cuff(); if (e.by === p) this.log(e.a.kind === 'suspect' ? 'You secured a suspect.' : 'You secured a civilian.', 'me'); break; }
       case 'surrender': { const q = this.pan(e.a.x, e.a.z); if (q.d < 14 && sim.los(p.x, p.z, e.a.x, e.a.z)) this.log(e.a.kind === 'suspect' ? 'Suspect gives up – cuff them!' : 'Civilian complies – cuff them before you move on.', ''); break; }
       case 'marker': fx.marker(e.x, e.z, TEAM_COLOR[e.team]); break;
-      case 'info': this.log(e.text, 'warn'); this.audio.fail(); break;
+      case 'info': {
+        const now = performance.now();
+        if (e.text === this.lastInfo && now - this.lastInfoT < 1500) break;
+        this.lastInfo = e.text; this.lastInfoT = now;
+        this.log(e.text, 'warn'); this.audio.fail();
+        break;
+      }
       case 'end': this.endT = 2.2; this.log(e.win ? 'The building is secure. Good work!' : 'You are down. The operation is aborted.', e.win ? 'me' : 'warn'); break;
     }
     if (e.t === 'shot' && e.by === p && e.hit === 'actor') { this.hitFx = 1; }

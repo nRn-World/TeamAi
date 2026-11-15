@@ -270,8 +270,8 @@ export class Sim {
       if (this.cell(cx, cz) === DOOR) {
         const door = this.doorAtCell(cx, cz)!;
         if (door.open < 0.7) {
-          if (door.wedged) { a.moving = false; a.path = null; a.goal = null; return; }
-          const opened = this.setDoor(door, true, a.kind === 'officer' && !!door.locked);
+          if (door.wedged || (door.locked && a.kind !== 'officer')) { a.moving = false; a.path = null; a.goal = null; return; }
+          const opened = this.setDoor(door, true, a.kind === 'officer' && !!door.locked, false, true);
           if (!opened && a.kind === 'officer' && door.locked && this.time - a.lastCallT > 5) {
             a.lastCallT = this.time; this.say(a, 'Door is locked!');
           }
@@ -296,14 +296,14 @@ export class Sim {
     a.moving = true; a.walk += moved * 2.4;
     if (moved < mv * 0.3) a.stuckT += dt; else a.stuckT = Math.max(0, a.stuckT - dt * 0.5);
   }
-  setDoor(door: Door, open: boolean, kick = false, force = false): boolean {
+  setDoor(door: Door, open: boolean, kick = false, force = false, quiet = false): boolean {
     const t = open ? 1 : 0;
     if (door.wedged && !force) {
-      if (open) this.events.push({ t: 'info', text: 'Door is wedged shut! Remove the wedge or blow with C2.' });
+      if (open && !quiet) this.events.push({ t: 'info', text: 'Door is wedged shut! Remove the wedge or blow with C2.' });
       return false;
     }
     if (door.locked && open && !kick && !force) {
-      this.events.push({ t: 'info', text: 'Door is locked — breach/kick it or deploy C2.' });
+      if (!quiet) this.events.push({ t: 'info', text: 'Door is locked — breach/kick it or deploy C2.' });
       return false;
     }
     if (kick || force) { door.locked = false; door.wedged = false; }
@@ -769,7 +769,7 @@ export class Sim {
           const ok = this.c2Door(door, breacher ?? mem[0]);
           if (!ok) this.setDoor(door, true, true);
         } else {
-          this.setDoor(door, true, !o.bang);
+          this.setDoor(door, true, true);
           if (o.bang) { const d = door.horiz ? { x: 0, z: -side } : { x: -side, z: 0 }; this.grenades.push({ x: c.x + d.x * 0.7, y: 1.0, z: c.z + d.z * 0.7, vx: d.x * 5.5, vy: 1, vz: d.z * 5.5, t: 1.3 }); this.events.push({ t: 'throw', x: c.x, z: c.z }); this.say(mem[0], 'Flashbang out!'); }
         }
       } else if (o.phase === 1 && alone && o.bang && o.t > prepDelay) {
