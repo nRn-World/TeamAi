@@ -92,20 +92,72 @@ class Builder {
     return n === total;
   }
   nearDoor(x: number, z: number, d = 2) { return this.doors.some(o => Math.abs(o.cx - x) + Math.abs(o.cz - z) <= d); }
+  nearWindow(x: number, z: number) {
+    return this.get(x + 1, z) === WINDOW || this.get(x - 1, z) === WINDOW
+      || this.get(x, z + 1) === WINDOW || this.get(x, z - 1) === WINDOW;
+  }
+  nearBreaker(x: number, z: number) {
+    return !!this.breaker && Math.abs(x + 0.5 - this.breaker.x) < 1.2 && Math.abs(z + 0.5 - this.breaker.z) < 1.2;
+  }
   placeBreaker(x: number, z: number) { this.breaker = { x: x + 0.5, z: z + 0.5 }; }
-  private tryPlace(r: Room, x: number, z: number, w: number, d: number, kind: PropKind, high: boolean, rot: number, sx: number, sz: number): boolean {
-    if (x < r.x + 1 || z < r.z + 1 || x + w - 1 > r.x + r.w - 2 || z + d - 1 > r.z + r.h - 2) return false;
-    for (let iz = z; iz < z + d; iz++) for (let ix = x; ix < x + w; ix++) {
-      if (this.get(ix, iz) !== FLOOR || this.nearDoor(ix, iz)) return false;
+  private propSpan(kind: PropKind, rot: number): [number, number] {
+    if (kind === 'pc' || kind === 'bed') return [2, 2];
+    if (kind === 'sofa' || kind === 'desk' || kind === 'bar' || kind === 'locker') return rot % 2 === 0 ? [2, 1] : [1, 2];
+    return [1, 1];
+  }
+  private frontClear(x: number, z: number, w: number, d: number, rot: number): boolean {
+    if (rot === 0) {
+      for (let ix = x; ix < x + w; ix++) if (this.get(ix, z + d) !== FLOOR) return false;
+    } else if (rot === 2) {
+      for (let ix = x; ix < x + w; ix++) if (this.get(ix, z - 1) !== FLOOR) return false;
+    } else if (rot === 1) {
+      for (let iz = z; iz < z + d; iz++) if (this.get(x + w, iz) !== FLOOR) return false;
+    } else {
+      for (let iz = z; iz < z + d; iz++) if (this.get(x - 1, iz) !== FLOOR) return false;
+    }
+    return true;
+  }
+  private boxWallRot(r: Room, x: number, z: number, w: number, d: number): number | null {
+    let n = true, s = true, we = true, ea = true;
+    for (let ix = x; ix < x + w; ix++) { if (this.get(ix, z - 1) !== WALL) n = false; if (this.get(ix, z + d) !== WALL) s = false; }
+    for (let iz = z; iz < z + d; iz++) { if (this.get(x - 1, iz) !== WALL) we = false; if (this.get(x + w, iz) !== WALL) ea = false; }
+    if (n && !s) return 0;
+    if (s && !n) return 2;
+    if (we && !ea) return 1;
+    if (ea && !we) return 3;
+    // Also check partial wall contact (e.g. corner) so furniture back never points into a wall
+    if (z === r.z + 1) return 0;
+    if (z + d === r.z + r.h - 1) return 2;
+    if (x === r.x + 1) return 1;
+    if (x + w === r.x + r.w - 1) return 3;
+    return null;
+  }
+  private tryPlace(r: Room, x: number, z: number, kind: PropKind, high: boolean, rot: number, sx: number, sz: number, needFrontClear = true): boolean {
+    const [w, d] = this.propSpan(kind, rot);
+    // Clamp multi-cell anchor inward by 1 cell if near room East/South wall so edge hits still succeed
+    const cx = Math.min(x, r.x + r.w - 1 - w), cz = Math.min(z, r.z + r.h - 1 - d);
+    if (cx < r.x + 1 || cz < r.z + 1) return false;
+    // Align orientation to any contacted wall if square or compatible parity
+    const wallSide = this.boxWallRot(r, cx, cz, w, d);
+    if (wallSide !== null) {
+      const [ww, wd] = this.propSpan(kind, wallSide);
+      if (ww === w && wd === d) rot = wallSide;
+      else if (kind === 'pc' || kind === 'bed' || kind === 'chair' || kind === 'plant' || kind === 'shelf' || kind === 'server') rot = wallSide;
+    }
+    const blockWin = high || kind === 'sofa' || kind === 'desk' || kind === 'bed' || kind === 'bar' || kind === 'pc';
+    for (let iz = cz; iz < cz + d; iz++) for (let ix = cx; ix < cx + w; ix++) {
+      if (this.get(ix, iz) !== FLOOR || this.nearDoor(ix, iz) || this.nearBreaker(ix, iz)) return false;
+      if (blockWin && this.nearWindow(ix, iz)) return false;
       if (this.bomb && Math.abs(ix + 0.5 - this.bomb.x) < 1.5 && Math.abs(iz + 0.5 - this.bomb.z) < 1.5) return false;
     }
+    if (needFrontClear && kind !== 'crate' && kind !== 'plant' && !this.frontClear(cx, cz, w, d, rot)) return false;
     const cell = high ? HIGH : LOW;
-    for (let iz = z; iz < z + d; iz++) for (let ix = x; ix < x + w; ix++) this.set(ix, iz, cell);
+    for (let iz = cz; iz < cz + d; iz++) for (let ix = cx; ix < cx + w; ix++) this.set(ix, iz, cell);
     if (!this.connected(sx, sz)) {
-      for (let iz = z; iz < z + d; iz++) for (let ix = x; ix < x + w; ix++) this.set(ix, iz, FLOOR);
+      for (let iz = cz; iz < cz + d; iz++) for (let ix = cx; ix < cx + w; ix++) this.set(ix, iz, FLOOR);
       return false;
     }
-    this.props.push({ cx: x, cz: z, kind, rot, w, d });
+    this.props.push({ cx, cz, kind, rot, w, d });
     return true;
   }
   furnish(rng: () => number, spawn: Pt) {
@@ -124,42 +176,41 @@ class Builder {
         const wWall = this.get(x - 1, z) === WALL, eWall = this.get(x + 1, z) === WALL;
         const atWall = nWall || sWall || wWall || eWall;
         const wallRot = nWall ? 0 : sWall ? 2 : wWall ? 1 : eWall ? 3 : Math.floor(rng() * 4);
-        const horiz = wallRot % 2 === 0;
         let placed = false;
         if (r.kind === 'warehouse') {
-          placed = this.tryPlace(r, x, z, 1, 1, 'crate', rng() < 0.65, Math.floor(rng() * 4), sx, sz);
+          placed = this.tryPlace(r, x, z, 'crate', rng() < 0.65, Math.floor(rng() * 4), sx, sz);
         } else if (r.kind === 'corridor') {
-          if (atWall) placed = this.tryPlace(r, x, z, 1, 1, 'plant', false, wallRot, sx, sz);
+          if (atWall) placed = this.tryPlace(r, x, z, 'plant', false, wallRot, sx, sz);
         } else if (r.kind === 'storage') {
-          if (atWall) placed = this.tryPlace(r, x, z, 1, 1, 'shelf', true, wallRot, sx, sz);
-          else placed = this.tryPlace(r, x, z, 1, 1, 'crate', rng() < 0.5, Math.floor(rng() * 4), sx, sz);
+          if (atWall) placed = this.tryPlace(r, x, z, 'shelf', true, wallRot, sx, sz);
+          else placed = this.tryPlace(r, x, z, 'crate', rng() < 0.5, Math.floor(rng() * 4), sx, sz);
         } else if (r.kind === 'vault') {
-          if (atWall) placed = this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'locker', true, wallRot, sx, sz);
-          if (!placed) placed = this.tryPlace(r, x, z, 1, 1, 'crate', rng() < 0.4, Math.floor(rng() * 4), sx, sz);
+          if (atWall) placed = this.tryPlace(r, x, z, 'locker', true, wallRot, sx, sz);
+          if (!placed) placed = this.tryPlace(r, x, z, 'crate', rng() < 0.4, Math.floor(rng() * 4), sx, sz);
         } else if (r.kind === 'club') {
-          if (atWall) placed = this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'bar', false, wallRot, sx, sz);
-          else placed = this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'sofa', false, Math.floor(rng() * 4), sx, sz)
-            || this.tryPlace(r, x, z, 1, 1, 'chair', false, Math.floor(rng() * 4), sx, sz);
+          if (atWall) placed = this.tryPlace(r, x, z, 'bar', false, wallRot, sx, sz);
+          else placed = this.tryPlace(r, x, z, 'sofa', false, wallRot, sx, sz)
+            || this.tryPlace(r, x, z, 'chair', false, Math.floor(rng() * 4), sx, sz);
         } else if (r.kind === 'bedroom') {
           if (atWall && rng() < 0.55) {
-            placed = this.tryPlace(r, x, z, 2, 2, 'bed', false, wallRot, sx, sz)
-              || this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'locker', true, wallRot, sx, sz);
+            placed = this.tryPlace(r, x, z, 'bed', false, wallRot, sx, sz)
+              || this.tryPlace(r, x, z, 'locker', true, wallRot, sx, sz);
           } else {
-            placed = this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'sofa', false, wallRot, sx, sz)
-              || this.tryPlace(r, x, z, 1, 1, 'chair', false, wallRot, sx, sz);
+            placed = this.tryPlace(r, x, z, 'sofa', false, wallRot, sx, sz)
+              || this.tryPlace(r, x, z, 'chair', false, wallRot, sx, sz);
           }
         } else if (r.kind === 'lobby') {
-          if (atWall) placed = this.tryPlace(r, x, z, 1, 1, 'plant', false, wallRot, sx, sz);
-          else placed = this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'sofa', false, Math.floor(rng() * 4), sx, sz)
-            || this.tryPlace(r, x, z, 1, 1, 'chair', false, Math.floor(rng() * 4), sx, sz);
+          if (atWall) placed = this.tryPlace(r, x, z, 'plant', false, wallRot, sx, sz);
+          else placed = this.tryPlace(r, x, z, 'sofa', false, wallRot, sx, sz)
+            || this.tryPlace(r, x, z, 'chair', false, Math.floor(rng() * 4), sx, sz);
         } else {
-          if (atWall && rng() < 0.32) placed = this.tryPlace(r, x, z, 1, 1, 'server', true, wallRot, sx, sz);
-          else if (atWall && rng() < 0.5) placed = this.tryPlace(r, x, z, 1, 1, 'shelf', true, wallRot, sx, sz);
+          if (atWall && rng() < 0.32) placed = this.tryPlace(r, x, z, 'server', true, wallRot, sx, sz);
+          else if (atWall && rng() < 0.5) placed = this.tryPlace(r, x, z, 'shelf', true, wallRot, sx, sz);
           else {
             const wantPc = rng() < 0.6;
-            placed = (wantPc && this.tryPlace(r, x, z, 2, 2, 'pc', false, Math.floor(rng() * 4), sx, sz))
-              || this.tryPlace(r, x, z, horiz ? 2 : 1, horiz ? 1 : 2, 'desk', false, wallRot, sx, sz)
-              || this.tryPlace(r, x, z, 1, 1, rng() < 0.5 ? 'chair' : 'plant', false, wallRot, sx, sz);
+            placed = (wantPc && this.tryPlace(r, x, z, 'pc', false, wallRot, sx, sz))
+              || this.tryPlace(r, x, z, 'desk', false, wallRot, sx, sz)
+              || this.tryPlace(r, x, z, rng() < 0.5 ? 'chair' : 'plant', false, wallRot, sx, sz);
           }
         }
         if (placed) n--;
@@ -197,9 +248,9 @@ const SPECS: Spec[] = [
       b.win(16, 20); b.win(17, 20); b.win(18, 20); b.win(22, 20); b.win(24, 20);
       b.placeBreaker(11, 19);
       // Exterior solid colliders + Marauder armored SWAT truck staged cleanly on the front plaza
-      b.extCircles.push({ x: 12.5, z: 21.15, r: 0.34, h: 3.1 }, { x: 16.5, z: 21.15, r: 0.34, h: 3.1 }); // portico pillars
+      b.extCircles.push({ x: 12.5, z: 21.45, r: 0.34, h: 3.1 }, { x: 16.5, z: 21.45, r: 0.34, h: 3.1 }); // portico pillars
       for (const bx of [10.4, 11.7, 12.8, 16.2]) b.extCircles.push({ x: bx, z: 22.85, r: 0.16, h: 0.85 }); // bollards
-      b.extBoxes.push({ x: 10.5, z: 21.3, hx: 0.38, hz: 0.38, h: 1.0 }, { x: 17.4, z: 21.3, hx: 0.38, hz: 0.38, h: 1.0 }); // planters
+      b.extBoxes.push({ x: 10.5, z: 21.45, hx: 0.61, hz: 0.28, h: 1.0 }, { x: 17.4, z: 21.45, hx: 0.61, hz: 0.28, h: 1.0 }); // planters
       b.extCircles.push({ x: 8.5, z: 22.0, r: 0.44, h: 2.6 }, { x: 27.0, z: 22.2, r: 0.44, h: 2.6 }); // courtyard trees
       b.extCircles.push({ x: 6.5, z: 25.4, r: 0.14, h: 4.6 }, { x: 27.5, z: 25.4, r: 0.14, h: 4.6 }); // street lamps
       b.vehicle = { x: 22.4, z: 25.4, yaw: -0.26, hx: 3.0, hz: 1.2, h: 2.43 };
@@ -243,7 +294,7 @@ const SPECS: Spec[] = [
       b.win(18, 24); b.win(19, 24); b.win(20, 24); b.win(24, 24); b.win(25, 24); b.win(26, 24);
       b.placeBreaker(11, 23);
       b.extCircles.push({ x: 20.4, z: 25.4, r: 0.36, h: 3.3 }, { x: 24.6, z: 25.4, r: 0.36, h: 3.3 }); // brass columns
-      b.extBoxes.push({ x: 18.6, z: 25.5, hx: 0.38, hz: 0.38, h: 1.0 }, { x: 26.4, z: 25.5, hx: 0.38, hz: 0.38, h: 1.0 }); // planters
+      b.extBoxes.push({ x: 18.6, z: 25.5, hx: 0.61, hz: 0.28, h: 1.0 }, { x: 26.4, z: 25.5, hx: 0.61, hz: 0.28, h: 1.0 }); // planters
       b.extCircles.push({ x: 16.2, z: 25.8, r: 0.45, h: 2.7 }, { x: 36.6, z: 26.2, r: 0.45, h: 2.7 }); // courtyard trees
       b.vehicle = { x: 31.8, z: 28.2, yaw: -0.25, hx: 3.0, hz: 1.2, h: 2.43 };
       return { x: 22.5, z: 29.0, yaw: 0 };
@@ -271,7 +322,7 @@ const SPECS: Spec[] = [
       b.placeBreaker(17, 5);
       for (const cx of [11.2, 13.4, 17.6, 19.8]) b.extCircles.push({ x: cx, z: 25.6, r: 0.46, h: 6.4 }); // fluted bank columns
       for (const bx of [9.6, 11.2, 12.8, 18.2, 19.8]) b.extCircles.push({ x: bx, z: 27.1, r: 0.16, h: 0.85 }); // bollards
-      b.extBoxes.push({ x: 12.3, z: 25.7, hx: 0.38, hz: 0.38, h: 1.0 }, { x: 18.7, z: 25.7, hx: 0.38, hz: 0.38, h: 1.0 }); // planters
+      b.extBoxes.push({ x: 12.3, z: 25.7, hx: 0.61, hz: 0.28, h: 1.0 }, { x: 18.7, z: 25.7, hx: 0.61, hz: 0.28, h: 1.0 }); // planters
       b.extCircles.push({ x: 7.8, z: 26.2, r: 0.45, h: 2.7 }, { x: 30.8, z: 26.2, r: 0.45, h: 2.7 }); // courtyard trees
       b.vehicle = { x: 25.8, z: 28.3, yaw: -0.25, hx: 3.0, hz: 1.2, h: 2.43 };
       return { x: 15.5, z: 29.0, yaw: 0 };
@@ -297,10 +348,10 @@ const SPECS: Spec[] = [
       b.placeBreaker(24, 22);
       b.bomb = { x: 31.5, z: 16.5, time: 165 };
       b.extBoxes.push(
-        { x: 5.5, z: 26.8, hx: 0.6, hz: 3.0, h: 6.5 }, // left alley brick wall
-        { x: 24.0, z: 26.8, hx: 0.6, hz: 3.0, h: 6.5 }, // right alley brick wall (widened so truck fits cleanly)
-        { x: 7.6, z: 24.6, hx: 0.38, hz: 0.38, h: 1.0 },
-        { x: 15.2, z: 24.6, hx: 0.38, hz: 0.38, h: 1.0 },
+        { x: 5.5, z: 27.0, hx: 0.6, hz: 3.0, h: 6.5 }, // left alley brick wall
+        { x: 24.0, z: 27.0, hx: 0.6, hz: 3.0, h: 6.5 }, // right alley brick wall (widened so truck fits cleanly)
+        { x: 7.6, z: 24.6, hx: 0.61, hz: 0.28, h: 1.0 },
+        { x: 15.2, z: 24.6, hx: 0.61, hz: 0.28, h: 1.0 },
       );
       b.vehicle = { x: 19.2, z: 27.4, yaw: -0.38, hx: 3.0, hz: 1.2, h: 2.43 };
       return { x: 13.5, z: 27.8, yaw: 0 };
@@ -325,9 +376,9 @@ const SPECS: Spec[] = [
       const northKinds: RoomKind[] = ['office', 'storage', 'office', 'office', 'vault', 'office'];
       let x = 4;
       let ni = 0;
-      while (x < 36) {
+      while (x < 35) {
         const rem = 36 - x;
-        const rw = rem <= 10 ? rem : 7 + Math.floor(rng() * 5);
+        const rw = rem <= 12 ? rem : 6 + Math.floor(rng() * Math.min(5, rem - 11));
         const kind = northKinds[(ni + Math.floor(rng() * 3)) % northKinds.length];
         const floor: FloorKind = kind === 'storage' || kind === 'vault' ? 'concrete' : rng() < 0.5 ? 'carpet' : 'wood';
         b.room(x, 3, rw, 9, northNames[ni % northNames.length], kind, floor, true);
@@ -337,10 +388,13 @@ const SPECS: Spec[] = [
           const wx = dx + (dx + 2 < x + rw - 1 ? 2 : -2);
           if (wx > x && wx < x + rw - 1) b.win(wx, cz);
         }
-        if (x > 4 && rng() < 0.45) b.door(x, 6 + Math.floor(rng() * 3));
+        if (x > 4 && rng() < 0.45) {
+          const idz = 6 + Math.floor(rng() * 3);
+          if (b.get(x - 1, idz) === FLOOR && b.get(x + 1, idz) === FLOOR) b.door(x, idz);
+        }
         x += rw - 1;
         ni++;
-        if (rem <= 10) break;
+        if (rem <= 12) break;
       }
 
       // South left & right wings flanking Entry Lobby

@@ -150,10 +150,18 @@ export class LevelView {
       else { pivot.position.set(d.cx + 0.5, 0, d.cz + 0.03); g.add(box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 0.0), box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 1.0)); }
       const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base, wedge, lock, glass });
     }
-    // breaker box
+    // breaker box (wall-mounted flush to an adjacent solid wall if available)
     if (l.breaker) {
       const bm = std({ color: 0x3b444d, metalness: 0.5, roughness: 0.4 });
-      const bg = new THREE.Group(); bg.position.set(l.breaker.x, 0, l.breaker.z);
+      const bx = Math.floor(l.breaker.x), bz = Math.floor(l.breaker.z);
+      const bg = new THREE.Group();
+      let ox = 0, oz = 0, ry = 0;
+      if (sim.cell(bx, bz - 1) === WALL) { oz = -0.38; ry = 0; }
+      else if (sim.cell(bx, bz + 1) === WALL) { oz = 0.38; ry = Math.PI; }
+      else if (sim.cell(bx - 1, bz) === WALL) { ox = -0.38; ry = Math.PI / 2; }
+      else if (sim.cell(bx + 1, bz) === WALL) { ox = 0.38; ry = -Math.PI / 2; }
+      bg.position.set(l.breaker.x + ox, 0, l.breaker.z + oz);
+      bg.rotation.y = ry;
       bg.add(box(0.32, 1.4, 0.22, bm, 0, 0.7, 0), box(0.16, 0.12, 0.25, new THREE.MeshBasicMaterial({ color: 0x4fd07a }), 0, 1.15, 0));
       g.add(bg);
     }
@@ -219,8 +227,7 @@ export class LevelView {
           o.userData = { ...real.userData };
           return true;
         };
-        if (p.kind === 'shelf') o.rotation.y = (p.rot % 2 ? Math.PI / 2 : 0);
-        else if (p.kind !== 'crate' && p.kind !== 'plant') o.rotation.y = (p.rot * Math.PI) / 2;
+        if (p.kind !== 'crate' && p.kind !== 'plant') o.rotation.y = (p.rot * Math.PI) / 2;
         else if (p.kind === 'plant') o.rotation.y = rj * Math.PI * 2;
         if (!fill()) {
           buildFallback();
@@ -307,7 +314,7 @@ export class LevelView {
       // Cylindrical portico pillars flanking glass entrance (x=14.5, z=20.5)
       for (const px of [12.5, 16.5]) {
         const col = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 3.1, 18), concrete);
-        col.position.set(px, 1.55, 21.15); g.add(col);
+        col.position.set(px, 1.55, 21.45); g.add(col);
       }
       // Portico flat canopy overhang + soffit downlights + EXIT sign
       g.add(box(10.6, 0.24, 2.4, darkSteel, 15.0, 3.18, 21.1));
@@ -320,10 +327,10 @@ export class LevelView {
           const pl = new THREE.PointLight(0xffdfb0, 16, 11, 1.5); pl.position.set(lx, 2.95, 21.35); g.add(pl);
         }
       }
-      addSign('EXIT', '#093818', '#52ff88', '#34e86a', 0.9, 0.3, 14.5, 2.52, 20.02);
+      addSign('EXIT', '#093818', '#52ff88', '#34e86a', 0.9, 0.3, 14.5, 2.52, 21.03);
       // Bollards + entrance planters & courtyard trees
       for (const bx of [10.4, 11.7, 12.8, 16.2]) addBollard(bx, 22.85);
-      addShrub(10.5, 21.3); addShrub(17.4, 21.3);
+      addShrub(10.5, 21.45); addShrub(17.4, 21.45);
       addTree(8.5, 22.0, 1.55); addTree(27.0, 22.2, 1.55);
 
       // 2nd Floor Warm-Lit Glass Curtain-Wall Offices (y=3.2..6.5) matching image-3.png
@@ -364,7 +371,7 @@ export class LevelView {
       g.add(box(35.4, 4.2, 20.2, steelSiding, 21.5, 5.2, 13.9));
       g.add(box(35.6, 0.35, 20.4, darkSteel, 21.5, 7.35, 13.9));
       g.add(box(5.6, 0.25, 1.6, darkSteel, 16.5, 3.18, 23.8), box(5.6, 0.1, 0.12, haz, 16.5, 3.05, 24.55));
-      addSign('WAREHOUSE 04', '#161a1e', '#f0c050', '#c89020', 2.6, 0.48, 16.5, 2.75, 23.02);
+      addSign('WAREHOUSE 04', '#161a1e', '#f0c050', '#c89020', 2.6, 0.48, 16.5, 3.18, 24.62);
       if (quality > 0) { const pl = new THREE.PointLight(0xffb454, 18, 13, 1.5); pl.position.set(16.5, 2.95, 24.1); g.add(pl); }
       // Stacked shipping containers in the dockyard
       const cont = (x: number, y: number, z: number, col: number, ry = 0) => {
@@ -429,7 +436,7 @@ export class LevelView {
       const brick = std({ map: T.brickTex('club_ext', '#261e2a', '#1b1520') });
       // Narrow brick alley framing + 2nd floor brick club facade + glowing ECLIPSE neon sign
       g.add(box(32.2, 4.4, 21.2, brick, 20.0, 5.4, 13.4));
-      g.add(box(1.2, 6.5, 6.0, brick, 5.5, 3.25, 26.8), box(1.2, 6.5, 6.0, brick, 24.0, 3.25, 26.8));
+      g.add(box(1.2, 6.5, 6.0, brick, 5.5, 3.25, 27.0), box(1.2, 6.5, 6.0, brick, 24.0, 3.25, 27.0));
       addSign('ECLIPSE', '#12061c', '#ff52e0', '#d438ff', 3.4, 0.72, 13.5, 3.25, 24.06);
       addShrub(7.6, 24.6); addShrub(15.2, 24.6);
       // Magenta & cyan alley sconces
@@ -443,11 +450,11 @@ export class LevelView {
       ballGrp.add(ball); g.add(ballGrp); this.discoBall = ballGrp;
       for (let i = 0; i < 6; i++) {
         const beam = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.015, 0.06, 9.5, 6),
+          new THREE.CylinderGeometry(0.015, 0.06, 3.2, 6),
           new THREE.MeshBasicMaterial({ color: i % 2 ? 0xff38c8 : 0x38d8ff, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false }),
         );
-        beam.position.set(14.0 + (i - 2.5) * 1.4, 2.4, 17.5);
-        beam.rotation.set(0.7, 0, (i - 2.5) * 0.25);
+        beam.position.set(14.0 + (i - 2.5) * 1.4, 1.65, 17.5);
+        beam.rotation.set(0.55, 0, (i - 2.5) * 0.25);
         g.add(beam); this.lasers.push(beam);
       }
     } else if (l.theme === 'raid') {
@@ -554,8 +561,8 @@ export class LevelView {
         }
         if (ud.pcMonitor) {
           const m = ud.pcMonitor;
-          const dead = box(0.03, m.h, m.w, new THREE.MeshStandardMaterial({ color: 0x0c1016, roughness: 0.25, metalness: 0.4 }), m.x + 0.015, m.y, m.z);
-          dead.rotation.z = -0.08;
+          const dead = box(m.w, m.h, 0.03, new THREE.MeshStandardMaterial({ color: 0x0c1016, roughness: 0.25, metalness: 0.4 }), m.x, m.y, m.z + 0.015);
+          dead.rotation.x = -0.08;
           group.add(dead);
         }
       }

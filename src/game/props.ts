@@ -164,9 +164,11 @@ export function propModel(kind: Prop['kind'], seed: number, high: boolean): THRE
     case 'pc': {
       const c = cloneAsset('desk_pc');
       if (!c) return null;
+      // Orient desk_pc so its back/monitor is at -Z and chair/user faces +Z (matching all other props)
+      c.obj.rotation.y = -Math.PI / 2;
       g.add(c.obj);
       // Tag monitor screen position so shooting the PC shatters/darkens the screen
-      g.userData.pcMonitor = { x: -0.37, y: 1.03, z: 0, w: 0.62, h: 0.38, rotY: Math.PI / 2 };
+      g.userData.pcMonitor = { x: 0, y: 1.03, z: -0.38, w: 0.62, h: 0.38, rotY: 0 };
       return g;
     }
     case 'desk': {

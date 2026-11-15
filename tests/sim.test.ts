@@ -3,7 +3,7 @@ import type { Command } from '../src/sim/sim';
 import { parseCommand, parseCommands, shouldUseAiBrain } from '../src/sim/commands';
 import { buildLocalReport, buildTacticalContext } from '../src/sim/context';
 import { findPath } from '../src/sim/nav';
-import { MISSIONS } from '../src/sim/level';
+import { MISSIONS, buildLevel, FLOOR, OUT, HIGH, WINDOW } from '../src/sim/level';
 import { encodeSnap, applySnap, encodeEv, decodeEv } from '../src/sim/netstate';
 
 let fails = 0;
@@ -327,6 +327,47 @@ ok(wins >= 4, 'bot should be able to win across missions');
     sBrk.fire(sBrk.player, glassDoor.cx + 0.5, 1.3, glassDoor.cz + 1.5, 0, 0, -1, 34);
     ok(sBrk.brokenDoorGlass.has(glassDoor.id) && sBrk.events.some(e => e.t === 'glass'), 'shooting glass door shatters its glass pane');
   }
+
+  // 9. Smart furniture & exterior placement invariants across all 6 missions x 10 seeds
+  let placeFails = 0;
+  for (let m = 0; m < MISSIONS.length; m++) {
+    for (let sd = 1; sd <= 10; sd++) {
+      const lv = buildLevel(m, sd);
+      const cell = (x: number, z: number) => (x < 0 || z < 0 || x >= lv.w || z >= lv.h) ? 2 : lv.cells[z * lv.w + x];
+      for (const p of lv.props) {
+        const pw = p.w ?? 1, pd = p.d ?? 1;
+        if (pw !== pd && ((p.rot % 2 === 0) !== (pw > pd))) placeFails++;
+        for (let iz = p.cz; iz < p.cz + pd; iz++) for (let ix = p.cx; ix < p.cx + pw; ix++) {
+          const isHigh = cell(ix, iz) === HIGH;
+          if (isHigh || p.kind === 'sofa' || p.kind === 'bed' || p.kind === 'desk' || p.kind === 'bar' || p.kind === 'pc') {
+            if (cell(ix + 1, iz) === WINDOW || cell(ix - 1, iz) === WINDOW || cell(ix, iz + 1) === WINDOW || cell(ix, iz - 1) === WINDOW) placeFails++;
+          }
+        }
+      }
+      if (lv.breaker && cell(Math.floor(lv.breaker.x), Math.floor(lv.breaker.z)) !== FLOOR) placeFails++;
+      if (lv.bomb && cell(Math.floor(lv.bomb.x), Math.floor(lv.bomb.z)) !== FLOOR) placeFails++;
+      for (const d of lv.doors) {
+        const a = d.horiz ? cell(d.cx, d.cz - 1) : cell(d.cx - 1, d.cz);
+        const b = d.horiz ? cell(d.cx, d.cz + 1) : cell(d.cx + 1, d.cz);
+        if ((a !== FLOOR && a !== OUT) || (b !== FLOOR && b !== OUT)) placeFails++;
+      }
+      for (const eb of lv.extBoxes) {
+        for (let iz = Math.floor(eb.z - eb.hz + 0.01); iz <= Math.floor(eb.z + eb.hz - 0.01); iz++) {
+          for (let ix = Math.floor(eb.x - eb.hx + 0.01); ix <= Math.floor(eb.x + eb.hx - 0.01); ix++) {
+            if (cell(ix, iz) !== OUT) placeFails++;
+          }
+        }
+      }
+      for (const ec of lv.extCircles) {
+        for (let iz = Math.floor(ec.z - ec.r + 0.01); iz <= Math.floor(ec.z + ec.r - 0.01); iz++) {
+          for (let ix = Math.floor(ec.x - ec.r + 0.01); ix <= Math.floor(ec.x + ec.r - 0.01); ix++) {
+            if (cell(ix, iz) !== OUT) placeFails++;
+          }
+        }
+      }
+    }
+  }
+  ok(placeFails === 0, `zero furniture/window/breaker/door/exterior placement defects across 60 builds (got ${placeFails})`);
 }
 
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);
