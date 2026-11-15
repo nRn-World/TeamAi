@@ -1,7 +1,8 @@
 :root { --a:#e04848; --b:#3d8bf0; --ui:#d6e2ea; --acc:#f2c14e; --bg:rgba(9,13,18,.72); font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif; }
 * { box-sizing: border-box; }
 html, body { margin:0; height:100%; overflow:hidden; background:#06080b; color:var(--ui); user-select:none; }
-#c { position:fixed; inset:0; width:100%; height:100%; display:block; }
+#c { position:fixed; inset:0; width:100%; height:100%; display:block; transition:opacity .35s ease; }
+body.menu-wait #c { opacity:0; }
 .hidden { display:none !important; }
 kbd { background:#1c2530; border:1px solid #3a4a5a; border-bottom-width:2px; border-radius:4px; padding:1px 6px; font:600 12px ui-monospace, Consolas, monospace; color:#fff; }
 
