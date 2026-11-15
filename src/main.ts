@@ -107,6 +107,7 @@ class Game {
     this.asrInfo();
     ($('sSens') as HTMLInputElement).value = String(S.sens); ($('sVol') as HTMLInputElement).value = String(S.vol);
     for (const [id, k] of [['sMic', 'mic'], ['sPtt', 'ptt'], ['sLang', 'lang'], ['sAsr', 'asr'], ['sTts', 'tts'], ['sHead', 'head'], ['sQual', 'qual'], ['sDiff', 'diff'], ['sAi', 'ai'], ['sAiModel', 'aiModel']] as const) ($(id) as HTMLSelectElement).value = String(S[k]);
+    document.querySelectorAll<HTMLElement>('#mDiffPips [data-diff]').forEach(b => b.classList.toggle('on', +b.dataset.diff! === S.diff));
     if (!S.mic) this.voice.stop(); else if (this.state === 'play') this.voice.start();
     if (!S.ai && this.ai.state !== 'off') void this.ai.unload();
     else if (S.ai && this.state === 'play' && !this.net.online && !AUTO) void this.ai.ensureLoaded(S.aiModel);
@@ -115,29 +116,60 @@ class Game {
   }
 
   // ---------------- menus ----------------
-  buildMenu() {
-    const box = $('missions'); box.innerHTML = '';
-    MISSIONS.forEach((m, i) => {
-      const b = document.createElement('button'); b.className = 'mission';
-      const cv = document.createElement('canvas'); this.drawPlan(i, cv, 5); b.appendChild(cv);
-      const d = document.createElement('div'); d.className = 'minfo';
-      d.innerHTML = `<em>${String(i + 1).padStart(2, '0')}</em><b>${m.name}</b><small>${m.suspects} suspects · ${m.civs} civilians</small>` + (best[i] != null ? `<span class="best">Best ${best[i]}/100</span>` : '<span class="best none">Not completed</span>');
-      b.appendChild(d);
-      b.onclick = () => { this.audio.init(); this.audio.ui(); this.mission = i; $('briefTitle').textContent = m.name; $('briefText').textContent = m.brief; this.drawPlan(i, $<HTMLCanvasElement>('briefMap'), 9);
-        $('briefFacts').innerHTML = `<div><b>${m.suspects}</b>suspects</div><div><b>${m.civs}</b>civilians</div><div><b>4</b>officers on your team</div>`; show('menu', false); show('brief', true); };
-      box.appendChild(b);
-    });
-    const done = MISSIONS.filter((_, i) => best[i] != null).length; $('mBest').textContent = `${done}/${MISSIONS.length} missions completed`;
+  selectMission(i: number) {
+    this.mission = i;
+    const m = MISSIONS[i];
+    document.querySelectorAll('#mPills .mpill').forEach((el, idx) => el.classList.toggle('on', idx === i));
+    $('mTitle').textContent = m.name;
+    $('mBrief').textContent = m.brief;
+    this.drawPlan(i, $<HTMLCanvasElement>('mPlan'), 7);
+    $('mFacts').textContent = `${m.suspects} suspects · ${m.civs} civilians · ${m.objective.toUpperCase()}`;
+    const b = $('mBestBadge');
+    if (best[i] != null) { b.textContent = `Best ${best[i]}/100`; b.className = ''; }
+    else { b.textContent = 'Not completed'; b.className = 'none'; }
+  }
+  updateRankDock() {
     $('mRank').textContent = `${getRank(career.xp)} · ${career.xp} XP`;
+    const cur = [...RANKS].reverse().find(r => career.xp >= r[0])!;
+    const nxt = RANKS.find(r => r[0] > career.xp);
+    const pct = nxt ? Math.min(100, ((career.xp - cur[0]) / (nxt[0] - cur[0])) * 100) : 100;
+    ($('mXpFill') as HTMLElement).style.width = `${Math.max(8, pct)}%`;
+  }
+  buildMenu() {
+    const pills = $('mPills'); pills.innerHTML = '';
+    MISSIONS.forEach((m, i) => {
+      const b = document.createElement('button'); b.className = 'mpill';
+      b.innerHTML = `<em>OP ${String(i + 1).padStart(2, '0')}</em><b>${m.name.replace(/^The /, '')}</b>`;
+      b.onclick = () => { this.audio.init(); this.audio.ui(); this.selectMission(i); };
+      pills.appendChild(b);
+    });
+    this.selectMission(this.mission);
+
+    document.querySelectorAll<HTMLElement>('#mDiffPips [data-diff]').forEach(b => {
+      b.classList.toggle('on', +b.dataset.diff! === S.diff);
+      b.onclick = () => {
+        this.audio.init(); this.audio.ui();
+        S.diff = +b.dataset.diff!; saveSettings();
+        ($('sDiff') as HTMLSelectElement).value = String(S.diff);
+        document.querySelectorAll<HTMLElement>('#mDiffPips [data-diff]').forEach(o => o.classList.toggle('on', o === b));
+      };
+    });
+    $('btnStartMission').onclick = () => { this.audio.init(); this.audio.ui(); this.newRound(this.mission); };
+
+    const done = MISSIONS.filter((_, i) => best[i] != null).length; $('mBest').textContent = `${done}/${MISSIONS.length} Ops Completed`;
+    this.updateRankDock();
     ($('lPrimary') as HTMLSelectElement).value = S.primary; ($('lSecondary') as HTMLSelectElement).value = S.secondary;
     ($('lPrimary') as HTMLSelectElement).onchange = () => { S.primary = ($('lPrimary') as HTMLSelectElement).value as PrimaryLoadout; saveSettings(); };
     ($('lSecondary') as HTMLSelectElement).onchange = () => { S.secondary = ($('lSecondary') as HTMLSelectElement).value as SecondaryLoadout; saveSettings(); };
-    const canVoice = Voice.supported || LocalVoice.supported; $('mMic').textContent = canVoice ? 'Voice control ready' : 'No voice control'; $('mMic').className = canVoice ? 'ok' : 'bad';
-    document.querySelectorAll<HTMLElement>('.mnav [data-tab]').forEach(n => n.onclick = () => { this.audio.init(); this.audio.ui();
-      document.querySelectorAll('.mnav [data-tab]').forEach(o => o.classList.toggle('on', o === n)); for (const id of ['tabPlay', 'tabMp']) show(id, id === n.dataset.tab); });
+    const canVoice = Voice.supported || LocalVoice.supported; $('mMic').textContent = canVoice ? 'Voice Ready' : 'No Mic'; $('mMic').className = canVoice ? 'ok' : 'bad';
+    document.querySelectorAll<HTMLElement>('.docknav [data-tab]').forEach(n => n.onclick = () => {
+      this.audio.init(); this.audio.ui();
+      document.querySelectorAll('.docknav [data-tab]').forEach(o => o.classList.toggle('on', o === n));
+      for (const id of ['tabPlay', 'tabMp', 'tabLoadout']) show(id, id === n.dataset.tab);
+    });
     const w = $('micwarn');
-    if (!canVoice) { w.className = 'note warn'; w.textContent = 'Your browser cannot record the microphone, so there is no voice control here – give orders with Enter or the quick keys.'; }
-    else { w.className = 'note'; w.textContent = 'Voice control: allow the microphone when the browser asks. If the game is embedded in another page and the microphone is blocked – open it in its own tab.'; }
+    if (!canVoice) { w.className = 'note warn'; w.textContent = 'Microphone unsupported here – use Enter or H wheel for orders.'; }
+    else { w.className = 'note'; w.textContent = 'Voice ready: allow mic access when prompted (or use H / Enter anytime).'; }
   }
   /** Blueprint-style floor plan of a mission, drawn for the menu card / briefing. */
   drawPlan(index: number, c: HTMLCanvasElement, k: number) {
@@ -639,7 +671,9 @@ class Game {
       career.xp += Math.max(25, sc.total); career.ops++; career.arrests += sim.stats.suspectsArrested;
       localStorage.setItem('teamai.career', JSON.stringify(career));
       if ((best[this.mission] ?? -1) < sc.total) { best[this.mission] = sc.total; localStorage.setItem('teamai.best', JSON.stringify(best)); }
-      $('mRank').textContent = `${getRank(career.xp)} · ${career.xp} XP`;
+      this.updateRankDock();
+      const done = MISSIONS.filter((_, i) => best[i] != null).length; $('mBest').textContent = `${done}/${MISSIONS.length} Ops Completed`;
+      this.selectMission(this.mission);
     }
     show('hud', false); show('debrief', true); win ? this.audio.ok() : this.audio.fail();
   }
@@ -823,7 +857,7 @@ class Game {
 
 const game = new Game();
 loadWeapons().then(async () => {
-  if (weaponsReady) upgradeViewModel(game.vm);
+  if (weaponsReady) { upgradeViewModel(game.vm); game.menu.upgradeWeapons(); }
   if (S.qual > 0 && await game.arms.load()) { // animated arms replace the static weapon (not on the lowest graphics setting)
     game.vm.rifle.clear(); game.vm.pistol.clear(); game.viewCam.add(game.arms.root); game.viewScene.environment = studioEnv(game.renderer); game.viewScene.environmentIntensity = 0.5;
   }
@@ -834,10 +868,6 @@ const modelsDone = loadModels().then(() => {
 if (S.qual > 0) {
   game.menu.env(game.renderer);
   operatorEnv(game.menu.scene.environment);
-  void Promise.all([game.menu.hero(3), game.menu.vehicle('./models/vehicle/marauder.glb')]).then(async ([heroOk]) => {
-    if (!heroOk) { await modelsDone; game.menu.squad(); }
-  });
-} else {
-  void modelsDone.then(() => game.menu.squad());
 }
+void modelsDone;
 (window as any).__ta = game;
