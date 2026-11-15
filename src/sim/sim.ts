@@ -1,6 +1,7 @@
 // TeamAi tactical simulation. Pure logic: no DOM, no three.js – runs headless in tests.
 import { Level, Door, Pt, Room, buildLevel, mulberry32, roomAt, WALL, DOOR, LOW, HIGH } from './level';
 import { findPath, nearestWalkable, walkLine } from './nav';
+import { buildLocalReport } from './context';
 
 export type Team = 'A' | 'B';
 export type Action = 'follow' | 'hold' | 'move' | 'cover' | 'stack' | 'breach' | 'bang' | 'open' | 'close' | 'restrain' | 'fireFree' | 'fireHold' | 'report' | 'shout';
@@ -420,11 +421,12 @@ export class Sim {
     return n ? { p: n, face: yaw } : null;
   }
 
-  command(cmd: Command, aim: Pt | null = null, by: Actor = this.player): boolean {
+  command(cmd: Command, aim: Pt | null = null, by: Actor = this.player, opts: { quiet?: boolean; swedish?: boolean } = {}): boolean {
     if (this.over) return false;
     let any = false; const one = cmd.who != null ? this.officers[cmd.who] : null, soloOrder = cmd.action !== 'report' && cmd.action !== 'fireHold' && cmd.action !== 'fireFree' && cmd.action !== 'shout';
     if (cmd.who != null && (!one || !one.alive)) return false;
     const groups: Grp[] = one ? [soloOrder ? one : one.team] : cmd.team === 'ALL' ? ['A', 'B'] : [cmd.team];
+    const reply = (a: Actor, text: string) => { if (!opts.quiet) this.say(a, text); };
     for (const g of groups) {
       const team = typeof g === 'string' ? g : g.team;
       if (typeof g === 'string') { if (soloOrder) for (const o of this.officers) if (o.team === g) o.solo = null; } // a team order brings everyone back into the team
@@ -434,39 +436,39 @@ export class Sim {
       const set = (o: Order) => { for (const m of this.members(g)) { m.path = null; m.goal = null; if (m.cuff && o.type !== 'restrain') { m.cuff.claimedBy = null; m.cuff = null; } } T.order = o; };
       const tag = typeof g === 'string' ? `Team ${team}: ` : '';
       switch (cmd.action) {
-        case 'follow': set({ type: 'follow', phase: 0, t: 0, leader: by }); this.say(lead, tag + 'Copy, following you.'); break;
-        case 'cover': set({ type: 'cover', phase: 0, t: 0, leader: by }); this.say(lead, tag + 'Covering you.'); break;
-        case 'hold': set({ type: 'hold', phase: 0, t: 0, pts: (typeof g === 'string' ? this.officers.filter(o => o.team === team) : [g]).map(o => ({ x: o.x, z: o.z })) }); this.say(lead, tag + 'Holding position.'); break;
+        case 'follow': set({ type: 'follow', phase: 0, t: 0, leader: by }); reply(lead, tag + 'Copy, following you.'); break;
+        case 'cover': set({ type: 'cover', phase: 0, t: 0, leader: by }); reply(lead, tag + 'Covering you.'); break;
+        case 'hold': set({ type: 'hold', phase: 0, t: 0, pts: (typeof g === 'string' ? this.officers.filter(o => o.team === team) : [g]).map(o => ({ x: o.x, z: o.z })) }); reply(lead, tag + 'Holding position.'); break;
         case 'move': {
           const tg = this.dirTarget(cmd.dir ?? 'forward', aim, by);
-          if (!tg) { this.say(lead, tag + "Can't get there."); break; }
+          if (!tg) { reply(lead, tag + "Can't get there."); break; }
           const f = fwd(tg.face), side = { x: -f.z, z: f.x }; const pts: Pt[] = [];
           for (let i = 0; i < 2; i++) { const k = (i ? 0.7 : -0.7) * (off ? 1.9 : 1); const q = { x: tg.p.x + side.x * k, z: tg.p.z + side.z * k }; pts.push(!this.solidCell(Math.floor(q.x), Math.floor(q.z)) && walkLine(this.level, tg.p, q) ? q : tg.p); }
           set({ type: 'move', phase: 0, t: 0, pts, face: tg.face }); this.events.push({ t: 'marker', x: tg.p.x, z: tg.p.z, team });
-          this.say(lead, tag + ({ left: 'Moving left.', right: 'Moving right.', forward: 'Moving up.', back: 'Falling back.', there: 'Moving to that position.' } as const)[cmd.dir ?? 'forward']); break;
+          reply(lead, tag + ({ left: 'Moving left.', right: 'Moving right.', forward: 'Moving up.', back: 'Falling back.', there: 'Moving to that position.' } as const)[cmd.dir ?? 'forward']); break;
         }
         case 'stack': case 'breach': case 'bang': case 'open': case 'close': {
           const door = this.aimedDoor(by);
           if (!door && typeof g !== 'string' && cmd.action === 'bang' && aim && dist(g, aim) > 2.5 && this.los(g.x, g.z, aim.x, aim.z)) { // no door: one officer throws it where the player aims
-            const d = dist(g, aim), dx = (aim.x - g.x) / d, dz = (aim.z - g.z) / d; g.yaw = Math.atan2(dx, dz) ; this.throwBang(g.x + dx * 0.4, 1.4, g.z + dz * 0.4, dx, 0.1, dz, Math.min(11, 3 + d * 0.9)); this.say(g, 'Flashbang out!'); break;
+            const d = dist(g, aim), dx = (aim.x - g.x) / d, dz = (aim.z - g.z) / d; g.yaw = Math.atan2(dx, dz) ; this.throwBang(g.x + dx * 0.4, 1.4, g.z + dz * 0.4, dx, 0.1, dz, Math.min(11, 3 + d * 0.9)); reply(g, 'Flashbang out!'); break;
           }
-          if (!door) { this.say(lead, tag + "I don't see a door."); break; }
+          if (!door) { reply(lead, tag + "I don't see a door."); break; }
           const side = this.doorSide(door, by), pts = this.stackPts(door, side, off);
           const c = { x: door.cx + 0.5, z: door.cz + 0.5 }; this.events.push({ t: 'marker', x: c.x, z: c.z, team });
-          if (cmd.action === 'stack') { set({ type: 'stack', phase: 0, t: 0, pts, door, side }); this.say(lead, tag + 'Stacking up on the door.'); }
-          else if (cmd.action === 'open' || cmd.action === 'close') { set({ type: 'door', phase: 0, t: 0, pts, door, side, open: cmd.action === 'open' }); this.say(lead, tag + (cmd.action === 'open' ? 'Opening the door.' : 'Closing the door.')); }
-          else { set({ type: 'breach', phase: 0, t: 0, pts, door, side, off, bang: cmd.action === 'bang' }); this.say(lead, tag + (cmd.action === 'bang' ? 'Bang and clear!' : 'Breaching!')); }
+          if (cmd.action === 'stack') { set({ type: 'stack', phase: 0, t: 0, pts, door, side }); reply(lead, tag + 'Stacking up on the door.'); }
+          else if (cmd.action === 'open' || cmd.action === 'close') { set({ type: 'door', phase: 0, t: 0, pts, door, side, open: cmd.action === 'open' }); reply(lead, tag + (cmd.action === 'open' ? 'Opening the door.' : 'Closing the door.')); }
+          else { set({ type: 'breach', phase: 0, t: 0, pts, door, side, off, bang: cmd.action === 'bang' }); reply(lead, tag + (cmd.action === 'bang' ? 'Bang and clear!' : 'Breaching!')); }
           break;
         }
         case 'restrain': {
           const n = this.assignCuffs(g, 16);
-          if (n) { if (T.order.type !== 'restrain') set({ type: 'restrain', phase: 0, t: 0, prev: T.order }); this.assignCuffs(g, 16); this.say(lead, tag + 'Securing.'); }
-          else this.say(lead, tag + 'Nobody to secure here.');
+          if (n) { if (T.order.type !== 'restrain') set({ type: 'restrain', phase: 0, t: 0, prev: T.order }); this.assignCuffs(g, 16); reply(lead, tag + 'Securing.'); }
+          else reply(lead, tag + 'Nobody to secure here.');
           break;
         }
-        case 'fireHold': this.teams[team].fire = 'hold'; this.say(lead, tag + 'Cease fire. Returning fire only.'); break;
-        case 'fireFree': this.teams[team].fire = 'free'; this.say(lead, tag + 'Weapons free.'); break;
-        case 'report': { const m = this.officers.filter(o => o.alive && o.team === team); this.say(lead, tag + `${m.length} up. ${m.some(o => o.hp < 60) ? 'We have wounded.' : 'No injuries.'}`); break; }
+        case 'fireHold': this.teams[team].fire = 'hold'; reply(lead, tag + 'Cease fire. Returning fire only.'); break;
+        case 'fireFree': this.teams[team].fire = 'free'; reply(lead, tag + 'Weapons free.'); break;
+        case 'report': reply(lead, tag + buildLocalReport(this, team, cmd.who, opts.swedish)); break;
         case 'shout': break;
       }
     }

@@ -17,7 +17,7 @@
   <div id="vc" class="hidden"></div>
   <canvas id="minimap"></canvas>
   <div id="team"></div>
-  <div id="voice"><div id="microw"><span id="micdot"></span><span id="micstate">MIC OFF</span></div><div id="heard"></div><div id="parsed"></div></div>
+  <div id="voice"><div id="microw"><span id="micdot"></span><span id="micstate">MIC OFF</span><span id="aibadge" class="hidden"></span></div><div id="heard"></div><div id="parsed"></div></div>
   <div id="log"></div>
   <div id="prompt"></div>
   <div id="progress"><div></div></div>
@@ -25,7 +25,7 @@
   <div id="status"><div id="hpbar"><div></div></div><div id="hptxt">100</div></div>
   <div id="ammo"><div id="wname">CARBINE</div><div id="acount"><b>30</b> / 150</div><div id="bangs">◉◉◉</div></div>
   <div id="quick"></div>
-  <div id="cmdbox" class="hidden"><span>ORDER ›</span><input id="cmdinput" autocomplete="off" spellcheck="false" placeholder="e.g. team a go left" /></div>
+  <div id="cmdbox" class="hidden"><span>ORDER ›</span><input id="cmdinput" autocomplete="off" spellcheck="false" placeholder="e.g. team a go left · eller skriv på svenska / fråga SWAT" /></div>
 </div>
 
 <div id="menu" class="screen">
@@ -120,6 +120,7 @@
     <tr><td>«report» · «sitrep»</td><td>The team reports its status</td></tr>
     <tr><td>«Police! Drop the weapon!» · «Get on the ground!» · «Hands up!»</td><td>You yell the challenge yourself – suspects and civilians may give up</td></tr>
   </table>
+  <p>You can also speak or write in <b>Swedish</b> and combine orders in one sentence (e.g. <i>«Ken throw flash and Maya go in»</i> or <i>«Lag A framåt och säg till Lag B att täcka mig»</i>). In <b>Settings</b>, you can also enable an optional in-browser <b>AI Brain (WebGPU)</b> for Solo mode so the squad understands free conversation, tactical questions, and relaying orders between SWAT units without any external API.</p>
   <h2>How to win</h2>
   <p>Every suspect must be arrested or neutralised and every civilian secured with handcuffs. Arrests score more than kills. Shooting someone who has given up, or without warning, costs points. Civilians without handcuffs run off when nobody is watching them.</p>
   <div class="row"><button class="close primary">Close</button></div>
@@ -133,10 +134,14 @@
     <label>Volume <input id="sVol" type="range" min="0" max="1" step="0.05" /></label>
     <label>Speech recognition <select id="sMic"><option value="1">On</option><option value="0">Off</option></select></label>
     <label>Microphone mode <select id="sPtt"><option value="1">Hold V to talk</option><option value="0">Always on</option></select></label>
-    <label>Accent for voice commands <select id="sLang"><option value="en-US">English (US)</option><option value="en-GB">English (UK)</option><option value="en-AU">English (Australia)</option><option value="en-IN">English (India)</option></select></label>
+    <label>Language / accent for voice commands <select id="sLang"><option value="en-US">English (US)</option><option value="en-GB">English (UK)</option><option value="en-AU">English (Australia)</option><option value="en-IN">English (India)</option><option value="sv-SE">Svenska (Sweden)</option></select></label>
     <label>Spoken voices <select id="sTts"><option value="1">On</option><option value="0">Off</option></select></label>
     <label>Team voice <span><button id="btnTts" type="button">Test the team voice</button></span></label>
     <div id="ttsInfo" class="note"></div><div id="latInfo" class="note"></div>
+    <label>AI Brain (Solo, WebGPU in browser) <select id="sAi"><option value="0">Off (instant built-in parser)</option><option value="1">On (optional free browser AI, no API)</option></select></label>
+    <label>AI Model <select id="sAiModel"></select></label>
+    <label>AI Status <span><button id="btnAiLoad" type="button">Load AI model now</button></span></label>
+    <div id="aiInfo" class="note"></div>
     <label>I use headphones <select id="sHead"><option value="0">No (ignore the microphone while the team talks)</option><option value="1">Yes</option></select></label>
     <label>Graphics <select id="sQual"><option value="0">Low</option><option value="1">Medium</option><option value="2">High</option></select></label>
     <label>Difficulty <select id="sDiff"><option value="0">Easy</option><option value="1">Normal</option><option value="2">Hard</option></select></label>

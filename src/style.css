@@ -34,6 +34,9 @@ kbd { background:#1c2530; border:1px solid #3a4a5a; border-bottom-width:2px; bor
 .mem i u { display:block; height:100%; background:#5fe08a; } .mem.dead { opacity:.4; text-decoration:line-through; }
 #voice { position:absolute; left:50%; bottom:92px; transform:translateX(-50%); text-align:center; min-width:340px; }
 #microw { display:inline-flex; align-items:center; gap:7px; font-size:11px; letter-spacing:.12em; background:var(--bg); padding:3px 10px; border-radius:20px; }
+#aibadge { margin-left:6px; padding-left:8px; border-left:1px solid rgba(255,255,255,.22); color:var(--acc); font-weight:600; }
+#aibadge.ready { color:#5fe08a; }
+#aibadge.err { color:#ff8a7a; }
 #micdot { width:9px; height:9px; border-radius:50%; background:#666; } #micdot.on { background:#37e06a; box-shadow:0 0 8px #37e06a; animation:pulse 1.4s infinite; } #micdot.err { background:#e04848; }
 @keyframes pulse { 50% { opacity:.45; } }
 #heard { margin-top:6px; font-size:15px; font-style:italic; opacity:.85; min-height:20px; }
@@ -54,7 +57,7 @@ kbd { background:#1c2530; border:1px solid #3a4a5a; border-bottom-width:2px; bor
 #quick { position:absolute; left:50%; bottom:16px; transform:translateX(-50%); font-size:11px; opacity:.7; background:var(--bg); padding:4px 10px; border-radius:5px; white-space:nowrap; }
 #quick b { color:var(--acc); }
 #cmdbox { position:absolute; left:50%; bottom:170px; transform:translateX(-50%); background:rgba(9,13,18,.92); border:1px solid var(--acc); border-radius:6px; padding:8px 12px; display:flex; gap:8px; align-items:center; pointer-events:auto; }
-#cmdbox span { color:var(--acc); font-weight:700; font-size:12px; letter-spacing:.1em; } #cmdinput { width:340px; background:transparent; border:0; outline:0; color:#fff; font-size:16px; }
+#cmdbox span { color:var(--acc); font-weight:700; font-size:12px; letter-spacing:.1em; } #cmdinput { width:min(440px, 75vw); background:transparent; border:0; outline:0; color:#fff; font-size:16px; }
 
 /* ---------- screens ---------- */
 .screen { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:radial-gradient(ellipse at 50% 30%, rgba(20,32,46,.82), rgba(4,6,9,.95)); z-index:10; }

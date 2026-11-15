@@ -7,7 +7,9 @@ import { operatorEnv } from './game/operator';
 import { loadWeapons, weaponsReady, FpsArms, studioEnv } from './game/weapons';
 import { upgradeViewModel } from './game/world';
 import '@fontsource/barlow-condensed/500.css'; import '@fontsource/barlow-condensed/600.css'; import '@fontsource/barlow-condensed/700.css'; import '@fontsource/barlow/400.css'; import '@fontsource/barlow/600.css';
-import { parseCommand, ACTION_LABEL, DIR_LABEL } from './sim/commands';
+import { parseCommands, shouldUseAiBrain, ACTION_LABEL, DIR_LABEL } from './sim/commands';
+import { isSwedishText } from './sim/context';
+import { TacticalAi, AI_MODELS, AiState, AiResult } from './game/ai';
 import { LevelView, ActorView, FX, makeViewModel, TEAM_COLOR } from './game/world';
 import { GameAudio, Speech } from './game/audio';
 import { Voice } from './game/voice';
@@ -21,10 +23,10 @@ const params = new URLSearchParams(location.search);
 const AUTO = params.has('auto');
 
 // ---------------- settings ----------------
-const defaults = { sens: 1, vol: 0.8, mic: 1, ptt: 1, lang: 'en-US', tts: 1, head: 0, qual: 1, diff: 1, name: '' };
+const defaults = { sens: 1, vol: 0.8, mic: 1, ptt: 1, lang: 'en-US', tts: 1, head: 0, qual: 1, diff: 1, name: '', ai: 0, aiModel: AI_MODELS[0].id as string };
 type Settings = typeof defaults;
 const S: Settings = { ...defaults, ...JSON.parse(localStorage.getItem('teamai.settings') || '{}') };
-if (!String(S.lang).startsWith('en')) S.lang = 'en-US'; // the game is English only; older saves may hold another language
+if (!AI_MODELS.some(m => m.id === S.aiModel)) S.aiModel = AI_MODELS[0].id;
 const best: Record<string, number> = JSON.parse(localStorage.getItem('teamai.best') || '{}');
 if (params.has('q')) S.qual = +params.get('q')!;
 const saveSettings = () => localStorage.setItem('teamai.settings', JSON.stringify(S));
@@ -44,7 +46,7 @@ class Game {
   viewScene = new THREE.Scene(); viewCam = new THREE.PerspectiveCamera(52, 1, 0.01, 10); vm = makeViewModel();
   torch = new THREE.SpotLight(0xfff0d6, 22, 32, 0.5, 0.6, 1.2);
   sim: Sim | null = null; level: LevelView | null = null; views = new Map<Actor, ActorView>(); fx = new FX();
-  audio = new GameAudio(); speech = new Speech(); voice = new Voice();
+  audio = new GameAudio(); speech = new Speech(); voice = new Voice(); ai = new TacticalAi();
   net = new Net(); connIdx = new Map<DataConnection, number>(); connName = new Map<DataConnection, string>(); snapT = 0; inT = 0; stepPh = new Map<Actor, number>(); lobbyMission = 0; lobbyNames: string[] = [];
   state: 'menu' | 'play' | 'pause' | 'end' = 'menu'; mission = 0; seed = 1;
   yaw = 0; pitch = 0; keys = new Set<string>(); mouseDown = false; eye = 1.62; bob = 0; stepAcc = 0; recoil = 0; vmKick = 0; sway = new THREE.Vector2();
@@ -61,8 +63,9 @@ class Game {
     this.bindInput(); this.bindUI(); this.buildMenu();
     this.voice.onFinal = t => this.heard(t, true); this.voice.onInterim = t => { $('heard').textContent = '« ' + t + ' … »'; this.parsedT = Math.max(this.parsedT, 3); };
     this.voice.onState = (s, d) => this.micState(s, d);
+    this.ai.onState = (s, d) => this.aiState(s, d);
     this.voice.onIgnored = t => { // heard an order while V was not held: tell the player instead of silently dropping it
-      if (this.state !== 'play' || !t || !parseCommand(t, this.lastTeam, this.lastWho)) return;
+      if (this.state !== 'play' || !t || !parseCommands(t, this.lastTeam, this.lastWho).commands.length) return;
       $('heard').textContent = '« ' + t + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'HOLD V WHILE YOU SPEAK – the order was not sent'; this.parsedT = 5; this.audio.fail();
     };
     this.applySettings();
@@ -76,8 +79,11 @@ class Game {
   applySettings() {
     this.audio.setVolume(S.vol); this.speech.enabled = !!S.tts; this.speech.lang = S.lang; this.voice.setLang(S.lang); this.voice.ptt = !!S.ptt; this.micState(this.voice.state);
     ($('sSens') as HTMLInputElement).value = String(S.sens); ($('sVol') as HTMLInputElement).value = String(S.vol);
-    for (const [id, k] of [['sMic', 'mic'], ['sPtt', 'ptt'], ['sLang', 'lang'], ['sTts', 'tts'], ['sHead', 'head'], ['sQual', 'qual'], ['sDiff', 'diff']] as const) ($(id) as HTMLSelectElement).value = String(S[k]);
+    for (const [id, k] of [['sMic', 'mic'], ['sPtt', 'ptt'], ['sLang', 'lang'], ['sTts', 'tts'], ['sHead', 'head'], ['sQual', 'qual'], ['sDiff', 'diff'], ['sAi', 'ai'], ['sAiModel', 'aiModel']] as const) ($(id) as HTMLSelectElement).value = String(S[k]);
     if (!S.mic) this.voice.stop(); else if (this.state === 'play') this.voice.start();
+    if (!S.ai && this.ai.state !== 'off') void this.ai.unload();
+    else if (S.ai && this.state === 'play' && !this.net.online && !AUTO) void this.ai.ensureLoaded(S.aiModel);
+    this.aiState(this.ai.state, this.ai.state === 'loading' ? this.ai.progress : this.ai.error);
     this.resize();
   }
 
@@ -127,7 +133,13 @@ class Game {
     document.querySelectorAll<HTMLElement>('.stabs button').forEach(b => b.onclick = () => { document.querySelectorAll<HTMLElement>('.stabs button').forEach(o => { o.classList.toggle('on', o === b); $(o.dataset.stab!).classList.toggle('hidden', o !== b); }); });
     document.querySelectorAll<HTMLElement>('.close').forEach(b => b.onclick = () => { b.closest('.screen')!.classList.add('hidden'); this.audio.ui(); });
     const bind = (id: string, k: keyof Settings, num = true) => $(id).addEventListener('input', e => { (S as any)[k] = num ? +(e.target as HTMLInputElement).value : (e.target as HTMLInputElement).value; saveSettings(); this.applySettings(); });
-    bind('sSens', 'sens'); bind('sVol', 'vol'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff');
+    ($('sAiModel') as HTMLSelectElement).innerHTML = AI_MODELS.map(m => `<option value="${m.id}">${m.label}</option>`).join('');
+    bind('sSens', 'sens'); bind('sVol', 'vol'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff'); bind('sAi', 'ai'); bind('sAiModel', 'aiModel', false);
+    $('btnAiLoad').onclick = () => {
+      this.audio.init(); this.audio.ui();
+      if (!S.ai) { S.ai = 1; saveSettings(); ($('sAi') as HTMLSelectElement).value = '1'; }
+      void this.ai.ensureLoaded(S.aiModel);
+    };
   }
   toMenu() { document.body.classList.remove('ingame'); this.net.close(); show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief']) show(id, false); this.buildMenu(); show('menu', true); if (document.pointerLockElement) document.exitPointerLock(); }
   // ---------------- online co-op ----------------
@@ -231,8 +243,11 @@ class Game {
     this.scene.add(this.camera); this.camera.add(this.torch); this.torch.position.set(0.15, -0.1, 0); this.camera.add(this.torch.target); this.torch.target.position.set(0, 0, -1);
     this.yaw = sim.player.yaw; this.pitch = 0; this.weapon = 0; this.ammo = [30, 15]; this.reserve = [150, 60]; this.reloadT = 0; this.fireCd = 0; this.recoil = 0; this.dmgFx = 0; this.endT = 0;
     this.selTeam = this.lastTeam = 'ALL'; this.lastWho = null; this.state = 'play'; this.last = performance.now(); $('log').innerHTML = ''; $('heard').textContent = ''; $('parsed').textContent = '';
+    this.ai.resetHistory();
     this.buildMap(); show('menu', false); show('hud', true); this.updateHud(true);
     if (S.mic && !AUTO) this.voice.start();
+    if (S.ai && !mp && !AUTO) void this.ai.ensureLoaded(S.aiModel);
+    this.aiState(this.ai.state, this.ai.state === 'loading' ? this.ai.progress : this.ai.error);
     if (mp && !document.pointerLockElement) this.log('Click in the game to take control of the mouse.', 'warn');
     this.log('Command: ' + MISSIONS[mission].name + '. Give orders with your voice – good luck.', 'me');
   }
@@ -286,6 +301,32 @@ class Game {
 
   // ---------------- commands ----------------
   lastSay = ''; lastSayT = 0; micS = ''; micD: string | undefined;
+  aiState(s: AiState, detail = '') {
+    const badge = $('aibadge'), info = $('aiInfo');
+    const mp = this.net.online;
+    if (!S.ai || mp) {
+      badge.className = 'hidden';
+      badge.textContent = '';
+      if (mp && S.ai) { info.className = 'note'; info.textContent = 'AI Brain är pausad i online-läge (använder snabba kommandotolken).'; }
+      else if (s === 'unsupported' || s === 'error') { info.className = 'note warn'; info.textContent = detail; }
+      else { info.className = 'note'; info.textContent = TacticalAi.hasWebGpu ? 'AI Brain är avstängd. Aktivera för fritt språk och smart radiokoordinering i Solo-läge (laddas i webbläsaren, inget API).' : 'WebGPU saknas i denna webbläsare – spelets inbyggda svenska/engelska kommandotolk används automatiskt.'; }
+      return;
+    }
+    badge.classList.remove('hidden');
+    if (s === 'ready') {
+      badge.className = 'ready'; badge.textContent = 'AI REDO';
+      info.className = 'note'; info.textContent = `AI-modellen (${this.ai.modelId}) är laddad och redo för Solo-läge.`;
+    } else if (s === 'loading') {
+      badge.className = ''; badge.textContent = 'AI LADDAR…';
+      info.className = 'note'; info.textContent = detail || 'Laddar AI-modell till webbläsarens cache…';
+    } else if (s === 'unsupported' || s === 'error') {
+      badge.className = 'err'; badge.textContent = 'AI EJ TILLGÄNGLIG';
+      info.className = 'note warn'; info.textContent = detail || 'AI-modellen kunde inte startas; snabba kommandotolken används istället.';
+    } else {
+      badge.className = ''; badge.textContent = 'AI VÄNTAR';
+      info.className = 'note'; info.textContent = 'Tryck «Load AI model now» eller starta ett Solo-uppdrag för att ladda modellen.';
+    }
+  }
   /** Speaks a line as a given character: recorded clip with a per-character voice, else the browser's speech synthesis. */
   speak(text: string, a: Actor | null, o: { gain?: number; pan?: number; muffle?: boolean; pitch?: number; rate?: number; voice?: string } = {}) {
     if (!S.tts) return 0;
@@ -295,7 +336,7 @@ class Game {
     const voice = o.voice ?? (kind === 'officer' ? 'o' + ((a!.slot % 4) + 1) : kind === 'suspect' ? ['s1', 's2', 's4', 's3', 's5'][a!.id % 5] : kind === 'civ' ? 'c' + ((a!.id % 5) + 1) : 'p1');
     const rate = kind === 'player' && a && a !== this.sim?.player ? 0.94 + (a.pi % 3) * 0.06 : 1, loud = this.audio.isShout(clean);
     const ms = this.audio.line(clean, { voice, rate, radio: kind === 'officer' && !loud, gruff: kind === 'suspect', shout: loud, gain: o.gain ?? 1, pan: o.pan, muffle: o.muffle });
-    if (ms) this.speech.busy(ms); else this.speech.say(text, o.pitch ?? 1, o.rate ?? 1.2, o.gain ?? 0.9);
+    if (ms) this.speech.busy(ms); else this.speech.say(text, o.pitch ?? 1, o.rate ?? 1.2, o.gain ?? 0.9, false, isSwedishText(clean) ? 'sv-SE' : undefined);
     return ms;
   }
   heard(text: string, fromMic: boolean) {
@@ -303,22 +344,100 @@ class Game {
     if (fromMic && !S.head && !S.ptt && this.speech.speaking) { // don't let the team's own radio voice trigger orders
       $('heard').textContent = '« ' + text.split('|')[0].trim() + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'Ignored – the team was talking at the same time (say it again)'; this.parsedT = 4; return;
     }
-    const alts = text.split('|').map(s => s.trim()).filter(Boolean); let cmd: Command | null = null;
-    for (const a of alts) { cmd = parseCommand(a, this.lastTeam, this.lastWho); if (cmd) break; }
-    $('heard').textContent = '« ' + alts[0] + ' »'; this.parsedT = 4;
+    const alts = text.split('|').map(s => s.trim()).filter(Boolean);
+    let bestAlt = alts[0] || '';
+    let batch = parseCommands(bestAlt, this.lastTeam, this.lastWho);
+    for (const a of alts) {
+      const b = parseCommands(a, this.lastTeam, this.lastWho);
+      if (b.commands.length) { batch = b; bestAlt = a; break; }
+    }
+    $('heard').textContent = '« ' + bestAlt + ' »'; this.parsedT = 4;
     const p = $('parsed');
-    if (!cmd) { p.className = 'bad'; p.textContent = 'No order recognised'; this.audio.fail(); return; }
-    this.exec(cmd, !fromMic);
+
+    // Use browser WebGPU AI Brain in Solo mode for conversational/relay/unrecognized input when ready
+    if (!this.net.online && S.ai && this.ai.state === 'ready' && shouldUseAiBrain(bestAlt, batch)) {
+      if (this.ai.busy) { p.className = 'bad'; p.textContent = 'AI is still thinking…'; return; }
+      p.className = ''; p.textContent = 'AI THINKING…'; this.parsedT = 12;
+      void this.askAiBrain(bestAlt, !fromMic);
+      return;
+    }
+
+    if (!batch.commands.length) {
+      p.className = 'bad';
+      p.textContent = (!this.net.online && S.ai && this.ai.state === 'loading') ? 'AI loading… (simple orders work meanwhile)' : 'No order recognised';
+      this.audio.fail(); return;
+    }
+    this.execBatch(batch, !fromMic, bestAlt);
+  }
+  async askAiBrain(text: string, byKey: boolean) {
+    const sim = this.sim; if (!sim) return;
+    const res: AiResult = await this.ai.interpret(text, sim, this.lastTeam, this.lastWho, isSwedishText(text) || S.lang.startsWith('sv'));
+    if (this.sim !== sim || this.state !== 'play' || sim.over) return;
+    this.applyAiResult(sim, res, byKey);
+  }
+  applyAiResult(sim: Sim, res: AiResult, byKey: boolean) {
+    const p = $('parsed'); p.className = ''; this.parsedT = 5;
+    const labels: string[] = [];
+    const aim = this.aimPoint();
+    let anyOk = false;
+    for (const cmd of res.commands) {
+      if (cmd.action === 'shout') { labels.push(ACTION_LABEL.shout); this.shout(byKey); anyOk = true; continue; }
+      const one = cmd.who != null ? sim.officers[cmd.who] : null;
+      const tname = one ? one.name.toUpperCase() : cmd.team === 'ALL' ? 'ALL' : 'TEAM ' + cmd.team;
+      labels.push(`${tname} › ${ACTION_LABEL[cmd.action]}${cmd.action === 'move' && cmd.dir ? ' ' + DIR_LABEL[cmd.dir] : ''}`);
+      this.lastTeam = cmd.team; this.selTeam = cmd.team; this.lastWho = cmd.who ?? null;
+      if (sim.command(cmd, aim, sim.player, { quiet: true, swedish: isSwedishText(res.reply) })) anyOk = true;
+    }
+    const speaker = (sim.officers[res.speaker]?.alive ? sim.officers[res.speaker] : sim.officers.find(o => o.alive)) ?? null;
+    p.textContent = labels.length ? `AI › ${labels.join(' · ')}` : `AI › ${speaker ? speaker.name.toUpperCase() : 'SWAT'} RADIO`;
+    if (res.commands.length && !anyOk) this.audio.fail(); else this.audio.ok();
+    if (speaker && res.reply) sim.say(speaker, res.reply);
+    if (res.relayTo != null && res.relayMsg) {
+      setTimeout(() => {
+        if (this.sim !== sim || this.state !== 'play' || sim.over) return;
+        let receiver: Actor | undefined;
+        if (typeof res.relayTo === 'number') receiver = sim.officers[res.relayTo];
+        else if (res.relayTo === 'A' || res.relayTo === 'B') receiver = sim.officers.find(o => o.alive && o.team === res.relayTo && o !== speaker);
+        else receiver = sim.officers.find(o => o.alive && o !== speaker);
+        if (speaker?.alive) sim.say(speaker, res.relayMsg!);
+        if (receiver?.alive && receiver !== speaker && res.commands.length) {
+          const ack = isSwedishText(res.relayMsg!) ? 'Uppfattat, utför!' : 'Copy that, moving!';
+          setTimeout(() => { if (this.sim === sim && this.state === 'play' && !sim.over && receiver!.alive) sim.say(receiver!, ack); }, 700);
+        }
+      }, 650);
+    }
+    this.updateHud(true);
+  }
+  execBatch(batch: { commands: Command[]; relayFrom?: number }, byKey: boolean, rawText = '') {
+    const sim = this.sim!;
+    if (batch.relayFrom != null) {
+      const sender = sim.officers[batch.relayFrom];
+      if (sender?.alive) {
+        const sw = isSwedishText(rawText);
+        sim.say(sender, sw ? 'Uppfattat, meddelar vidare!' : 'Copy, relaying order!');
+      }
+    }
+    const labels: string[] = [];
+    const aim = this.aimPoint();
+    let anyOk = false;
+    const sw = isSwedishText(rawText);
+    for (let i = 0; i < batch.commands.length; i++) {
+      const cmd = batch.commands[i];
+      if (cmd.action === 'shout') { labels.push(ACTION_LABEL.shout); this.shout(byKey); anyOk = true; continue; }
+      const one = cmd.who != null ? sim.officers[cmd.who] : null, tname = one ? one.name.toUpperCase() : cmd.team === 'ALL' ? 'ALL' : 'TEAM ' + cmd.team;
+      labels.push(`${tname} › ${ACTION_LABEL[cmd.action]}${cmd.action === 'move' && cmd.dir ? ' ' + DIR_LABEL[cmd.dir] : ''}`);
+      this.lastTeam = cmd.team; this.selTeam = cmd.team; this.lastWho = cmd.who ?? null;
+      if (this.mirror) { this.net.send({ t: 'cmd', cmd, aim }); anyOk = true; }
+      else if (sim.command(cmd, aim, sim.player, { swedish: sw })) anyOk = true;
+      else this.log(one ? `${one.name} is down.` : 'Nobody on that team can answer.', 'warn');
+    }
+    const p = $('parsed'); p.className = ''; this.parsedT = 4;
+    p.textContent = labels.join(' · ');
+    if (anyOk) this.audio.ok(); else this.audio.fail();
+    this.updateHud(true);
   }
   exec(cmd: Command, byKey: boolean) {
-    const sim = this.sim!; const p = $('parsed'); p.className = ''; this.parsedT = 4;
-    if (cmd.action === 'shout') { p.textContent = ACTION_LABEL.shout; this.shout(byKey); return; }
-    const one = cmd.who != null ? sim.officers[cmd.who] : null, tname = one ? one.name.toUpperCase() : cmd.team === 'ALL' ? 'ALL' : 'TEAM ' + cmd.team;
-    p.textContent = `${tname} › ${ACTION_LABEL[cmd.action]}${cmd.action === 'move' && cmd.dir ? ' ' + DIR_LABEL[cmd.dir] : ''}`;
-    this.lastTeam = cmd.team; this.selTeam = cmd.team; this.lastWho = cmd.who ?? null;
-    if (this.mirror) this.net.send({ t: 'cmd', cmd, aim: this.aimPoint() });
-    const ok = this.mirror ? true : sim.command(cmd, this.aimPoint()); if (ok) this.audio.ok(); else { this.audio.fail(); this.log(one ? `${one.name} is down.` : 'Nobody on that team can answer.', 'warn'); }
-    this.updateHud(true);
+    this.execBatch({ commands: [cmd] }, byKey);
   }
   aimDir() { const cp = Math.cos(this.pitch); return new THREE.Vector3(-Math.sin(this.yaw) * cp, Math.sin(this.pitch), -Math.cos(this.yaw) * cp); }
   aimPoint() { const sim = this.sim!, p = sim.player, d = this.aimDir(); const h = sim.ray(p.x, this.eye, p.z, d.x, d.y, d.z, 40, p); return h.kind === 'none' ? null : { x: h.x - d.x * 0.4, z: h.z - d.z * 0.4 }; }
