@@ -11,6 +11,9 @@ export type RoomKind = 'office' | 'corridor' | 'lobby' | 'warehouse' | 'bedroom'
 export interface Room { id: number; name: string; x: number; z: number; w: number; h: number; floor: FloorKind; kind: RoomKind; spawn: boolean; }
 export interface Prop { cx: number; cz: number; kind: 'desk' | 'shelf' | 'crate' | 'bed' | 'sofa' | 'plant' | 'locker' | 'bar' | 'server'; rot: number; }
 export interface Pt { x: number; z: number; }
+export interface BoxCollider { x: number; z: number; hx: number; hz: number; yaw?: number; h?: number; }
+export interface CircleCollider { x: number; z: number; r: number; h?: number; }
+export interface VehicleCollider { x: number; z: number; yaw: number; hx: number; hz: number; h: number; }
 
 export type LevelTheme = 'office' | 'warehouse' | 'hotel' | 'bank' | 'club' | 'raid';
 export type ObjectiveKind = 'clear' | 'hostage' | 'bomb';
@@ -23,6 +26,9 @@ export interface Level {
   rooms: Room[]; props: Prop[];
   breaker?: Pt;
   bomb?: Pt & { time: number };
+  vehicle?: VehicleCollider;
+  extBoxes: BoxCollider[];
+  extCircles: CircleCollider[];
   playerSpawn: Pt & { yaw: number };
   suspects: (Pt & { room: number; hostage?: boolean })[];
   civs: (Pt & { room: number; vip?: boolean })[];
@@ -42,6 +48,9 @@ export function mulberry32(seed: number) {
 class Builder {
   cells: Uint8Array; doors: Door[] = []; windows: Pt[] = []; rooms: Room[] = []; props: Prop[] = [];
   breaker?: Pt; bomb?: Pt & { time: number };
+  vehicle?: VehicleCollider;
+  extBoxes: BoxCollider[] = [];
+  extCircles: CircleCollider[] = [];
   constructor(public w: number, public h: number) {
     this.cells = new Uint8Array(w * h);
     for (let x = 0; x < w; x++) { this.set(x, 0, WALL); this.set(x, h - 1, WALL); }
@@ -144,6 +153,13 @@ const SPECS: Spec[] = [
       b.win(6, 20); b.win(8, 20); b.win(11, 20); b.win(12, 20); b.win(13, 20);
       b.win(16, 20); b.win(17, 20); b.win(18, 20); b.win(22, 20); b.win(24, 20);
       b.placeBreaker(11, 19);
+      // Exterior solid colliders + Marauder armored SWAT truck staged cleanly on the front plaza
+      b.extCircles.push({ x: 12.5, z: 21.15, r: 0.34, h: 3.1 }, { x: 16.5, z: 21.15, r: 0.34, h: 3.1 }); // portico pillars
+      for (const bx of [10.4, 11.7, 12.8, 16.2]) b.extCircles.push({ x: bx, z: 22.85, r: 0.16, h: 0.85 }); // bollards
+      b.extBoxes.push({ x: 10.5, z: 21.3, hx: 0.38, hz: 0.38, h: 1.0 }, { x: 17.4, z: 21.3, hx: 0.38, hz: 0.38, h: 1.0 }); // planters
+      b.extCircles.push({ x: 8.5, z: 22.0, r: 0.44, h: 2.6 }, { x: 27.0, z: 22.2, r: 0.44, h: 2.6 }); // courtyard trees
+      b.extCircles.push({ x: 6.5, z: 25.4, r: 0.14, h: 4.6 }, { x: 27.5, z: 25.4, r: 0.14, h: 4.6 }); // street lamps
+      b.vehicle = { x: 22.4, z: 25.4, yaw: -0.26, hx: 3.0, hz: 1.2, h: 2.43 };
       return { x: 14.5, z: 24.4, yaw: 0 };
     },
   },
@@ -159,6 +175,11 @@ const SPECS: Spec[] = [
       b.door(33, 10); b.door(33, 16); b.door(38, 20, true);
       b.win(29, 5); b.win(29, 12); b.win(10, 23); b.win(12, 23); b.win(20, 23); b.win(22, 23);
       b.placeBreaker(5, 22);
+      b.extBoxes.push(
+        { x: 7.2, z: 27.6, hx: 2.9, hz: 1.2, yaw: 0.08, h: 5.0 },
+        { x: 31.2, z: 28.0, hx: 2.9, hz: 1.2, yaw: -0.14, h: 2.5 },
+      );
+      b.vehicle = { x: 23.2, z: 28.2, yaw: -0.3, hx: 3.0, hz: 1.2, h: 2.43 };
       return { x: 16.5, z: 29.0, yaw: 0 };
     },
   },
@@ -178,6 +199,10 @@ const SPECS: Spec[] = [
       b.win(19, 16); b.win(25, 16);
       b.win(18, 24); b.win(19, 24); b.win(20, 24); b.win(24, 24); b.win(25, 24); b.win(26, 24);
       b.placeBreaker(11, 23);
+      b.extCircles.push({ x: 20.4, z: 25.4, r: 0.36, h: 3.3 }, { x: 24.6, z: 25.4, r: 0.36, h: 3.3 }); // brass columns
+      b.extBoxes.push({ x: 18.6, z: 25.5, hx: 0.38, hz: 0.38, h: 1.0 }, { x: 26.4, z: 25.5, hx: 0.38, hz: 0.38, h: 1.0 }); // planters
+      b.extCircles.push({ x: 16.2, z: 25.8, r: 0.45, h: 2.7 }, { x: 36.6, z: 26.2, r: 0.45, h: 2.7 }); // courtyard trees
+      b.vehicle = { x: 31.8, z: 28.2, yaw: -0.25, hx: 3.0, hz: 1.2, h: 2.43 };
       return { x: 22.5, z: 29.0, yaw: 0 };
     },
   },
@@ -201,6 +226,11 @@ const SPECS: Spec[] = [
       b.win(6, 14); b.win(7, 14); b.win(12, 14); b.win(13, 14);
       b.win(8, 24); b.win(10, 24); b.win(20, 24); b.win(22, 24);
       b.placeBreaker(17, 5);
+      for (const cx of [11.2, 13.4, 17.6, 19.8]) b.extCircles.push({ x: cx, z: 25.6, r: 0.46, h: 6.4 }); // fluted bank columns
+      for (const bx of [9.6, 11.2, 12.8, 18.2, 19.8]) b.extCircles.push({ x: bx, z: 27.1, r: 0.16, h: 0.85 }); // bollards
+      b.extBoxes.push({ x: 12.3, z: 25.7, hx: 0.38, hz: 0.38, h: 1.0 }, { x: 18.7, z: 25.7, hx: 0.38, hz: 0.38, h: 1.0 }); // planters
+      b.extCircles.push({ x: 7.8, z: 26.2, r: 0.45, h: 2.7 }, { x: 30.8, z: 26.2, r: 0.45, h: 2.7 }); // courtyard trees
+      b.vehicle = { x: 25.8, z: 28.3, yaw: -0.25, hx: 3.0, hz: 1.2, h: 2.43 };
       return { x: 15.5, z: 29.0, yaw: 0 };
     },
   },
@@ -223,6 +253,13 @@ const SPECS: Spec[] = [
       b.win(16, 10); b.win(20, 10); b.win(11, 23); b.win(15, 23);
       b.placeBreaker(24, 22);
       b.bomb = { x: 31.5, z: 16.5, time: 165 };
+      b.extBoxes.push(
+        { x: 5.5, z: 26.8, hx: 0.6, hz: 3.0, h: 6.5 }, // left alley brick wall
+        { x: 24.0, z: 26.8, hx: 0.6, hz: 3.0, h: 6.5 }, // right alley brick wall (widened so truck fits cleanly)
+        { x: 7.6, z: 24.6, hx: 0.38, hz: 0.38, h: 1.0 },
+        { x: 15.2, z: 24.6, hx: 0.38, hz: 0.38, h: 1.0 },
+      );
+      b.vehicle = { x: 19.2, z: 27.4, yaw: -0.38, hx: 3.0, hz: 1.2, h: 2.43 };
       return { x: 13.5, z: 27.8, yaw: 0 };
     },
   },
@@ -282,7 +319,15 @@ const SPECS: Spec[] = [
       if (rng() < 0.4) {
         b.bomb = { x: 6.5, z: 7.5, time: 180 };
       }
-      return { x: lx + 4.5, z: cz + ch + 10.2, yaw: 0 };
+      const sx = lx + 4.5, sz = cz + ch + 10.2, fz = sz - 1.5;
+      for (let fx = 3.0; fx <= 37.0; fx += 2.0) {
+        if (Math.abs(fx - sx) < 2.6) continue;
+        b.extBoxes.push({ x: fx, z: fz, hx: 1.0, hz: 0.08, h: 2.3 });
+      }
+      b.extBoxes.push({ x: 5.0, z: fz + 0.3, hx: 0.14, hz: 0.14, h: 7.5 }, { x: 36.2, z: fz + 0.3, hx: 0.14, hz: 0.14, h: 7.5 });
+      b.extCircles.push({ x: 4.5, z: fz + 1.4, r: 0.44, h: 2.6 }, { x: 36.6, z: fz + 1.4, r: 0.44, h: 2.6 });
+      b.vehicle = { x: Math.min(31.2, sx + 5.8), z: Math.min(b.h - 3.3, fz + 2.75), yaw: -0.25, hx: 3.0, hz: 1.2, h: 2.43 };
+      return { x: sx, z: sz, yaw: 0 };
     },
   },
 ];
@@ -325,6 +370,7 @@ export function buildLevel(index: number, seed: number): Level {
     index, name: spec.name, brief: spec.brief, theme: spec.theme, objective,
     w: b.w, h: b.h, cells: b.cells, doors: b.doors, doorAt, windows: b.windows,
     rooms: b.rooms, props: b.props, breaker: b.breaker, bomb: b.bomb,
+    vehicle: b.vehicle, extBoxes: b.extBoxes, extCircles: b.extCircles,
     playerSpawn: spawn, suspects, civs,
   };
 }

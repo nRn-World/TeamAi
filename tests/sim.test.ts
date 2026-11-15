@@ -251,6 +251,54 @@ ok(wins >= 4, 'bot should be able to win across missions');
   sLock.events.length = 0;
   for (let i = 0; i < 30; i++) sLock.update(1 / 30);
   ok(!sLock.events.some(e => e.t === 'info' && e.text.includes('Door is locked')), 'AI walking near locked door does not spam info events');
+
+  // 7. Realistic solid surfaces: door leaf collision, swing push/block, vehicle & actor separation
+  const sCol = new Sim(0, 1);
+  for (const s0 of sCol.suspects) s0.alive = false;
+  for (const c0 of sCol.civs) c0.alive = false;
+  for (const o0 of sCol.officers) o0.alive = false;
+  const dr = sCol.level.doors.find(d => d.horiz && !d.locked)!;
+  dr.open = 0; dr.target = 0;
+  // 7a. Closed door blocks player walking through
+  sCol.player.x = dr.cx + 0.5; sCol.player.z = dr.cz + 0.9;
+  for (let i = 0; i < 30; i++) sCol.movePlayer(0, -0.1);
+  ok(sCol.player.z >= dr.cz + 0.5 + sCol.player.r, 'closed door leaf blocks player from crossing');
+  // 7b. Opening door in front of standing player pushes player out of swing arc instead of clipping through
+  sCol.player.x = dr.cx + 0.5; sCol.player.z = dr.cz + 0.16;
+  sCol.setDoor(dr, true);
+  for (let i = 0; i < 30; i++) sCol.update(1 / 30);
+  ok(dr.open > 0.9 && sCol.player.z < dr.cz - 0.1, 'opening door pushes standing player out of swing arc');
+  // 7c. Open door leaf itself stays solid (player walking into the rotated leaf at cx+0.03 is blocked)
+  sCol.player.x = dr.cx + 0.45; sCol.player.z = dr.cz + 0.05;
+  for (let i = 0; i < 20; i++) sCol.movePlayer(-0.08, 0);
+  ok(sCol.player.x >= dr.cx + 0.03, 'open door leaf panel remains solid');
+  // 7d. Marauder vehicle OBB blocks player & bullets across all 6 missions
+  for (let m = 0; m < MISSIONS.length; m++) {
+    const sm = new Sim(m, 1);
+    const v = sm.level.vehicle!;
+    ok(!!v, `mission ${m} has Marauder vehicle collider`);
+    // verify zero overlap with building cells
+    const cv = Math.cos(v.yaw), sn = Math.sin(v.yaw);
+    let hitWall = false;
+    for (let lx = -v.hx; lx <= v.hx; lx += 0.3) for (let lz = -v.hz; lz <= v.hz; lz += 0.3) {
+      const wx = v.x + lx * cv + lz * sn, wz = v.z - lx * sn + lz * cv;
+      if (sm.cell(Math.floor(wx), Math.floor(wz)) !== 0) hitWall = true;
+    }
+    ok(!hitWall, `mission ${m} Marauder sits completely outside building/walls`);
+  }
+  const v0 = sCol.level.vehicle!;
+  sCol.player.x = v0.x; sCol.player.z = v0.z + 3.2;
+  for (let i = 0; i < 30; i++) sCol.movePlayer(0, -0.15);
+  ok(sCol.player.z >= v0.z + 1.2, 'Marauder vehicle blocks player');
+  const shotV = sCol.ray(v0.x, 1.2, v0.z + 4.0, 0, 0, -1, 10, sCol.player);
+  ok(shotV.kind === 'wall' && shotV.z > v0.z, 'Marauder vehicle stops gunfire');
+  // 7e. Standing actor backed against wall blocks player instead of overlapping
+  const susCol = sCol.suspects[0];
+  susCol.alive = true; susCol.surrendered = false; susCol.restrained = false;
+  susCol.x = 5.35; susCol.z = 5.35;
+  sCol.player.x = 6.2; sCol.player.z = 5.35;
+  for (let i = 0; i < 20; i++) { sCol.movePlayer(-0.1, 0); sCol.update(1 / 30); }
+  ok(Math.hypot(sCol.player.x - susCol.x, sCol.player.z - susCol.z) >= sCol.player.r + susCol.r - 0.05, 'player cannot walk through standing actor');
 }
 
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);

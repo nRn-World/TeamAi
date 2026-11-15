@@ -43,6 +43,8 @@ export class LevelView {
   private lasers: THREE.Mesh[] = [];
   private propSlots: (() => void)[] = [];
   private disposed = false;
+  private readyPromise: Promise<void> = Promise.resolve();
+  whenReady() { return this.readyPromise; }
   dispose() { this.disposed = true; this.propSlots.length = 0; }
   constructor(public sim: Sim, quality: number) {
     const l = sim.level, th = THEME[l.theme], g = this.group;
@@ -303,7 +305,7 @@ export class LevelView {
       // Bollards + entrance planters & courtyard trees
       for (const bx of [10.4, 11.7, 12.8, 16.2]) addBollard(bx, 22.85);
       addShrub(10.5, 21.3); addShrub(17.4, 21.3);
-      addTree(8.5, 22.0, 1.55); addTree(23.8, 22.2, 1.55);
+      addTree(8.5, 22.0, 1.55); addTree(27.0, 22.2, 1.55);
 
       // 2nd Floor Warm-Lit Glass Curtain-Wall Offices (y=3.2..6.5) matching image-3.png
       g.add(box(24.4, 0.35, 18.2, darkSteel, 16.0, 3.28, 11.9));
@@ -336,8 +338,7 @@ export class LevelView {
         ring.position.set(skyX, ly, skyZ); g.add(ring);
       }
       addStreetLamp(6.5, 25.4, 0xd8e8ff);
-      addStreetLamp(25.0, 25.4, 0xd8e8ff);
-      if (quality > 0) void this.spawnPoliceUnit(19.4, 22.0, -0.62, quality);
+      addStreetLamp(27.5, 25.4, 0xd8e8ff);
     } else if (l.theme === 'warehouse') {
       const steelSiding = std({ color: 0x3b424b, roughness: 0.55, metalness: 0.5 });
       const haz = std({ color: 0xc2921e, roughness: 0.6 });
@@ -352,14 +353,13 @@ export class LevelView {
         c.rotation.y = ry; g.add(c);
       };
       cont(7.2, 1.25, 27.6, 0x6b2e26, 0.08); cont(7.2, 3.75, 27.6, 0x2b4554, -0.04);
-      cont(28.5, 1.25, 28.0, 0x2b4554, -0.14);
+      cont(31.2, 1.25, 28.0, 0x2b4554, -0.14);
       // Dockside harbor cranes in the background
       for (const cx of [-2.5, 37.5]) {
         g.add(box(1.1, 16, 1.1, darkSteel, cx, 8, -2), box(1.1, 16, 1.1, darkSteel, cx + 3.2, 8, -2));
         g.add(box(14, 0.9, 1.2, haz, cx + 4, 15.5, -2));
         if (quality > 0) { const pl = new THREE.PointLight(0xffa64d, 24, 24, 1.4); pl.position.set(cx + 4, 14.5, -1); g.add(pl); }
       }
-      if (quality > 0) void this.spawnPoliceUnit(22.2, 25.8, -0.58, quality);
     } else if (l.theme === 'hotel') {
       const stone = std({ color: 0x3b3530, roughness: 0.65 });
       const brass = std({ color: 0xc29848, roughness: 0.3, metalness: 0.8 });
@@ -375,7 +375,7 @@ export class LevelView {
         for (const lx of [20.5, 22.5, 24.5]) { const pl = new THREE.PointLight(0xffcf88, 18, 12, 1.5); pl.position.set(lx, 3.1, 25.6); g.add(pl); }
       }
       addShrub(18.6, 25.5); addShrub(26.4, 25.5);
-      addTree(16.2, 25.8, 1.65); addTree(33.2, 25.8, 1.65);
+      addTree(16.2, 25.8, 1.65); addTree(36.6, 26.2, 1.65);
       // 5-Story Limestone & Lit Guest-Window Hotel Tower
       g.add(box(38.2, 14.2, 21.2, stone, 23.0, 10.3, 14.4));
       for (let fy = 5.0; fy <= 14.5; fy += 3.1) {
@@ -385,7 +385,6 @@ export class LevelView {
           g.add(box(1.8, 1.4, 0.12, lit ? warmGlass : darkGlass, wx, fy, 25.02));
         }
       }
-      if (quality > 0) void this.spawnPoliceUnit(29.2, 26.2, -0.54, quality);
     } else if (l.theme === 'bank') {
       const limestone = std({ color: 0x767a82, roughness: 0.62 });
       // Classical steps + 4 monumental fluted columns + entablature + triangular pediment
@@ -403,20 +402,19 @@ export class LevelView {
       for (let wx = 7.5; wx <= 37.5; wx += 4.2) g.add(box(1.5, 2.1, 0.12, warmGlass, wx, 5.2, 25.02));
       for (const bx of [9.6, 11.2, 12.8, 18.2, 19.8]) addBollard(bx, 27.1);
       addShrub(12.3, 25.7); addShrub(18.7, 25.7);
-      addTree(7.8, 26.2, 1.6); addTree(26.6, 26.2, 1.6);
+      addTree(7.8, 26.2, 1.6); addTree(30.8, 26.2, 1.6);
       if (quality > 0) {
         for (const lx of [12.5, 15.5, 18.5]) { const pl = new THREE.PointLight(0xffdfb8, 18, 12, 1.5); pl.position.set(lx, 5.8, 25.8); g.add(pl); }
-        void this.spawnPoliceUnit(22.4, 26.2, -0.54, quality);
       }
     } else if (l.theme === 'club') {
       const brick = std({ map: T.brickTex('club_ext', '#261e2a', '#1b1520') });
       // Narrow brick alley framing + 2nd floor brick club facade + glowing ECLIPSE neon sign
       g.add(box(32.2, 4.4, 21.2, brick, 20.0, 5.4, 13.4));
-      g.add(box(1.2, 6.5, 8.0, brick, 5.5, 3.25, 26.8), box(1.2, 6.5, 8.0, brick, 21.5, 3.25, 26.8));
+      g.add(box(1.2, 6.5, 6.0, brick, 5.5, 3.25, 26.8), box(1.2, 6.5, 6.0, brick, 24.0, 3.25, 26.8));
       addSign('ECLIPSE', '#12061c', '#ff52e0', '#d438ff', 3.4, 0.72, 13.5, 3.25, 24.06);
-      addShrub(7.6, 24.6); addShrub(15.8, 24.6);
+      addShrub(7.6, 24.6); addShrub(15.2, 24.6);
       // Magenta & cyan alley sconces
-      for (const [sx, sz, col] of [[6.15, 25.5, 0xd438ff], [6.15, 28.0, 0x38c8ff], [20.85, 25.5, 0x38c8ff], [20.85, 28.0, 0xd438ff]] as const) {
+      for (const [sx, sz, col] of [[6.15, 25.5, 0xd438ff], [6.15, 28.0, 0x38c8ff], [23.35, 25.5, 0x38c8ff], [23.35, 28.0, 0xd438ff]] as const) {
         g.add(box(0.14, 0.45, 0.2, new THREE.MeshBasicMaterial({ color: col }), sx, 2.3, sz));
         if (quality > 0) { const pl = new THREE.PointLight(col, 14, 10, 1.6); pl.position.set(sx + (sx < 13 ? 0.5 : -0.5), 2.3, sz); g.add(pl); }
       }
@@ -433,7 +431,6 @@ export class LevelView {
         beam.rotation.set(0.7, 0, (i - 2.5) * 0.25);
         g.add(beam); this.lasers.push(beam);
       }
-      if (quality > 0) void this.spawnPoliceUnit(18.0, 25.4, -0.82, quality);
     } else if (l.theme === 'raid') {
       const sx = l.playerSpawn.x, sz = l.playerSpawn.z;
       const conc = std({ color: 0x4b4e54, roughness: 0.85 });
@@ -447,18 +444,21 @@ export class LevelView {
         g.add(box(2.0, 2.1, 0.04, meshMat, fx, 1.1, fz));
       }
       // Tall yard security floodlight towers
-      for (const tx of [6.0, 34.0]) {
+      for (const tx of [5.0, 36.2]) {
         g.add(box(0.22, 7.5, 0.22, darkSteel, tx, 3.75, fz + 0.3));
         g.add(box(0.9, 0.3, 0.2, soffitMat, tx, 7.4, fz + 0.3));
         if (quality > 0) { const pl = new THREE.PointLight(0xdfe8ff, 26, 22, 1.4); pl.position.set(tx, 7.1, fz + 0.6); g.add(pl); }
       }
-      addTree(4.5, fz + 1.4, 1.5); addTree(35.8, fz + 1.4, 1.5);
-      if (quality > 0) void this.spawnPoliceUnit(Math.min(35.5, sx + 5.0), fz + 1.6, -0.58, quality);
+      addTree(4.5, fz + 1.4, 1.5); addTree(36.6, fz + 1.4, 1.5);
+    }
+    if (l.vehicle) {
+      this.readyPromise = this.spawnPoliceUnit(l.vehicle.x, l.vehicle.z, l.vehicle.yaw, quality);
     }
   }
   private async spawnPoliceUnit(x: number, z: number, yaw: number, quality: number) {
     try {
       const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync('./models/vehicle/marauder.glb');
+      if (this.disposed) return;
       const v = gltf.scene;
       v.traverse((o: any) => {
         if (!o.isMesh) return;

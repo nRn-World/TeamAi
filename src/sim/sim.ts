@@ -73,6 +73,31 @@ export const angDiff = (a: number, b: number) => { let d = (b - a) % (Math.PI * 
 const turn = (a: number, b: number, max: number) => { const d = angDiff(a, b); return a + Math.max(-max, Math.min(max, d)); };
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.z - b.z);
 
+/** World-space hinged door leaf segment matching LevelView's 3D pivot & swing angle. */
+export function doorLeafSegment(d: Door) {
+  const hx = d.horiz ? d.cx + 0.03 : d.cx + 0.5;
+  const hz = d.horiz ? d.cz + 0.5 : d.cz + 0.03;
+  const theta = (d.horiz ? 0 : -Math.PI / 2) + d.open * 1.62;
+  const tx = hx + Math.cos(theta) * 0.94;
+  const tz = hz - Math.sin(theta) * 0.94;
+  return { hx, hz, tx, tz, theta };
+}
+
+function closestOnSeg(px: number, pz: number, ax: number, az: number, bx: number, bz: number) {
+  const abx = bx - ax, abz = bz - az, len2 = abx * abx + abz * abz || 1;
+  const t = Math.max(0, Math.min(1, ((px - ax) * abx + (pz - az) * abz) / len2));
+  const qx = ax + abx * t, qz = az + abz * t;
+  const dx = px - qx, dz = pz - qz;
+  return { qx, qz, dx, dz, d: Math.hypot(dx, dz) };
+}
+
+function pointInOBB(px: number, pz: number, bx: number, bz: number, hx: number, hz: number, yaw = 0, pad = 0) {
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  const dx = px - bx, dz = pz - bz;
+  const lx = dx * c - dz * s, lz = dx * s + dz * c;
+  return Math.abs(lx) < hx + pad && Math.abs(lz) < hz + pad;
+}
+
 export interface Stats {
   shotsFired: number; suspectsKilled: number; suspectsArrested: number;
   civsSecured: number; civsKilled: number; civsKilledByPolice: number;
@@ -168,7 +193,32 @@ export class Sim {
   }
   height(a: Actor) { return a.down ? 1.15 : a.prone ? 0.55 : a.crouch ? 1.25 : 1.8; }
 
-  /** 3D ray march against walls, props, floor/ceiling, glass windows and actors. */
+  private solidBodyCell(cx: number, cz: number) {
+    const c = this.cell(cx, cz);
+    return c === WALL || c === LOW || c === HIGH || c === WINDOW;
+  }
+  private hitDoorLeaf3D(x: number, y: number, z: number) {
+    if (y >= 2.2) return false;
+    for (const d of this.level.doors) {
+      if (Math.abs(d.cx + 0.5 - x) > 1.6 || Math.abs(d.cz + 0.5 - z) > 1.6) continue;
+      const seg = doorLeafSegment(d);
+      if (closestOnSeg(x, z, seg.hx, seg.hz, seg.tx, seg.tz).d < 0.042) return true;
+    }
+    return false;
+  }
+  private hitExterior3D(x: number, y: number, z: number) {
+    const l = this.level;
+    if (l.vehicle && y < l.vehicle.h && pointInOBB(x, z, l.vehicle.x, l.vehicle.z, l.vehicle.hx, l.vehicle.hz, l.vehicle.yaw)) return true;
+    for (const b of l.extBoxes) {
+      if (y < (b.h ?? 3) && pointInOBB(x, z, b.x, b.z, b.hx, b.hz, b.yaw ?? 0)) return true;
+    }
+    for (const cr of l.extCircles) {
+      if (y < (cr.h ?? 3) && Math.hypot(x - cr.x, z - cr.z) < cr.r) return true;
+    }
+    return false;
+  }
+
+  /** 3D ray march against walls, props, floor/ceiling, glass windows, solid door leaves, exterior objects and actors. */
   ray(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxD: number, ignore?: Actor, breakGlass = true) {
     const step = 0.06; let x = ox, y = oy, z = oz;
     const cand = this.actors.filter(a => a.alive && a !== ignore);
@@ -182,7 +232,9 @@ export class Sim {
         if (breakGlass) this.breakWindow(cx, cz);
         continue; // bullets pass through window glass!
       }
-      if (y < 3 && (c === WALL || (c === WINDOW && y < 0.9) || (c === WINDOW && y > 2.3) || (c === HIGH && y < 2.2) || (c === LOW && y < 0.85) || (c === DOOR && this.doorAtCell(cx, cz)!.open < 0.5 && y < 2.2) || (c === DOOR && y >= 2.2)))
+      if (y < 3 && (c === WALL || (c === WINDOW && y < 0.9) || (c === WINDOW && y > 2.3) || (c === HIGH && y < 2.2) || (c === LOW && y < 0.85) || (c === DOOR && y >= 2.2)))
+        return { kind: 'wall' as const, x, y, z, d, actor: null, head: false };
+      if (this.hitDoorLeaf3D(x, y, z) || this.hitExterior3D(x, y, z))
         return { kind: 'wall' as const, x, y, z, d, actor: null, head: false };
       for (const a of cand) {
         const ex = x - a.x, ez = z - a.z;
@@ -197,21 +249,77 @@ export class Sim {
     const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.15));
     for (let s = 0; s < steps; s++) { a.x += dx / steps; a.z += dz / steps; this.resolve(a); }
   }
-  private resolve(a: Actor) {
+  private resolveBox(a: Actor, bx: number, bz: number, hx: number, hz: number, yaw = 0) {
+    const r = a.r, c = Math.cos(yaw), s = Math.sin(yaw);
+    const dx = a.x - bx, dz = a.z - bz;
+    let lx = dx * c - dz * s, lz = dx * s + dz * c;
+    if (Math.abs(lx) >= hx + r || Math.abs(lz) >= hz + r) return;
+    const clx = Math.max(-hx, Math.min(lx, hx)), clz = Math.max(-hz, Math.min(lz, hz));
+    const ex = lx - clx, ez = lz - clz, d2 = ex * ex + ez * ez;
+    if (d2 >= r * r) return;
+    if (d2 < 1e-9) {
+      const px = hx - Math.abs(lx), pz = hz - Math.abs(lz);
+      if (px < pz) lx = (lx >= 0 ? 1 : -1) * (hx + r);
+      else lz = (lz >= 0 ? 1 : -1) * (hz + r);
+    } else {
+      const d = Math.sqrt(d2);
+      lx = clx + (ex / d) * r;
+      lz = clz + (ez / d) * r;
+    }
+    a.x = bx + lx * c + lz * s;
+    a.z = bz - lx * s + lz * c;
+  }
+  private resolveCirclePt(a: Actor, cx: number, cz: number, cr: number) {
+    const min = a.r + cr, dx = a.x - cx, dz = a.z - cz, d2 = dx * dx + dz * dz;
+    if (d2 >= min * min) return;
+    if (d2 < 1e-9) { a.x = cx + min; return; }
+    const d = Math.sqrt(d2);
+    a.x = cx + (dx / d) * min;
+    a.z = cz + (dz / d) * min;
+  }
+  private resolve(a: Actor, ignoreDoor?: Door) {
     const r = a.r, x0 = Math.floor(a.x - r), x1 = Math.floor(a.x + r), z0 = Math.floor(a.z - r), z1 = Math.floor(a.z + r);
     for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) {
-      if (!this.solidCell(cx, cz)) continue;
+      if (!this.solidBodyCell(cx, cz)) continue;
       const nx = Math.max(cx, Math.min(a.x, cx + 1)), nz = Math.max(cz, Math.min(a.z, cz + 1));
       let ex = a.x - nx, ez = a.z - nz; const d2 = ex * ex + ez * ez;
       if (d2 >= r * r) continue;
       if (d2 < 1e-9) {
         const opts: [number, number, number][] = [[a.x - cx, -1, 0], [cx + 1 - a.x, 1, 0], [a.z - cz, 0, -1], [cz + 1 - a.z, 0, 1]];
         opts.sort((p, q) => p[0] - q[0]);
-        for (const [d, sx, sz] of opts) if (!this.solidCell(cx + sx, cz + sz)) { a.x += sx * (d + r); a.z += sz * (d + r); break; }
+        for (const [d, sx, sz] of opts) if (!this.solidBodyCell(cx + sx, cz + sz)) { a.x += sx * (d + r); a.z += sz * (d + r); break; }
         continue;
       }
       const d = Math.sqrt(d2); ex /= d; ez /= d; a.x = nx + ex * r; a.z = nz + ez * r;
     }
+    // Solid hinged door leaves & door frame jambs
+    for (const dr of this.level.doors) {
+      if (Math.abs(dr.cx + 0.5 - a.x) > 1.8 || Math.abs(dr.cz + 0.5 - a.z) > 1.8) continue;
+      if (dr.horiz) {
+        this.resolveBox(a, dr.cx + 0.015, dr.cz + 0.5, 0.02, 0.5);
+        this.resolveBox(a, dr.cx + 0.985, dr.cz + 0.5, 0.02, 0.5);
+      } else {
+        this.resolveBox(a, dr.cx + 0.5, dr.cz + 0.015, 0.5, 0.02);
+        this.resolveBox(a, dr.cx + 0.5, dr.cz + 0.985, 0.5, 0.02);
+      }
+      if (dr === ignoreDoor) continue;
+      const seg = doorLeafSegment(dr), leafR = 0.04, minD = r + leafR;
+      const c = closestOnSeg(a.x, a.z, seg.hx, seg.hz, seg.tx, seg.tz);
+      if (c.d >= minD) continue;
+      if (c.d < 1e-5) {
+        const nx = -Math.sin(seg.theta), nz = -Math.cos(seg.theta);
+        a.x += nx * minD; a.z += nz * minD;
+      } else {
+        a.x = c.qx + (c.dx / c.d) * minD;
+        a.z = c.qz + (c.dz / c.d) * minD;
+      }
+    }
+    // Solid exterior vehicle, boxes, pillars, bollards, planters & trees
+    const l = this.level;
+    if (l.vehicle) this.resolveBox(a, l.vehicle.x, l.vehicle.z, l.vehicle.hx, l.vehicle.hz, l.vehicle.yaw);
+    for (const b of l.extBoxes) this.resolveBox(a, b.x, b.z, b.hx, b.hz, b.yaw ?? 0);
+    for (const cr of l.extCircles) this.resolveCirclePt(a, cr.x, cr.z, cr.r);
+    if (this.bomb && !this.bomb.defused) this.resolveBox(a, this.bomb.x, this.bomb.z, 0.28, 0.19);
   }
   private giveWay(k: Actor, o: Actor) {
     const min = k.r + o.r; let dx = k.x - o.x, dz = k.z - o.z, d = Math.hypot(dx, dz); if (d < 1e-5) { dx = 1; dz = 0; d = 1; }
@@ -228,7 +336,32 @@ export class Sim {
     const p = this.player; if (!p.alive) return;
     if (p.cuff || p.defusing) { dx *= 0.2; dz *= 0.2; }
     if (p.shield) { dx *= 0.78; dz *= 0.78; }
-    this.moveCircle(p, dx, dz); this.pushTrail(p);
+    this.moveCircle(p, dx, dz);
+    for (const b of this.actors) {
+      if (b === p || !b.alive) continue;
+      const ox = p.x - b.x, oz = p.z - b.z, d = Math.hypot(ox, oz), min = p.r + b.r;
+      if (d >= min || d < 1e-6) continue;
+      if (b.down) {
+        this.giveWay(b, p);
+        const nd = Math.hypot(p.x - b.x, p.z - b.z);
+        if (nd < min && nd > 1e-5) {
+          p.x += ((p.x - b.x) / nd) * (min - nd); p.z += ((p.z - b.z) / nd) * (min - nd);
+          this.resolve(p);
+        }
+        continue;
+      }
+      if (b.kind === 'officer') {
+        const push = min - d;
+        b.x -= (ox / d) * push * 0.35; b.z -= (oz / d) * push * 0.35;
+        this.resolve(b);
+      }
+      const nx = p.x - b.x, nz = p.z - b.z, nd = Math.hypot(nx, nz);
+      if (nd < min && nd > 1e-5) {
+        p.x += (nx / nd) * (min - nd); p.z += (nz / nd) * (min - nd);
+        this.resolve(p);
+      }
+    }
+    this.pushTrail(p);
   }
   pushTrail(p: Actor) {
     const last = p.trail[p.trail.length - 1];
@@ -534,7 +667,7 @@ export class Sim {
       const blk = (x: number, z: number) => {
         const cx = Math.floor(x), cz = Math.floor(z), c = this.cell(cx, cz);
         if (c === WINDOW && g.y >= 0.9 && g.y <= 2.3) { this.breakWindow(cx, cz); return false; }
-        return this.opaqueCell(cx, cz) || (c === LOW && g.y < 0.85);
+        return c === WALL || (c === WINDOW && (g.y < 0.9 || g.y > 2.3)) || (c === HIGH && g.y < 2.2) || (c === LOW && g.y < 0.85) || (c === DOOR && g.y >= 2.2) || this.hitDoorLeaf3D(x, g.y, z) || this.hitExterior3D(x, g.y, z);
       };
       if (blk(nx, g.z)) g.vx *= -0.35; else g.x = nx;
       if (blk(g.x, nz)) g.vz *= -0.35; else g.z = nz;
@@ -1005,10 +1138,41 @@ export class Sim {
     return notes;
   }
 
+  private stepDoors(dt: number) {
+    const leafR = 0.04;
+    for (const d of this.level.doors) {
+      const prev = d.open;
+      const next = prev + Math.max(-dt * 2.8, Math.min(dt * 2.8, d.target - prev));
+      if (Math.abs(next - prev) <= 1e-5) continue;
+      d.open = next;
+      const seg = doorLeafSegment(d);
+      const swingSign = next > prev ? 1 : -1;
+      const swx = -Math.sin(seg.theta) * swingSign;
+      const swz = -Math.cos(seg.theta) * swingSign;
+      let blocked = false;
+      for (const a of this.actors) {
+        if (!a.alive) continue;
+        if (Math.abs(a.x - (d.cx + 0.5)) > 1.8 || Math.abs(a.z - (d.cz + 0.5)) > 1.8) continue;
+        const c = closestOnSeg(a.x, a.z, seg.hx, seg.hz, seg.tx, seg.tz);
+        const minD = a.r + leafR;
+        if (c.d >= minD) continue;
+        let nx = c.dx, nz = c.dz;
+        if (c.d < 1e-4 || nx * swx + nz * swz < 0) { nx = swx; nz = swz; }
+        else { nx /= c.d; nz /= c.d; }
+        const push = minD - c.d + 0.015;
+        a.x += nx * push; a.z += nz * push;
+        this.resolve(a, d);
+        const c2 = closestOnSeg(a.x, a.z, seg.hx, seg.hz, seg.tx, seg.tz);
+        if (c2.d < minD - 0.035) { blocked = true; break; }
+      }
+      if (blocked) d.open = prev;
+    }
+  }
+
   update(dt: number) {
-    if (this.over) { for (const d of this.level.doors) d.open += Math.max(-dt * 2.8, Math.min(dt * 2.8, d.target - d.open)); return; }
+    if (this.over) { this.stepDoors(dt); return; }
     this.time += dt;
-    for (const d of this.level.doors) d.open += Math.max(-dt * 2.8, Math.min(dt * 2.8, d.target - d.open));
+    this.stepDoors(dt);
     if (this.bomb && !this.bomb.defused) {
       this.bomb.time -= dt;
       if (this.bomb.time <= 60 && !this.bomb.warned60) {
@@ -1060,12 +1224,32 @@ export class Sim {
     for (let i = 0; i < A.length; i++) for (let j = i + 1; j < A.length; j++) {
       const a = A[i], b = A[j]; if (!a.alive || !b.alive) continue;
       const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz), min = a.r + b.r; if (d >= min || d < 1e-5) continue;
-      const pa = a.kind === 'player' || a.kind === 'officer', pb = b.kind === 'player' || b.kind === 'officer';
-      if ((a.down && pb && !b.down) || (b.down && pa && !a.down)) { const k = a.down ? a : b, o = a.down ? b : a; this.giveWay(k, o); if (o.kind === 'officer' && dist(k, o) < min) { const e = Math.hypot(o.x - k.x, o.z - k.z) || 1, q = (min - e) * 0.5; o.x += ((o.x - k.x) / e) * q; o.z += ((o.z - k.z) / e) * q; this.resolve(o); } continue; }
-      const fa = a.kind === 'player' || a.down ? 0 : 1, fb = b.kind === 'player' || b.down ? 0 : 1; if (!fa && !fb) { if (a.kind === 'player') { a.x -= (dx / d) * (min - d); a.z -= (dz / d) * (min - d); this.resolve(a); } continue; }
-      const push = min - d, wa = fa / (fa + fb), wb = fb / (fa + fb);
-      a.x -= (dx / d) * push * wa; a.z -= (dz / d) * push * wa; b.x += (dx / d) * push * wb; b.z += (dz / d) * push * wb;
-      if (fa) this.resolve(a); if (fb) this.resolve(b);
+      if (a.down !== b.down) {
+        const k = a.down ? a : b, o = a.down ? b : a;
+        if (o.kind === 'player' || o.kind === 'officer') this.giveWay(k, o);
+        const e = Math.hypot(o.x - k.x, o.z - k.z);
+        if (e < min && e > 1e-5) {
+          const q = min - e;
+          o.x += ((o.x - k.x) / e) * q; o.z += ((o.z - k.z) / e) * q;
+          this.resolve(o);
+        }
+        continue;
+      }
+      const push = min - d;
+      if (!a.down && (a.kind === 'player' || b.kind === 'player') && a.kind !== b.kind) {
+        const p = a.kind === 'player' ? a : b, ai = a.kind === 'player' ? b : a;
+        const ux = (ai.x - p.x) / d, uz = (ai.z - p.z) / d;
+        ai.x += ux * push * 0.35; ai.z += uz * push * 0.35; this.resolve(ai);
+        const e = Math.hypot(p.x - ai.x, p.z - ai.z);
+        if (e < min && e > 1e-5) {
+          const rem = min - e;
+          p.x += ((p.x - ai.x) / e) * rem; p.z += ((p.z - ai.z) / e) * rem; this.resolve(p);
+        }
+        continue;
+      }
+      a.x -= (dx / d) * push * 0.5; a.z -= (dz / d) * push * 0.5;
+      b.x += (dx / d) * push * 0.5; b.z += (dz / d) * push * 0.5;
+      this.resolve(a); this.resolve(b);
     }
     this.updateGrenades(dt);
     this.checkT -= dt;

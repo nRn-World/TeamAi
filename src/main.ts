@@ -57,6 +57,8 @@ const ORDER_LABEL: Record<string, string> = {
   peek: 'PEEKING', c2: 'C2 BREACH', wedge: 'WEDGING', defuse: 'DEFUSING',
 };
 
+let assetsDone: Promise<unknown> = Promise.resolve();
+
 class Game {
   renderer: THREE.WebGLRenderer; scene = new THREE.Scene(); camera = new THREE.PerspectiveCamera(74, 1, 0.06, 120);
   viewScene = new THREE.Scene(); viewCam = new THREE.PerspectiveCamera(52, 1, 0.01, 10); vm = makeViewModel();
@@ -351,35 +353,64 @@ class Game {
   pause() { if (this.state !== 'play') return; this.state = 'pause'; show('pause', true); this.micState(this.voice.state); this.keys.clear(); this.mouseDown = false; }
 
   // ---------------- mission start ----------------
-  start(mission: number, seed: number, n = 1, me = 0, diff: number = S.diff, names: string[] = []) {
-    this.mission = mission; this.seed = seed; this.audio.init();
-    const sim = this.sim = new Sim(mission, seed, diff, n); if (me) sim.player = sim.players[me];
-    sim.players.forEach((pl, i) => { if (names[i]) pl.name = names[i]; }); this.stepPh.clear();
-    for (const id of ['lobby', 'debrief', 'pause', 'brief']) show(id, false);
-    const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
-    this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x070a10); this.scene.fog = new THREE.FogExp2(0x070a10, 0.016);
-    if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = 0.28; }
-    this.ambLight = new THREE.AmbientLight(0x9fb0c8, S.qual ? 0.45 : 1.1);
-    this.nvgLight = new THREE.AmbientLight(0x6aff99, 0);
-    this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(0xb8c8ff, 0x2a241c, 0.55));
-    const moon = new THREE.DirectionalLight(0xa8c0ff, 0.7); moon.position.set(-8, 14, 6); this.scene.add(moon);
-    this.level?.dispose();
-    this.level = new LevelView(sim, S.qual); this.scene.add(this.level.group);
-    this.fx = new FX(); this.scene.add(this.fx.group);
-    this.views.clear(); for (const a of sim.actors) { if (a === sim.player) continue; const v = new ActorView(a); this.views.set(a, v); this.scene.add(v.root); }
-    this.scene.add(this.camera); this.camera.add(this.torch); this.torch.position.set(0.15, -0.1, 0); this.camera.add(this.torch.target); this.torch.target.position.set(0, 0, -1);
-    sim.player.shield = S.primary === 'shield';
-    const ws = this.weaponSpecs;
-    this.yaw = sim.player.yaw; this.pitch = 0; this.weapon = 0; this.ammo = [ws[0].mag, ws[1].mag]; this.reserve = [ws[0].res, ws[1].res]; this.reloadT = 0; this.fireCd = 0; this.recoil = 0; this.dmgFx = 0; this.endT = 0;
-    this.nvgOn = false; this.bodycamOn = false; this.wheelOn = false; show('nvg', false); show('bodycam', false); show('wheel', false); this.renderer.toneMappingExposure = 1.15;
-    this.selTeam = this.lastTeam = 'ALL'; this.lastWho = null; this.state = 'play'; this.last = performance.now(); $('log').innerHTML = ''; $('heard').textContent = ''; $('parsed').textContent = '';
-    this.ai.resetHistory();
-    this.buildMap(); show('menu', false); show('hud', true); this.updateHud(true);
-    if (S.mic && !AUTO) this.voice.start();
-    if (S.ai && !mp && !AUTO) void this.ai.ensureLoaded(S.aiModel);
-    this.aiState(this.ai.state, this.ai.state === 'loading' ? this.ai.progress : this.ai.error);
-    if (mp && !document.pointerLockElement) this.log('Click in the game to take control of the mouse.', 'warn');
-    this.log(`Command: ${MISSIONS[mission].name} (${ws[0].name} + ${ws[1].name}). Give orders with your voice or press H for wheel.`, 'me');
+  private starting = false;
+  async start(mission: number, seed: number, n = 1, me = 0, diff: number = S.diff, names: string[] = []) {
+    if (this.starting) return;
+    this.starting = true;
+    const setLoad = (pct: number, msg: string) => {
+      $('loadFill').style.width = `${pct}%`;
+      $('loadStatus').textContent = msg;
+    };
+    const nextFrame = () => new Promise<void>(r => requestAnimationFrame(() => r()));
+    const withTimeout = <T>(p: Promise<T>, ms: number) => Promise.race([p, new Promise<void>(r => setTimeout(r, ms))]);
+    try {
+      $('loadTitle').textContent = 'Loading...';
+      $('loadMission').textContent = MISSIONS[mission]?.name ?? 'Operation';
+      setLoad(18, 'Loading 3D props, weapons & squad models...');
+      for (const id of ['lobby', 'debrief', 'pause', 'brief']) show(id, false);
+      show('loading', true);
+      await nextFrame();
+      await nextFrame();
+      await withTimeout(assetsDone, 10000);
+      setLoad(62, 'Building operation environment...');
+      await nextFrame();
+
+      this.mission = mission; this.seed = seed; this.audio.init();
+      const sim = this.sim = new Sim(mission, seed, diff, n); if (me) sim.player = sim.players[me];
+      sim.players.forEach((pl, i) => { if (names[i]) pl.name = names[i]; }); this.stepPh.clear();
+      const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
+      this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x070a10); this.scene.fog = new THREE.FogExp2(0x070a10, 0.016);
+      if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = 0.28; }
+      this.ambLight = new THREE.AmbientLight(0x9fb0c8, S.qual ? 0.45 : 1.1);
+      this.nvgLight = new THREE.AmbientLight(0x6aff99, 0);
+      this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(0xb8c8ff, 0x2a241c, 0.55));
+      const moon = new THREE.DirectionalLight(0xa8c0ff, 0.7); moon.position.set(-8, 14, 6); this.scene.add(moon);
+      this.level?.dispose();
+      this.level = new LevelView(sim, S.qual); this.scene.add(this.level.group);
+      this.fx = new FX(); this.scene.add(this.fx.group);
+      this.views.clear(); for (const a of sim.actors) { if (a === sim.player) continue; const v = new ActorView(a); this.views.set(a, v); this.scene.add(v.root); }
+      this.scene.add(this.camera); this.camera.add(this.torch); this.torch.position.set(0.15, -0.1, 0); this.camera.add(this.torch.target); this.torch.target.position.set(0, 0, -1);
+      sim.player.shield = S.primary === 'shield';
+      const ws = this.weaponSpecs;
+      this.yaw = sim.player.yaw; this.pitch = 0; this.weapon = 0; this.ammo = [ws[0].mag, ws[1].mag]; this.reserve = [ws[0].res, ws[1].res]; this.reloadT = 0; this.fireCd = 0; this.recoil = 0; this.dmgFx = 0; this.endT = 0;
+      this.nvgOn = false; this.bodycamOn = false; this.wheelOn = false; show('nvg', false); show('bodycam', false); show('wheel', false); this.renderer.toneMappingExposure = 1.15;
+      this.selTeam = this.lastTeam = 'ALL'; this.lastWho = null;
+      setLoad(86, 'Staging armored transport & gear...');
+      await withTimeout(this.level.whenReady(), 8000);
+      setLoad(100, 'Deployment ready.');
+      await nextFrame();
+      this.state = 'play'; this.last = performance.now(); $('log').innerHTML = ''; $('heard').textContent = ''; $('parsed').textContent = '';
+      this.ai.resetHistory();
+      this.buildMap(); show('loading', false); show('menu', false); show('hud', true); this.updateHud(true);
+      if (S.mic && !AUTO) this.voice.start();
+      if (S.ai && !mp && !AUTO) void this.ai.ensureLoaded(S.aiModel);
+      this.aiState(this.ai.state, this.ai.state === 'loading' ? this.ai.progress : this.ai.error);
+      if (mp && !document.pointerLockElement) this.log('Click in the game to take control of the mouse.', 'warn');
+      this.log(`Command: ${MISSIONS[mission].name} (${ws[0].name} + ${ws[1].name}). Give orders with your voice or press H for wheel.`, 'me');
+    } finally {
+      show('loading', false);
+      this.starting = false;
+    }
   }
 
   // ---------------- input ----------------
@@ -883,8 +914,8 @@ class Game {
 }
 
 const game = new Game();
-void loadProps();
-loadWeapons().then(async () => {
+const propsDone = loadProps();
+const weaponsDone = loadWeapons().then(async () => {
   if (weaponsReady) { upgradeViewModel(game.vm); game.menu.upgradeWeapons(); }
   if (S.qual > 0 && await game.arms.load()) { // animated arms replace the static weapon (not on the lowest graphics setting)
     game.vm.rifle.clear(); game.vm.pistol.clear(); game.viewCam.add(game.arms.root); game.viewScene.environment = studioEnv(game.renderer); game.viewScene.environmentIntensity = 0.5;
@@ -893,6 +924,7 @@ loadWeapons().then(async () => {
 const modelsDone = loadModels().then(() => {
   $('modelStatus').textContent = modelsReady ? '' : 'The 3D characters could not be loaded – built-in figures are used.';
 });
+assetsDone = Promise.all([propsDone, weaponsDone, modelsDone]);
 if (S.qual > 0) {
   game.menu.env(game.renderer);
   operatorEnv(game.menu.scene.environment);
