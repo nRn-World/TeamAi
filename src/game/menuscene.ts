@@ -16,7 +16,7 @@ export class MenuScene {
   scene = new THREE.Scene(); cam = new THREE.PerspectiveCamera(30, 1, 0.1, 80);
   private views: ActorView[] = []; private t = 0; private blue: THREE.PointLight; private red: THREE.PointLight; private dust: THREE.Points;
   private truck?: THREE.Group; private lens: THREE.MeshStandardMaterial[] = [];
-  private heroes: THREE.Group[] = []; private mixers: THREE.AnimationMixer[] = [];
+  private heroes: THREE.Group[] = []; private mixers: THREE.AnimationMixer[] = []; private heroMode = false;
   private mx = 0; private my = 0; private cx = 0; private cy = 0;
   constructor() {
     const s = this.scene; s.background = new THREE.Color(0x07090d); s.fog = new THREE.Fog(0x07090d, 12, 34);
@@ -51,6 +51,7 @@ export class MenuScene {
   /** Put the squad in the scene (call once the character models are loaded; safe to call again). */
   squad() {
     if (this.heroes.length) return;
+    this.heroMode = false;
     for (const v of this.views) this.scene.remove(v.root); this.views = [];
     //            x     z     yaw   aiming
     const spots = [[1.5, 1.5, -0.25, 0], [2.7, 0.7, -0.6, 1], [0.4, 0.5, 0.1, 0], [3.8, -0.3, -0.45, 0], [-0.6, -0.5, 0.3, 0]];
@@ -62,7 +63,8 @@ export class MenuScene {
   }
   /** Replace the stand-in squad with the detailed operator model (CC BY, see credits). Keeps the stand-ins if it cannot be loaded. */
   async hero(count: number) {
-    if (!(await loadOperator())) return false;
+    this.heroMode = true;
+    if (!(await loadOperator())) { this.heroMode = false; return false; }
     for (const v of this.views) this.scene.remove(v.root); this.views = [];
     for (const h of this.heroes) this.scene.remove(h); this.heroes = []; this.mixers = [];
     const spots = (window as any).__spots ?? HERO;
@@ -111,8 +113,8 @@ export class MenuScene {
     if (this.lens.length) { this.lens[0].emissiveIntensity = 0.25 + fl(ph) * 5; this.lens[1].emissiveIntensity = 0.25 + fl((ph + 0.5) % 1) * 5; }
     this.dust.rotation.y = t * 0.012; this.dust.position.y = Math.sin(t * 0.2) * 0.1;
     this.cx += (this.mx - this.cx) * Math.min(1, dt * 2); this.cy += (this.my - this.cy) * Math.min(1, dt * 2);
-    const wide = this.cam.aspect >= 1.3;
-    this.cam.position.set((wide ? -1.3 : 1.2) + Math.sin(t * 0.13) * 0.35 + this.cx * 0.5, 1.5 - this.cy * 0.25 + Math.sin(t * 0.21) * 0.04, (this.heroes.length ? 6.6 : 7.4) + Math.cos(t * 0.11) * 0.25);
-    this.cam.lookAt(wide ? -0.1 : 1.4, this.heroes.length ? 1.22 : 0.98, 0);
+    const wide = this.cam.aspect >= 1.3, heroCam = this.heroes.length > 0 || this.heroMode;
+    this.cam.position.set((wide ? -1.3 : 1.2) + Math.sin(t * 0.13) * 0.35 + this.cx * 0.5, 1.5 - this.cy * 0.25 + Math.sin(t * 0.21) * 0.04, (heroCam ? 6.6 : 7.4) + Math.cos(t * 0.11) * 0.25);
+    this.cam.lookAt(wide ? -0.1 : 1.4, heroCam ? 1.22 : 0.98, 0);
   }
 }
