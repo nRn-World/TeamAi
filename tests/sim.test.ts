@@ -1,5 +1,6 @@
 import { Sim, yawTo, fwd } from '../src/sim/sim';
 import { parseCommand } from '../src/sim/commands';
+import { toCommands, looksCompound, orderMessages, ORDER_SCHEMA } from '../src/sim/aiorders';
 import { findPath } from '../src/sim/nav';
 import { MISSIONS } from '../src/sim/level';
 import { encodeSnap, applySnap, encodeEv, decodeEv } from '../src/sim/netstate';
@@ -38,6 +39,19 @@ for (const [t, exp, last] of named) { const c = parseCommand(t, 'ALL', last ?? n
   const g0 = sim.grenades.length; sim.command({ team: 'B', action: 'bang', who: 2 }, { x: sim.officers[2].x + 3, z: sim.officers[2].z });
   console.log('solo flash without a door: grenades', sim.grenades.length - g0, 'order', sim.officers[2].solo?.order.type);
   ken.alive = false; ok(!sim.command({ team: 'A', action: 'follow', who: 0 }), 'a dead officer cannot take orders');
+}
+{ // answers of the language model → orders
+  const j = (c: any[]) => c.map(x => [x.who ?? x.team, x.action, x.dir].filter(v => v != null).join(' ')).join(', ');
+  const ai: [string, string, ('A' | 'B' | 'ALL')?, number?][] = [
+    ['{"orders":[{"to":"Ken","action":"cover","dir":""},{"to":"B","action":"bang","dir":""}]}', '0 cover, B bang'],
+    ['Sure! {"orders":[{"to":"Team A","action":"move","dir":"right"}]} done', 'A move right'],
+    ['{"orders":[{"to":"zoe","action":"HOLD"},{"to":"zoe","action":"follow"},{"to":"ALL","action":"none"}]}', '3 hold'],
+    ['{"orders":[{"to":"","action":"breach"}]}', '2 breach', 'B', 2], ['{"orders":[{"to":"?","action":"follow"}]}', 'B follow', 'B'],
+    ['{"orders":[{"to":"A","action":"move","dir":"up"},{"to":"B","action":"dance"}]}', ''], ['not json', ''], ['{"orders":[{"to":"Jack","action":"shout"}]}', 'ALL shout'],
+  ];
+  for (const [a, exp, lt, lw] of ai) { const got = j(toCommands(a, lt ?? 'ALL', lw ?? null)); ok(got === exp, `ai "${a}" => ${got} (expected ${exp})`); }
+  ok(looksCompound('Ken cover us and Jack go in') && !looksCompound('team a follow me'), 'compound sentences are detected');
+  ok(orderMessages('x', 'Ken').at(-1)!.content.includes('Ken') && JSON.parse(ORDER_SCHEMA).required[0] === 'orders', 'prompt and schema');
 }
 console.log('parser cases:', cases.length + named.length);
 

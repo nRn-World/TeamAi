@@ -86,3 +86,12 @@ The four officers have names: **Ken** and **Maya** are Team A, **Jack** and **Zo
 ## Door sounds
 
 Doors use recordings from Kenney's «RPG Audio» pack (CC0, `public/sfx/door-*.mp3`, sources in `public/sfx/LICENSE.txt`): latch and swing when opening, sometimes a hinge creak, the leaf meeting the frame when closing, and a slowed slam with a low thump when a team kicks a door in on «breach». Distance lowers and muffles them (`GameAudio.door`).
+
+## Local AI: speech and order reading
+
+Nothing here needs a server or an API key; the models run in the player's browser and are downloaded once from the Hugging Face hub, then kept in the browser cache.
+
+- **Speech recognition** (`src/ai/localvoice.ts`, `src/ai/asr.worker.ts`): the microphone is recorded while V is held (with a short pre-roll and tail), resampled to 16 kHz and transcribed by Whisper through Transformers.js in a worker — `onnx-community/whisper-base` on WebGPU, `Xenova/whisper-tiny` on the CPU otherwise. If the model cannot be loaded the game falls back to the browser's Web Speech service (`src/game/voice.ts`). Settings → «Speech recognition engine» switches between the two.
+- **AI order reading** (optional, off by default; `src/ai/brain.ts`, `src/ai/llm.worker.ts`): Qwen2.5 0.5B or 1.5B Instruct through WebLLM (WebGPU required). A sentence the fixed rules cannot read, or one that holds several orders, is sent to the model, whose answer is constrained to a JSON schema and turned into ordinary `Command`s by `src/sim/aiorders.ts` (unit-tested). The fixed rules stay the fast path and the fallback. All orders of one sentence start at once; «first … then …» is not sequenced.
+- **Online play**: the models run only for the player who speaks. What goes over the network is the finished `Command`, exactly as before.
+- `tools/check-ai.mts` + the «AI model check» workflow verify in GitHub Actions that the model files exist and show how the models answer a list of English and Swedish orders; the result is posted as a comment on the commit.
