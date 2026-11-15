@@ -20,7 +20,7 @@ export class Net {
       const p = id ? new Peer(id, this.opts()) : new Peer(this.opts()); let done = false;
       const to = setTimeout(() => { if (!done) { done = true; p.destroy(); rej(new Error('timeout')); } }, 15000);
       p.on('open', () => { if (done) return; done = true; clearTimeout(to); res(p); });
-      p.on('error', (e: any) => { if (!done) { done = true; clearTimeout(to); p.destroy(); rej(e); } else if (e?.type === 'network' || e?.type === 'server-error') this.onClosed('Tappade kontakten med förmedlingsservern.'); });
+      p.on('error', (e: any) => { if (!done) { done = true; clearTimeout(to); p.destroy(); rej(e); } else if (e?.type === 'network' || e?.type === 'server-error') this.onClosed('Lost the connection to the matchmaking server.'); });
     });
   }
   /** Microphone for voice chat. Never blocks room creation: runs in the background, and falls back to a
@@ -72,12 +72,12 @@ export class Net {
     this.hookCalls(); this.code = code.toUpperCase().trim();
     const c = this.peer.connect(PREFIX + this.code, { reliable: true });
     await new Promise<void>((res, rej) => {
-      const to = setTimeout(() => rej(new Error('Hittade inget rum med den koden.')), 12000);
+      const to = setTimeout(() => rej(new Error('No room found with that code.')), 12000);
       c.on('open', () => { clearTimeout(to); res(); }); c.on('error', e => { clearTimeout(to); rej(e); });
-      this.peer!.on('error', (e: any) => { if (e?.type === 'peer-unavailable') { clearTimeout(to); rej(new Error('Hittade inget rum med den koden.')); } });
+      this.peer!.on('error', (e: any) => { if (e?.type === 'peer-unavailable') { clearTimeout(to); rej(new Error('No room found with that code.')); } });
     });
     this.hostConn = c; this.role = 'client';
-    c.on('data', d => this.onMsg(c, d as Msg)); c.on('close', () => { if (this.role === 'client') this.onClosed('Värden lämnade spelet.'); });
+    c.on('data', d => this.onMsg(c, d as Msg)); c.on('close', () => { if (this.role === 'client') this.onClosed('The host left the game.'); });
   }
   send(m: Msg) { if (this.hostConn?.open) this.hostConn.send(m); }
   broadcast(m: Msg) { for (const c of this.conns) if (c.open) c.send(m); }

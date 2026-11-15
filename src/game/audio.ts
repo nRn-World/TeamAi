@@ -19,23 +19,27 @@ export class GameAudio {
     void this.loadLines(); void this.loadSfx();
     const hum = c.createBufferSource(); hum.buffer = this.noise; hum.loop = true; const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 140; const hg = c.createGain(); hg.gain.value = 0.05; hum.connect(lp); lp.connect(hg); hg.connect(this.master); hum.start();
   }
-  // ---- recorded voice lines (public/voice, generated with the CC0 NST Swedish Piper voice) ----
+  // ---- recorded voice lines (public/voice, generated with the Apache-2.0 Kokoro speech model; one set of voices per role) ----
   private lines = new Map<string, AudioBuffer>(); private linesReq = false; linesReady = false;
   private async loadLines() {
     if (this.linesReq || !this.ctx) return; this.linesReq = true;
     try {
       const man = await (await fetch('./voice/manifest.json')).json();
-      await Promise.all((man.voices as string[]).flatMap(v => (man.lines as string[]).map(async (text, i) => { try { const ab = await (await fetch(`./voice/${v}/${i}.mp3`)).arrayBuffer(); this.lines.set(v + '|' + text, await this.ctx!.decodeAudioData(ab)); } catch { /* falls back to browser speech */ } })));
+      const L = man.lines as { t: string; r: string; s?: number }[]; for (const l of L) { this.known.add(l.t); if (l.s) this.loud.add(l.t); }
+      await Promise.all((man.voices as string[]).flatMap(v => L.map(async (l, i) => { if (!l.r.includes(v[0])) return; try { const ab = await (await fetch(`./voice/${v}/${i}.mp3`)).arrayBuffer(); this.lines.set(v + '|' + l.t, await this.ctx!.decodeAudioData(ab)); } catch { /* falls back to browser speech */ } })));
       this.linesReady = this.lines.size > 0;
     } catch { /* no clips: browser speech is used */ }
   }
-  hasLine(text: string) { return this.lines.has('m|' + text); }
+  private known = new Set<string>(); private loud = new Set<string>();
+  hasLine(text: string) { return this.linesReady && this.known.has(text); }
+  /** True for lines that were recorded as a shout. */
+  isShout(text: string) { return this.loud.has(text); }
   /** Output delay reported by the browser, in milliseconds (0 if unknown). */
   get latencyMs() { const c = this.ctx as any; return c ? Math.round(((c.baseLatency || 0) + (c.outputLatency || 0)) * 1000) : 0; }
   /** Plays a recorded line as a particular character. Returns its duration in ms, or 0 if there is no clip for the text.
    *  rate shifts pitch and tempo together (different people), radio = team radio filter, gruff = rough close voice. */
-  line(text: string, o: { voice?: 'm' | 'f'; rate?: number; radio?: boolean; gruff?: boolean; gain?: number; pan?: number; muffle?: boolean } = {}) {
-    const buf = this.lines.get((o.voice ?? 'm') + '|' + text) ?? this.lines.get('m|' + text); if (!this.ctx || !buf) return 0;
+  line(text: string, o: { voice?: string; rate?: number; radio?: boolean; gruff?: boolean; gain?: number; pan?: number; muffle?: boolean } = {}) {
+    const v = o.voice ?? 'o1'; let buf = this.lines.get(v + '|' + text); if (!buf) for (let i = 1; i < 6 && !buf; i++) buf = this.lines.get(v[0] + i + '|' + text); if (!this.ctx || !buf) return 0;
     const c = this.ctx, t = c.currentTime, rate = o.rate ?? 1, src = c.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
     let node: AudioNode = src; const chain = (n: AudioNode) => { node.connect(n); node = n; };
     const shape = (k: number) => { const w = c.createWaveShaper(), cv = new Float32Array(257); for (let i = 0; i < 257; i++) { const x = i / 128 - 1; cv[i] = Math.tanh(x * k) / Math.tanh(k); } w.curve = cv; return w; };
@@ -136,7 +140,7 @@ export class GameAudio {
 
 /** Radio chatter through the browser's built-in speech synthesis (free, offline on most systems). */
 export class Speech {
-  enabled = true; lang = 'sv-SE'; private voices: SpeechSynthesisVoice[] = []; private until = 0; private queue = 0;
+  enabled = true; lang = 'en-US'; private voices: SpeechSynthesisVoice[] = []; private until = 0; private queue = 0;
   constructor() { if ('speechSynthesis' in window) { const load = () => { this.voices = speechSynthesis.getVoices(); }; load(); speechSynthesis.onvoiceschanged = load; } }
   /** True while the team is (estimated to be) talking. Uses our own timer – speechSynthesis.speaking can get stuck in some browsers. */
   get speaking() { return performance.now() < this.until; }
