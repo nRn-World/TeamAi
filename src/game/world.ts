@@ -1,7 +1,7 @@
 // three.js presentation of the simulation: level geometry, characters, effects. All geometry is procedural.
 import * as THREE from 'three';
 import { Sim, Actor, Team } from '../sim/sim';
-import { WALL, OUT, Door } from '../sim/level';
+import { WALL, OUT, WINDOW, Door } from '../sim/level';
 import * as T from './textures';
 import { modelsReady, Rig, droppedPistol } from './models';
 import { weaponModel } from './weapons';
@@ -15,29 +15,51 @@ const THEME = {
   office: { wall: '#c9c3b6', trim: '#4a443c', brickA: '#8e5a48', brickB: '#7c4c3d', fog: 0x0b0e12 },
   warehouse: { wall: '#8b9095', trim: '#33373b', brickA: '#6f7377', brickB: '#62666a', fog: 0x090b0d },
   hotel: { wall: '#bfa58e', trim: '#4d2e24', brickA: '#9a7a5c', brickB: '#8a6c50', fog: 0x0d0b0a },
+  bank: { wall: '#d6d4ce', trim: '#2d3b4e', brickA: '#5f6873', brickB: '#525a64', fog: 0x0a0d12 },
+  club: { wall: '#282633', trim: '#6a1b6a', brickA: '#231f2e', brickB: '#1c1824', fog: 0x05030a },
+  raid: { wall: '#b8b4aa', trim: '#3b3c40', brickA: '#706055', brickB: '#5f5046', fog: 0x090b0e },
 };
 
 export class LevelView {
-  group = new THREE.Group(); doors: { door: Door; pivot: THREE.Group; base: number }[] = [];
+  group = new THREE.Group();
+  doors: { door: Door; pivot: THREE.Group; base: number; wedge: THREE.Mesh; lock: THREE.Mesh }[] = [];
+  windows = new Map<number, THREE.Mesh>();
+  private roomLights: { light: THREE.PointLight; baseInt: number }[] = [];
+  private lampMeshes: THREE.Mesh[] = [];
+  private lampOnMat: THREE.MeshBasicMaterial;
+  private lampOffMat: THREE.MeshStandardMaterial;
+  private bombLed?: THREE.Mesh;
+  private bombBox?: THREE.Group;
+  private lastPower = true;
   constructor(public sim: Sim, quality: number) {
     const l = sim.level, th = THEME[l.theme], g = this.group;
     // ground
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(l.w, l.h), std({ map: T.floorTex('asphalt') }));
     scaleUV(ground.geometry, l.w / 3, l.h / 3); ground.rotation.x = -Math.PI / 2; ground.position.set(l.w / 2, -0.012, l.h / 2); g.add(ground);
     // rooms: floor + ceiling + lamps
-    const ceilMat = std({ map: T.floorTex('ceiling') }), lampOn = new THREE.MeshBasicMaterial({ color: 0xfff4dc }), lampOff = std({ color: 0x3a3a38 });
+    const ceilMat = std({ map: T.floorTex('ceiling') });
+    const lampOn = this.lampOnMat = new THREE.MeshBasicMaterial({ color: l.theme === 'club' ? 0xc864ff : 0xfff4dc });
+    const lampOff = this.lampOffMat = std({ color: 0x3a3a38 });
     let lights = 0;
     for (const r of l.rooms) {
       const fl = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), std({ map: T.floorTex(r.floor), roughness: r.floor === 'tile' ? 0.45 : 0.95 }));
       scaleUV(fl.geometry, r.w / 2, r.h / 2); fl.rotation.x = -Math.PI / 2; fl.position.set(r.x + r.w / 2, r.id * 0.0006, r.z + r.h / 2); g.add(fl);
       const ce = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), ceilMat.clone()); (ce.material as THREE.MeshStandardMaterial).map = T.floorTex('ceiling');
       scaleUV(ce.geometry, r.w / 2, r.h / 2); ce.rotation.x = Math.PI / 2; ce.position.set(r.x + r.w / 2, 3 - r.id * 0.0006, r.z + r.h / 2); g.add(ce);
-      const dark = r.kind !== 'corridor' && r.kind !== 'lobby' && ((r.id * 7 + sim.mission * 3 + Math.floor(l.suspects[0]?.x ?? 0)) % 4 === 0);
+      const dark = l.theme === 'club' ? (r.kind === 'club') : (r.kind !== 'corridor' && r.kind !== 'lobby' && ((r.id * 7 + sim.mission * 3 + Math.floor(l.suspects[0]?.x ?? 0)) % 4 === 0));
       const nx = Math.max(1, Math.round((r.w - 2) / 6)), nz = Math.max(1, Math.round((r.h - 2) / 6));
       for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
         const x = r.x + 1 + ((i + 0.5) * (r.w - 2)) / nx, z = r.z + 1 + ((j + 0.5) * (r.h - 2)) / nz;
-        g.add(box(r.kind === 'warehouse' ? 0.4 : 1.1, 0.05, r.kind === 'corridor' ? 0.3 : 0.5, dark ? lampOff : lampOn, x, 2.97, z));
-        if (!dark && quality > 0 && lights < (quality > 1 ? 22 : 12)) { const pl = new THREE.PointLight(r.kind === 'warehouse' ? 0xdfe8ff : 0xffe9c8, r.kind === 'warehouse' ? 26 : 15, 11, 1.7); pl.position.set(x, 2.55, z); g.add(pl); lights++; }
+        const lm = box(r.kind === 'warehouse' ? 0.4 : 1.1, 0.05, r.kind === 'corridor' ? 0.3 : 0.5, dark ? lampOff : lampOn, x, 2.97, z);
+        g.add(lm);
+        if (!dark) this.lampMeshes.push(lm);
+        if ((!dark || l.theme === 'club') && quality > 0 && lights < (quality > 1 ? 22 : 12)) {
+          const col = l.theme === 'club' ? (i % 2 ? 0xff3ea5 : 0x3ea8ff) : r.kind === 'warehouse' ? 0xdfe8ff : 0xffe9c8;
+          const baseInt = l.theme === 'club' ? 12 : r.kind === 'warehouse' ? 26 : 15;
+          const pl = new THREE.PointLight(col, baseInt, 11, 1.7); pl.position.set(x, 2.55, z); g.add(pl);
+          this.roomLights.push({ light: pl, baseInt });
+          lights++;
+        }
       }
     }
     // walls
@@ -53,17 +75,46 @@ export class LevelView {
       const im = new THREE.InstancedMesh(wallGeo, mat, cells.length); const m = new THREE.Matrix4();
       cells.forEach(([x, z], i) => { m.makeScale(1, h / 3, 1); m.setPosition(x + 0.5, h / 2, z + 0.5); im.setMatrixAt(i, m); }); g.add(im);
     };
-    const wallMat = std({ map: T.wallTex(th.wall, th.trim, l.theme) }), brickMat = std({ map: T.brickTex(l.theme, th.brickA, th.brickB) });
+    const wallMat = std({ map: T.wallTex(th.wall, th.trim, l.theme) }), brickMat = std({ map: T.brickTex(l.theme === 'bank' || l.theme === 'club' || l.theme === 'raid' ? 'office' : l.theme, th.brickA, th.brickB) });
     mk(inner, wallMat); mk(outer.filter(([x, z]) => !(x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1)), brickMat, 3.2); mk(outer.filter(([x, z]) => x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1), brickMat, 2.4);
-    // doors
+    // breakable glass windows
+    const glassMat = new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.32, roughness: 0.1, metalness: 0.1 });
+    for (const w of l.windows) {
+      const cx = Math.floor(w.x), cz = Math.floor(w.z);
+      const horiz = sim.cell(cx - 1, cz) === WALL || sim.cell(cx - 1, cz) === WINDOW || sim.cell(cx + 1, cz) === WALL || sim.cell(cx + 1, cz) === WINDOW;
+      g.add(box(1, 0.9, 1, wallMat, w.x, 0.45, w.z), box(1, 0.7, 1, wallMat, w.x, 2.65, w.z));
+      const pane = box(horiz ? 0.98 : 0.06, 1.4, horiz ? 0.06 : 0.98, glassMat, w.x, 1.6, w.z);
+      g.add(pane);
+      this.windows.set(cz * l.w + cx, pane);
+    }
+    // doors (+ lock & wedge indicators)
     const doorMat = std({ map: T.doorTex(), roughness: 0.6 }), frameMat = std({ color: 0x2c2620 });
+    const wedgeMat = std({ color: 0xf2a82e, roughness: 0.4 }), lockMat = std({ color: 0xe04848, emissive: 0x801010, emissiveIntensity: 0.6 });
     for (const d of l.doors) {
       const lintel = box(1, 0.8, 1, wallMat, d.cx + 0.5, 2.6, d.cz + 0.5); g.add(lintel);
       const pivot = new THREE.Group(), panel = box(0.94, 2.18, 0.06, doorMat, 0.47, 1.09, 0); pivot.add(panel);
       pivot.add(box(0.05, 0.05, 0.16, std({ color: 0xc9b46a, metalness: 0.7, roughness: 0.3 }), 0.84, 1.05, 0));
+      const lock = box(0.08, 0.06, 0.18, lockMat, 0.84, 1.15, 0); lock.visible = !!d.locked; pivot.add(lock);
+      const wedge = box(0.22, 0.08, 0.2, wedgeMat, 0.72, 0.04, 0); wedge.visible = !!d.wedged; pivot.add(wedge);
       if (d.horiz) { pivot.position.set(d.cx + 0.03, 0, d.cz + 0.5); g.add(box(0.06, 2.2, 1.02, frameMat, d.cx + 0.0, 1.1, d.cz + 0.5), box(0.06, 2.2, 1.02, frameMat, d.cx + 1.0, 1.1, d.cz + 0.5)); }
       else { pivot.position.set(d.cx + 0.5, 0, d.cz + 0.03); g.add(box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 0.0), box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 1.0)); }
-      const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base });
+      const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base, wedge, lock });
+    }
+    // breaker box
+    if (l.breaker) {
+      const bm = std({ color: 0x3b444d, metalness: 0.5, roughness: 0.4 });
+      const bg = new THREE.Group(); bg.position.set(l.breaker.x, 0, l.breaker.z);
+      bg.add(box(0.32, 1.4, 0.22, bm, 0, 0.7, 0), box(0.16, 0.12, 0.25, new THREE.MeshBasicMaterial({ color: 0x4fd07a }), 0, 1.15, 0));
+      g.add(bg);
+    }
+    // bomb device
+    if (l.bomb) {
+      const bm = std({ color: 0x1e2228, metalness: 0.4, roughness: 0.5 });
+      const bg = new THREE.Group(); bg.position.set(l.bomb.x, 0, l.bomb.z);
+      bg.add(box(0.55, 0.28, 0.38, bm, 0, 0.14, 0), box(0.42, 0.16, 0.28, std({ color: 0x5c2222 }), 0, 0.3, 0));
+      this.bombLed = box(0.12, 0.04, 0.08, new THREE.MeshBasicMaterial({ color: 0xff2a2a }), 0, 0.4, 0);
+      bg.add(this.bombLed);
+      g.add(bg); this.bombBox = bg;
     }
     // props
     const crate = std({ map: T.crateTex() }), wood = std({ map: T.woodTex(), roughness: 0.6 }), shelf = std({ map: T.shelfTex() }), dark = std({ color: 0x1a1c20, roughness: 0.5 });
@@ -76,6 +127,8 @@ export class LevelView {
         case 'desk': o.add(box(0.98, 0.05, 0.86, wood, 0, 0.76, 0), box(0.05, 0.74, 0.8, wood, -0.44, 0.37, 0), box(0.05, 0.74, 0.8, wood, 0.44, 0.37, 0), box(0.86, 0.4, 0.03, wood, 0, 0.5, -0.38));
           if (rj > 0.3) { o.add(box(0.42, 0.28, 0.03, dark, 0, 1.0, -0.15), box(0.06, 0.1, 0.06, dark, 0, 0.83, -0.15)); const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.38, 0.24), new THREE.MeshBasicMaterial({ color: rj > 0.6 ? 0x2a4f7a : 0x0c1016 })); scr.position.set(0, 1.0, -0.133); o.add(scr); }
           o.rotation.y = (p.rot * Math.PI) / 2; break;
+        case 'bar': o.add(box(0.98, 1.05, 0.6, dark, 0, 0.525, 0), box(1.0, 0.08, 0.68, std({ color: 0x722f8a, emissive: 0x3b124d, emissiveIntensity: 0.4 }), 0, 1.06, 0)); o.rotation.y = (p.rot * Math.PI) / 2; break;
+        case 'server': o.add(box(0.88, 2.15, 0.75, dark, 0, 1.075, 0), box(0.68, 0.08, 0.77, new THREE.MeshBasicMaterial({ color: 0x2de080 }), 0, 1.6, 0), box(0.68, 0.08, 0.77, new THREE.MeshBasicMaterial({ color: 0x3ea8ff }), 0, 1.2, 0)); o.rotation.y = (p.rot * Math.PI) / 2; break;
         case 'shelf': o.add(box(0.96, 2.1, 0.5, shelf, 0, 1.05, 0)); o.rotation.y = (p.rot % 2 ? Math.PI / 2 : 0); break;
         case 'locker': o.add(box(0.92, 2.0, 0.6, locker, 0, 1.0, 0)); o.rotation.y = (p.rot * Math.PI) / 2; break;
         case 'bed': o.add(box(0.96, 0.3, 0.96, wood, 0, 0.15, 0), box(0.9, 0.2, 0.9, white, 0, 0.4, 0), box(0.6, 0.1, 0.3, white, 0, 0.55, -0.26)); o.rotation.y = (p.rot * Math.PI) / 2; break;
@@ -85,7 +138,25 @@ export class LevelView {
       g.add(o);
     }
   }
-  update() { for (const d of this.doors) d.pivot.rotation.y = d.base + d.door.open * 1.62; }
+  update() {
+    for (const d of this.doors) {
+      d.pivot.rotation.y = d.base + d.door.open * 1.62;
+      d.lock.visible = !!d.door.locked;
+      d.wedge.visible = !!d.door.wedged;
+    }
+    for (const [k, m] of this.windows) {
+      if (this.sim.brokenWindows.has(k) && m.visible) m.visible = false;
+    }
+    if (this.sim.powerOn !== this.lastPower) {
+      this.lastPower = this.sim.powerOn;
+      for (const rl of this.roomLights) rl.light.intensity = this.lastPower ? rl.baseInt : 0;
+      for (const lm of this.lampMeshes) lm.material = this.lastPower ? this.lampOnMat : this.lampOffMat;
+    }
+    if (this.bombLed && this.sim.bomb) {
+      if (this.sim.bomb.defused) { (this.bombLed.material as THREE.MeshBasicMaterial).color.setHex(0x4fd07a); this.bombLed.visible = true; }
+      else { this.bombLed.visible = Math.floor(this.sim.time * (this.sim.bomb.time < 20 ? 6 : 2)) % 2 === 0; }
+    }
+  }
 }
 function scaleUV(geo: THREE.BufferGeometry, sx: number, sy: number) { const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * sx, uv.getY(i) * sy); }
 
@@ -292,7 +363,11 @@ export class FX {
     }
   }
   hole(x: number, y: number, z: number) { const j = this.hi = (this.hi + 1) % 200; this.hpos[j * 3] = x; this.hpos[j * 3 + 1] = y; this.hpos[j * 3 + 2] = z; this.holes.geometry.attributes.position.needsUpdate = true; }
-  tracer(a: THREE.Vector3, b: THREE.Vector3) { const t = this.tracers[this.ti = (this.ti + 1) % this.tracers.length]; const p = t.line.geometry.attributes.position as THREE.BufferAttribute; p.setXYZ(0, a.x, a.y, a.z); p.setXYZ(1, b.x, b.y, b.z); p.needsUpdate = true; t.line.visible = true; t.t = 0.06; }
+  tracer(a: THREE.Vector3, b: THREE.Vector3, color = 0xffe2a0) {
+    const t = this.tracers[this.ti = (this.ti + 1) % this.tracers.length];
+    (t.line.material as THREE.LineBasicMaterial).color.setHex(color);
+    const p = t.line.geometry.attributes.position as THREE.BufferAttribute; p.setXYZ(0, a.x, a.y, a.z); p.setXYZ(1, b.x, b.y, b.z); p.needsUpdate = true; t.line.visible = true; t.t = color === 0x50d8ff ? 0.14 : 0.06;
+  }
   flashAt(x: number, y: number, z: number, intensity = 30, dur = 0.06, color = 0xffc070) { this.light.position.set(x, y, z); this.light.intensity = intensity; this.light.color.setHex(color); this.lightT = dur; }
   marker(x: number, z: number, color: number) {
     const m = new THREE.Mesh(new THREE.RingGeometry(0.32, 0.42, 28), new THREE.MeshBasicMaterial({ color, transparent: true, depthTest: false, side: THREE.DoubleSide })); m.rotation.x = -Math.PI / 2; m.position.set(x, 0.05, z); m.renderOrder = 5; this.group.add(m); this.markers.push({ m, t: 2.5 });
@@ -326,7 +401,13 @@ export function makeViewModel() {
   pistol.children.slice(2).forEach(c => { c.userData.hand = true; });
   pistol.visible = false; g.add(rifle, pistol);
   const flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glowTex(), blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, transparent: true })); flash.scale.setScalar(0.28); flash.position.set(0, 0.02, -0.78); flash.visible = false; g.add(flash);
-  return { group: g, rifle, pistol, flash };
+  const shield = new THREE.Group();
+  shield.add(
+    box(0.36, 0.52, 0.025, std({ color: 0x14181f, metalness: 0.4, roughness: 0.5 }), -0.18, -0.02, -0.45),
+    box(0.22, 0.1, 0.03, new THREE.MeshPhysicalMaterial({ color: 0x99d0e8, transparent: true, opacity: 0.35, roughness: 0.1 }), -0.18, 0.12, -0.45),
+  );
+  shield.visible = false; g.add(shield);
+  return { group: g, rifle, pistol, flash, shield };
 }
 /** Swap the box weapons of the first-person view for the real models (hands and sleeves stay). */
 export function upgradeViewModel(vm: ReturnType<typeof makeViewModel>) {

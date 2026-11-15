@@ -21,17 +21,19 @@ export function buildTacticalContext(sim: Sim, player: Actor = sim.player): stri
   const pRoom = roomAt(sim.level, player.x, player.z)?.name ?? 'corridor/outside';
   const door = sim.aimedDoor(player);
   const doorDist = door ? Math.round(Math.hypot(door.cx + 0.5 - player.x, door.cz + 0.5 - player.z)) : null;
+  const doorState = door ? `${door.open > 0.5 ? 'open' : 'closed'}${door.locked ? ', LOCKED' : ''}${door.wedged ? ', WEDGED' : ''}` : '';
 
   const lines: string[] = [
-    `Mission: ${sim.level.name}`,
-    `Remaining: ${rem.suspects} active/unsecured suspects, ${rem.civs} unsecured civilians`,
-    `Player: HP ${Math.ceil(player.hp)}, in ${pRoom}, flashbangs ${player.bangs}` + (door ? `, nearest/aimed door ${doorDist}m (${door.open > 0.5 ? 'open' : 'closed'})` : ', no door nearby'),
+    `Mission: ${sim.level.name} (${sim.level.objective.toUpperCase()})`,
+    `Power: ${sim.powerOn ? 'ON' : 'OFF (dark)'}`,
+    `Remaining: ${rem.suspects} active/unsecured suspects, ${rem.civs} unsecured civilians` + (sim.bomb && !sim.bomb.defused ? `, BOMB active (${Math.ceil(sim.bomb.time)}s left)` : ''),
+    `Player: HP ${Math.ceil(player.hp)}, in ${pRoom}, flashbangs ${player.bangs}, C2 ${player.c2}, wedges ${player.wedges}` + (door ? `, nearest/aimed door ${doorDist}m (${doorState})` : ', no door nearby'),
     'SWAT Officers:',
   ];
 
   for (const o of sim.officers) {
     if (!o.alive) {
-      lines.push(`- ${o.name} (Team ${o.team}, slot ${o.slot}): DOWN`);
+      lines.push(`- ${o.name} (Team ${o.team}, role ${o.role}, slot ${o.slot}): DOWN`);
       continue;
     }
     const ord = (o.solo ?? sim.teams[o.team]).order.type + (o.solo ? ' (solo)' : '');
@@ -39,7 +41,7 @@ export function buildTacticalContext(sim: Sim, player: Actor = sim.player): stri
     const seenSurr = sim.actors.filter(a => a.alive && a.surrendered && !a.restrained && sim.sees(o, a, 16, 3.2)).length;
     const room = roomAt(sim.level, o.x, o.z)?.name ?? 'corridor';
     lines.push(
-      `- ${o.name} (Team ${o.team}, slot ${o.slot}): HP ${Math.ceil(o.hp)}, order=${ord}, pos=${relDir(player, o)} in ${room}, sees ${seenSuspects} armed suspects, ${seenSurr} waiting for cuffs`,
+      `- ${o.name} (Team ${o.team}, role ${o.role}, slot ${o.slot}): HP ${Math.ceil(o.hp)}, order=${ord}, pos=${relDir(player, o)} in ${room}, sees ${seenSuspects} armed suspects, ${seenSurr} waiting for cuffs`,
     );
   }
   return lines.join('\n');
@@ -56,11 +58,12 @@ export function buildLocalReport(sim: Sim, team: Team, who?: number): string {
   const rem = sim.remaining();
 
   const parts = [
-    one ? `${one.name} up (${Math.ceil(one.hp)} HP).` : `${members.length} up.`,
+    one ? `${one.name} (${one.role}) up (${Math.ceil(one.hp)} HP).` : `${members.length} up.`,
     wounded ? 'We have wounded.' : 'No injuries.',
   ];
   if (armed > 0) parts.push(`Visual on ${armed} armed suspect${armed > 1 ? 's' : ''}!`);
   if (cuffs > 0) parts.push(`${cuffs} waiting to be cuffed.`);
+  if (sim.bomb && !sim.bomb.defused) parts.push(`Bomb ticking: ${Math.ceil(sim.bomb.time)}s remaining!`);
   if (!armed && !cuffs) parts.push(`${rem.suspects} suspects and ${rem.civs} civilians left.`);
   return parts.join(' ');
 }

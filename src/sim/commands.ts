@@ -25,6 +25,10 @@ const RULES: [Action, RegExp, Dir?][] = ([
   ['shout', /\b(police|hands up|hands in the air|show me your hands|drop (the|your|that) (gun|weapon)|drop it|put (the|your) (gun|weapon) down|put it down|get down|on the ground|on your knees|give up|surrender|freeze)\b/],
   ['fireHold', /\b(hold fire|hold your fire|cease fire|ceasefire|don't shoot|do not shoot|weapons tight|weapons hold)\b/],
   ['fireFree', /\b(weapons free|fire at will|open fire|free fire|engage)\b/],
+  ['defuse', /\b(defuse|disarm|deactivate|stop the bomb|cut the wire)\b/],
+  ['c2', /\b(c2|c 2|blow (the|that)? ?door|explosive breach|charge (the|that) door|detonate)\b/],
+  ['wedge', /\b(wedge|block (the|that) door|jam (the|that) door|seal (the|that) door)\b/],
+  ['peek', /\b(peek|optiwand|mirror|check under|look under|scout (the|that) door|check (the|that) door)\b/],
   ['bang', /\b(flashbang|flash bang|flash and clear|bang and clear|bang|grenade|stun grenade|flash|flush|flesh)\b/],
   ['breach', /\b(breach|breaching|storm|clear|clear the room|move in|go in|get in|enter|take the room|kick it|kick the door)\b/],
   ['stack', /\b(stack up|stack|line up|on the door|at the door|to the door)\b/],
@@ -174,5 +178,6 @@ export function shouldUseAiBrain(text: string, batch: ParsedBatch): boolean {
 export const ACTION_LABEL: Record<Action, string> = {
   follow: 'FOLLOW ME', hold: 'HOLD POSITION', move: 'MOVE', cover: 'COVER ME', stack: 'STACK UP ON DOOR', breach: 'BREACH THE ROOM', bang: 'BANG AND CLEAR',
   open: 'OPEN DOOR', close: 'CLOSE DOOR', restrain: 'SECURE / HANDCUFF', fireFree: 'WEAPONS FREE', fireHold: 'HOLD FIRE', report: 'REPORT', shout: 'POLICE! GIVE UP!', joinTeam: 'JOIN TEAM',
+  peek: 'PEEK / OPTIWAND', c2: 'C2 BREACH', wedge: 'WEDGE DOOR', defuse: 'DEFUSE BOMB',
 };
 export const DIR_LABEL: Record<Dir, string> = { left: 'LEFT', right: 'RIGHT', forward: 'FORWARD', back: 'BACK', there: 'THERE' };

@@ -160,6 +160,12 @@ export class GameAudio {
   ui() { if (!this.ctx) return; const o = this.out(0, 0.25, false); this.tone(o, 'triangle', 700, 900, 0.05, 0.5); }
   ok() { if (!this.ctx) return; const o = this.out(0, 0.25, false); this.tone(o, 'triangle', 660, 660, 0.07, 0.5); this.tone(o, 'triangle', 990, 990, 0.1, 0.5, 0.08); }
   fail() { if (!this.ctx) return; const o = this.out(0, 0.25, false); this.tone(o, 'sawtooth', 220, 150, 0.2, 0.4); }
+  glass(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 1.4 / (1 + dist * 0.15)); this.burst(o, 0.18, 'highpass', 3200, 1800, 1.5, 0.9); this.tone(o, 'sine', 2400, 1600, 0.09, 0.3); }
+  taser(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 1.2 / (1 + dist * 0.15)); this.tone(o, 'sawtooth', 180, 95, 0.24, 0.55); this.burst(o, 0.22, 'bandpass', 4200, 2600, 3, 0.5); }
+  nvg(on: boolean) { if (!this.ctx) return; const o = this.out(0, 0.28, false); this.tone(o, 'sine', on ? 420 : 1200, on ? 1800 : 380, 0.14, 0.6); }
+  wedge() { if (!this.ctx) return; const o = this.out(0, 0.35, false); this.tone(o, 'triangle', 260, 140, 0.08, 0.6); }
+  c2(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 2.2 / (1 + dist * 0.1)); this.burst(o, 0.45, 'lowpass', 2400, 90, 0.6, 1.6); this.tone(o, 'sine', 110, 28, 0.42, 1.3); }
+  defuse() { if (!this.ctx) return; const o = this.out(0, 0.35, false); this.tone(o, 'sine', 520, 520, 0.08, 0.6); this.tone(o, 'sine', 880, 1040, 0.14, 0.6, 0.1); }
 }
 
 /** Radio chatter through the browser's built-in speech synthesis (free, offline on most systems). */

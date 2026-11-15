@@ -10,10 +10,13 @@
 <canvas id="c"></canvas>
 
 <div id="hud" class="hidden">
+  <div id="nvg" class="hidden"></div>
+  <div id="bodycam" class="hidden"><div class="bc-frame"></div><div class="bc-top"><div class="bc-rec">● REC · BODYCAM 04</div><div id="bcTime"></div><div>TEAMAI TAC-UNIT</div></div></div>
   <div id="cross"><i></i><i></i><i></i><i></i><b></b></div>
   <div id="hitmark"></div>
   <div id="dmg"></div><div id="flash"></div>
   <div id="objective"></div>
+  <div id="bombtimer" class="hidden"></div>
   <div id="vc" class="hidden"></div>
   <canvas id="minimap"></canvas>
   <div id="team"></div>
@@ -25,13 +28,14 @@
   <div id="status"><div id="hpbar"><div></div></div><div id="hptxt">100</div></div>
   <div id="ammo"><div id="wname">CARBINE</div><div id="acount"><b>30</b> / 150</div><div id="bangs">◉◉◉</div></div>
   <div id="quick"></div>
-  <div id="cmdbox" class="hidden"><span>ORDER ›</span><input id="cmdinput" autocomplete="off" spellcheck="false" placeholder="e.g. Ken follow me, Maya join Team B, Team B cover me" /></div>
+  <div id="cmdbox" class="hidden"><span>ORDER ›</span><input id="cmdinput" autocomplete="off" spellcheck="false" placeholder="e.g. Ken follow me, Maya peek that door, Team B C2" /></div>
+  <div id="wheel" class="hidden"><div class="wring"><div class="wcenter"><span id="wTarget">ALL TEAMS</span><small>Click order</small></div></div></div>
 </div>
 
 <div id="menu" class="screen">
   <header class="mtop">
     <div class="brand"><div class="logo">TEAM<span>AI</span></div><div class="tag">Voice-commanded entry team</div></div>
-    <div class="mstat"><span id="mMic"></span><span id="mBest"></span><span class="ver">Version 0.1</span></div>
+    <div class="mstat"><span id="mRank" class="rank"></span><span id="mMic"></span><span id="mBest"></span><span class="ver">Version 0.2</span></div>
   </header>
   <nav class="mnav">
     <button data-tab="tabPlay" class="on"><i>01</i>Missions</button>
@@ -75,7 +79,32 @@
   <div class="kicker">Mission briefing</div>
   <h2 id="briefTitle"></h2>
   <div class="briefgrid"><div class="plan"><canvas id="briefMap"></canvas><div class="planlbl">Floor plan · <i class="dotE"></i> entrance</div></div>
-  <div><p id="briefText"></p><div id="briefFacts" class="facts"></div></div></div>
+  <div>
+    <p id="briefText"></p>
+    <div id="briefFacts" class="facts"></div>
+    <div class="loadout">
+      <label>Primary Gear
+        <select id="lPrimary">
+          <option value="carbine">M4 Carbine (Lethal · Full-Auto)</option>
+          <option value="shotgun">M870 Tactical Shotgun (Lethal · Buckshot)</option>
+          <option value="beanbag">Beanbag Shotgun (Non-Lethal · High Arrest)</option>
+          <option value="shield">Ballistic Shield (Blocks Frontal Fire)</option>
+        </select>
+      </label>
+      <label>Secondary Gear
+        <select id="lSecondary">
+          <option value="pistol">Glock 17 (9mm Sidearm)</option>
+          <option value="taser">X26 Taser (Non-Lethal · Instant Stun)</option>
+        </select>
+      </label>
+    </div>
+    <div class="squadroles">
+      <div><b>Ken · Pointman</b>Faster movement</div>
+      <div><b>Maya · Breacher</b>Extra flash &amp; C2</div>
+      <div><b>Jack · Marksman</b>Sharper rifle aim</div>
+      <div><b>Zoe · Negotiator</b>Better surrender &amp; cuffs</div>
+    </div>
+  </div></div>
   <div class="tips"><b>Say for example:</b> «Team A go left» · «Team B cover me» · «Everyone stack up on the door» · «Bravo bang and clear» · «Ken, you cover us» · «Jack, throw flash» · «Police! Drop the weapon!» · «Team A cuff them»</div>
   <div class="row"><button id="btnBack">Back</button><button id="btnGo" class="primary">Begin operation</button></div>
 </div></div>
@@ -88,6 +117,7 @@
 
 <div id="debrief" class="screen hidden"><div class="panel">
   <h2 id="debTitle"></h2><div id="debRank"></div><table id="debTable"></table>
+  <div id="debNotes"></div>
   <div class="row"><button id="btnMenu">Main menu</button><button id="btnAgain">Play again</button><button id="btnNext" class="primary">Next mission</button></div>
 </div></div>
 
@@ -96,9 +126,10 @@
   <div class="grid2">
     <div><kbd>W A S D</kbd> Walk</div><div><kbd>Shift</kbd> Run (heard far away)</div><div><kbd>X</kbd> Sneak on/off (silent)</div><div><kbd>C</kbd> Crouch · <kbd>Z</kbd> Crawl (silent)</div><div><kbd>Space</kbd> Jump / stand up</div>
     <div><kbd>Mouse</kbd> Look · <kbd>Left click</kbd> Fire</div><div><kbd>Right click</kbd> (hold) Zoom / aim</div><div><kbd>R</kbd> Reload · <kbd>1</kbd>/<kbd>2</kbd> Weapons</div>
-    <div><kbd>F</kbd> Open door / handcuff</div><div><kbd>G</kbd> Throw flashbang</div>
-    <div><kbd>V</kbd> (hold) Talk to your team · <kbd>Q</kbd> Shout «Police! Drop the weapon!»</div><div><kbd>T</kbd> Flashlight · <kbd>M</kbd> Map</div>
-    <div><kbd>B</kbd> Voice chat: microphone on/off (online)</div><div></div>
+    <div><kbd>F</kbd> Open door / handcuff / breaker / defuse</div><div><kbd>G</kbd> Throw flashbang</div>
+    <div><kbd>E</kbd> Optiwand peek door · <kbd>U</kbd> C2 charge</div><div><kbd>Y</kbd> Wedge door · <kbd>N</kbd> Night Vision (NVG)</div>
+    <div><kbd>V</kbd> (hold) Talk to your team · <kbd>Q</kbd> Shout «Police! Drop the weapon!»</div><div><kbd>T</kbd> Flashlight · <kbd>K</kbd> Bodycam · <kbd>M</kbd> Map</div>
+    <div><kbd>B</kbd> Voice chat: microphone on/off (online)</div><div><kbd>H</kbd> Radial Command Wheel</div>
     <div><kbd>Enter</kbd> Type an order (if you have no microphone)</div><div><kbd>Tab</kbd> Choose team for the quick keys</div>
   </div>
   <div class="note">Quick keys (selected team): <kbd>3</kbd> Follow <kbd>4</kbd> Hold <kbd>5</kbd> Move where I aim <kbd>6</kbd> Cover me <kbd>7</kbd> Stack up <kbd>8</kbd> Breach <kbd>9</kbd> Bang and clear <kbd>0</kbd> Secure</div>
@@ -116,6 +147,10 @@
     <tr><td>«breach» · «clear the room» · «move in»</td><td>Opens the door and clears the room</td></tr>
     <tr><td>«bang and clear» · «flashbang»</td><td>Throws a flashbang, then breaches</td></tr>
     <tr><td>«open the door» · «close the door»</td><td>Works the door without going in</td></tr>
+    <tr><td>«peek that door» · «optiwand»</td><td>Scouts suspects &amp; civilians behind the closed door</td></tr>
+    <tr><td>«C2 the door» · «blow the door»</td><td>Plants explosive C2 to breach locked doors &amp; stun threats</td></tr>
+    <tr><td>«wedge the door» · «block door»</td><td>Places/removes a wedge to stop enemy flanks</td></tr>
+    <tr><td>«defuse the bomb»</td><td>Orders the team to disarm an active explosive device</td></tr>
     <tr><td>«cuff them» · «secure them»</td><td>Handcuffs everyone who has given up</td></tr>
     <tr><td>«hold fire» · «weapons free»</td><td>Only return fire / fire at threats</td></tr>
     <tr><td>«report» · «sitrep»</td><td>The team reports its status</td></tr>

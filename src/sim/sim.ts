@@ -1,21 +1,36 @@
 // TeamAi tactical simulation. Pure logic: no DOM, no three.js – runs headless in tests.
-import { Level, Door, Pt, Room, buildLevel, mulberry32, roomAt, WALL, DOOR, LOW, HIGH } from './level';
+import { Level, Door, Pt, Room, buildLevel, mulberry32, roomAt, WALL, DOOR, LOW, HIGH, WINDOW } from './level';
 import { findPath, nearestWalkable, walkLine } from './nav';
 import { buildLocalReport } from './context';
 
 export type Team = 'A' | 'B';
-export type Action = 'follow' | 'hold' | 'move' | 'cover' | 'stack' | 'breach' | 'bang' | 'open' | 'close' | 'restrain' | 'fireFree' | 'fireHold' | 'report' | 'shout' | 'joinTeam';
+export type Action =
+  | 'follow' | 'hold' | 'move' | 'cover' | 'stack' | 'breach' | 'bang'
+  | 'open' | 'close' | 'restrain' | 'fireFree' | 'fireHold' | 'report'
+  | 'shout' | 'joinTeam' | 'peek' | 'c2' | 'wedge' | 'defuse';
 export type Dir = 'left' | 'right' | 'forward' | 'back' | 'there';
+export type PrimaryLoadout = 'carbine' | 'shotgun' | 'beanbag' | 'shield';
+export type SecondaryLoadout = 'pistol' | 'taser';
+export interface Loadout { primary: PrimaryLoadout; secondary: SecondaryLoadout; }
+
 /** `who` = one officer (index into Sim.officers) instead of a whole team. */
 export interface Command { team: Team | 'ALL'; action: Action; dir?: Dir; who?: number; }
 export const OFFICER_NAMES = ['Ken', 'Maya', 'Jack', 'Zoe']; // A1, A2, B1, B2
+export const OFFICER_ROLES = ['Pointman', 'Breacher', 'Marksman', 'Negotiator'] as const;
+export type OfficerRole = typeof OFFICER_ROLES[number];
 /** A team, or one officer working on an order of their own. */
 type Grp = Team | Actor;
 export type Kind = 'player' | 'officer' | 'suspect' | 'civ';
 
 export interface Order {
-  type: 'follow' | 'hold' | 'move' | 'cover' | 'stack' | 'breach' | 'door' | 'restrain';
-  pts?: Pt[]; face?: number; door?: Door; bang?: boolean; open?: boolean; off?: number; leader?: Actor; phase: number; t: number; side?: number; prev?: Order;
+  type: 'follow' | 'hold' | 'move' | 'cover' | 'stack' | 'breach' | 'door' | 'restrain' | 'peek' | 'defuse';
+  pts?: Pt[]; face?: number; door?: Door; bang?: boolean; c2?: boolean; open?: boolean;
+  off?: number; leader?: Actor; phase: number; t: number; side?: number; prev?: Order;
+}
+
+export interface BombState {
+  x: number; z: number; time: number; defused: boolean; defuseT: number;
+  warned60?: boolean; warned20?: boolean;
 }
 
 export type Ev =
@@ -23,6 +38,9 @@ export type Ev =
   | { t: 'hurt'; a: Actor; head: boolean } | { t: 'death'; a: Actor }
   | { t: 'door'; door: Door; open: boolean; kick?: boolean } | { t: 'say'; a: Actor; text: string; shout?: boolean }
   | { t: 'shout'; a: Actor } | { t: 'bang'; x: number; z: number } | { t: 'throw'; x: number; z: number }
+  | { t: 'c2'; x: number; z: number } | { t: 'glass'; x: number; z: number } | { t: 'power'; on: boolean }
+  | { t: 'taser'; x: number; y: number; z: number; x2: number; y2: number; z2: number }
+  | { t: 'bomb'; kind: 'defused' | 'detonate'; x: number; z: number }
   | { t: 'cuff'; a: Actor; by: Actor } | { t: 'surrender'; a: Actor } | { t: 'marker'; x: number; z: number; team: Team }
   | { t: 'bark'; a: Actor; kind: 'spot' | 'surrender' | 'pain' | 'die' | 'panic' | 'unrest' }
   | { t: 'info'; text: string } | { t: 'end'; win: boolean };
@@ -31,14 +49,19 @@ export class Actor {
   x = 0; z = 0; yaw = 0; r = 0.3; hp = 100; alive = true; speed = 3.2;
   path: Pt[] | null = null; goal: Pt | null = null; repathT = 0; moving = false; stuckT = 0; walk = 0;
   stun = 0; surrendered = false; restrained = false; armed = false; morale = 0.5; rolls = 0; lastRoll = -9;
+  fakeSurrender = false; fakeT = 0; vip = false; hostage = false;
   target: Actor | null = null; aimT = 0; fireCd = 0; burst = 0; ammo = 30; reloadT = 0; lastShotT = -9;
   hostile = false; hasFired = false; react = -1; alertT = 0; lastSeen: Pt | null = null; hunter = false; timer = 0; lostT = 0;
   challengeT = -9; firstChallengeT = Infinity; unwatchedT = 0; panicT = 0; seeT = 0; room = -1;
   /** An order given to this officer alone; until the team gets a new order they act apart from it. */
   solo: { order: Order; cuffSay?: number } | null = null;
+  role: OfficerRole = 'Pointman';
   team: Team = 'A'; ti = 0; slot = 0; cuff: Actor | null = null; cuffT = 0; claimedBy: Actor | null = null;
+  defusing = false; defuseT = 0;
   prone = false; jumpY = 0; /** footstep-noise bookkeeping */ nx = 0; nz = 0; nd = 0; nt = 0;
-  percT = 0; deadT = 0; crouch = false; variant = 0; flash = 0; pitch = 0; trail: Pt[] = []; bangs = 3; pi = 0;
+  percT = 0; deadT = 0; crouch = false; variant = 0; flash = 0; pitch = 0; trail: Pt[] = [];
+  bangs = 3; c2 = 2; wedges = 2; shield = false; nvg = false; pi = 0;
+  lastCallT = -99;
   constructor(public id: number, public kind: Kind, public name: string) { }
   get down() { return this.surrendered || this.restrained; }
   get active() { return this.alive && !this.restrained; }
@@ -50,23 +73,36 @@ export const angDiff = (a: number, b: number) => { let d = (b - a) % (Math.PI * 
 const turn = (a: number, b: number, max: number) => { const d = angDiff(a, b); return a + Math.max(-max, Math.min(max, d)); };
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.z - b.z);
 
-export interface Stats { shotsFired: number; suspectsKilled: number; suspectsArrested: number; civsSecured: number; civsKilled: number; civsKilledByPolice: number; officersDown: number; unauthorized: number; }
+export interface Stats {
+  shotsFired: number; suspectsKilled: number; suspectsArrested: number;
+  civsSecured: number; civsKilled: number; civsKilledByPolice: number;
+  officersDown: number; unauthorized: number; c2Used: number; nonLethalHits: number;
+}
 
 export class Sim {
   level: Level; rng: () => number; actors: Actor[] = []; player: Actor; officers: Actor[] = []; suspects: Actor[] = []; civs: Actor[] = [];
-  events: Ev[] = []; time = 0; trail: Pt[] = []; over: { win: boolean } | null = null;
+  events: Ev[] = []; time = 0; trail: Pt[] = []; over: { win: boolean; reason?: string } | null = null;
   teams: Record<Team, { order: Order; fire: 'free' | 'hold'; cuffSay?: number }>;
   grenades: { x: number; y: number; z: number; vx: number; vy: number; vz: number; t: number }[] = [];
-  stats: Stats = { shotsFired: 0, suspectsKilled: 0, suspectsArrested: 0, civsSecured: 0, civsKilled: 0, civsKilledByPolice: 0, officersDown: 0, unauthorized: 0 };
+  brokenWindows = new Set<number>();
+  powerOn = true;
+  bomb: BombState | null = null;
+  stats: Stats = { shotsFired: 0, suspectsKilled: 0, suspectsArrested: 0, civsSecured: 0, civsKilled: 0, civsKilledByPolice: 0, officersDown: 0, unauthorized: 0, c2Used: 0, nonLethalHits: 0 };
   players: Actor[] = []; private checkT = 0;
 
   constructor(public mission: number, seed: number, public difficulty = 1, nPlayers = 1) {
     this.level = buildLevel(mission, seed); this.rng = mulberry32(seed + 99);
+    if (this.level.bomb) {
+      this.bomb = { x: this.level.bomb.x, z: this.level.bomb.z, time: this.level.bomb.time, defused: false, defuseT: 0 };
+    }
     const l = this.level, sp = l.playerSpawn; let id = 0;
     this.player = new Actor(id++, 'player', 'You'); Object.assign(this.player, { x: sp.x, z: sp.z, yaw: sp.yaw, armed: true });
     this.actors.push(this.player); this.players.push(this.player); this.player.trail.push({ x: sp.x, z: sp.z });
     OFFICER_NAMES.forEach((n, i) => {
-      const o = new Actor(id++, 'officer', n); o.team = i < 2 ? 'A' : 'B'; o.ti = i % 2; o.slot = i; o.armed = true; o.speed = 3.9;
+      const o = new Actor(id++, 'officer', n);
+      o.team = i < 2 ? 'A' : 'B'; o.ti = i % 2; o.slot = i; o.role = OFFICER_ROLES[i];
+      o.armed = true; o.speed = i === 0 ? 4.25 : 3.9;
+      if (i === 1) { o.bangs = 4; o.c2 = 3; } // Maya (Breacher) carries extra breach gear
       const p = nearestWalkable(l, sp.x + (i % 2 ? 0.9 : -0.9), sp.z + 1.1 + Math.floor(i / 2) * 1.0) ?? sp;
       o.x = sp.x + (i % 2 ? 0.8 : -0.8); o.z = sp.z + 1.0 + Math.floor(i / 2) * 0.9; if (this.solidCell(Math.floor(o.x), Math.floor(o.z))) { o.x = p.x; o.z = p.z; }
       o.yaw = sp.yaw; this.officers.push(o); this.actors.push(o);
@@ -74,11 +110,13 @@ export class Sim {
     for (const s of l.suspects) {
       const a = new Actor(id++, 'suspect', 'Suspect'); Object.assign(a, { x: s.x, z: s.z, room: s.room, armed: true, yaw: this.rng() * 6.28, speed: 3.0 });
       a.morale = 0.2 + this.rng() * 0.75 + (difficulty - 1) * 0.1; a.hunter = this.rng() < 0.45; a.variant = Math.floor(this.rng() * 6); a.timer = this.rng() * 5;
+      a.hostage = !!s.hostage;
       this.suspects.push(a); this.actors.push(a);
     }
     for (const s of l.civs) {
-      const a = new Actor(id++, 'civ', 'Civilian'); Object.assign(a, { x: s.x, z: s.z, room: s.room, yaw: this.rng() * 6.28, speed: 3.4 });
-      a.variant = Math.floor(this.rng() * 6); a.morale = this.rng(); this.civs.push(a); this.actors.push(a);
+      const a = new Actor(id++, 'civ', s.vip ? 'VIP Hostage' : 'Civilian'); Object.assign(a, { x: s.x, z: s.z, room: s.room, yaw: this.rng() * 6.28, speed: 3.4 });
+      a.variant = Math.floor(this.rng() * 6); a.morale = this.rng(); a.vip = !!s.vip;
+      this.civs.push(a); this.actors.push(a);
     }
     this.teams = { A: { order: { type: 'follow', phase: 0, t: 0 }, fire: 'free' }, B: { order: { type: 'follow', phase: 0, t: 0 }, fire: 'free' } };
     // extra co-op players are appended last so ids/RNG of everything else stay identical
@@ -97,7 +135,7 @@ export class Sim {
   doorAtCell(cx: number, cz: number) { return this.level.doorAt.get(cz * this.level.w + cx); }
   solidCell(cx: number, cz: number) {
     const c = this.cell(cx, cz);
-    if (c === WALL || c === LOW || c === HIGH) return true;
+    if (c === WALL || c === LOW || c === HIGH || c === WINDOW) return true;
     if (c === DOOR) return this.doorAtCell(cx, cz)!.open < 0.7;
     return false;
   }
@@ -105,7 +143,15 @@ export class Sim {
     const c = this.cell(cx, cz);
     if (c === WALL || c === HIGH) return true;
     if (c === DOOR) return this.doorAtCell(cx, cz)!.open < 0.5;
-    return false;
+    return false; // WINDOW and LOW allow line of sight!
+  }
+  breakWindow(cx: number, cz: number) {
+    const k = cz * this.level.w + cx;
+    if (this.cell(cx, cz) !== WINDOW || this.brokenWindows.has(k)) return false;
+    this.brokenWindows.add(k);
+    this.events.push({ t: 'glass', x: cx + 0.5, z: cz + 0.5 });
+    this.noise(cx + 0.5, cz + 0.5, 16);
+    return true;
   }
   los(x1: number, z1: number, x2: number, z2: number) {
     const dx = x2 - x1, dz = z2 - z1, d = Math.hypot(dx, dz), n = Math.ceil(d / 0.2);
@@ -113,15 +159,17 @@ export class Sim {
     return true;
   }
   sees(a: Actor, b: Actor, range: number, fov: number) {
+    let effRange = range;
+    if (!this.powerOn && a.kind === 'suspect') effRange *= 0.62;
     const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
-    if (d > range) return false;
+    if (d > effRange) return false;
     if (d > 2.5 && Math.abs(angDiff(a.yaw, yawTo(dx, dz))) > fov / 2) return false;
     return this.los(a.x, a.z, b.x, b.z);
   }
   height(a: Actor) { return a.down ? 1.15 : a.prone ? 0.55 : a.crouch ? 1.25 : 1.8; }
 
-  /** 3D ray march against walls, props, floor/ceiling and actors. */
-  ray(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxD: number, ignore?: Actor) {
+  /** 3D ray march against walls, props, floor/ceiling, glass windows and actors. */
+  ray(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxD: number, ignore?: Actor, breakGlass = true) {
     const step = 0.06; let x = ox, y = oy, z = oz;
     const cand = this.actors.filter(a => a.alive && a !== ignore);
     for (let d = 0; d < maxD; d += step) {
@@ -130,7 +178,11 @@ export class Sim {
       const cx = Math.floor(x), cz = Math.floor(z), c = this.cell(cx, cz);
       if (y >= 3 && c !== 0) return { kind: 'wall' as const, x, y: 3, z, d, actor: null, head: false };
       if (y > 12) break;
-      if (y < 3 && (c === WALL || (c === HIGH && y < 2.2) || (c === LOW && y < 0.85) || (c === DOOR && this.doorAtCell(cx, cz)!.open < 0.5 && y < 2.2) || (c === DOOR && y >= 2.2)))
+      if (c === WINDOW && y >= 0.9 && y <= 2.3) {
+        if (breakGlass) this.breakWindow(cx, cz);
+        continue; // bullets pass through window glass!
+      }
+      if (y < 3 && (c === WALL || (c === WINDOW && y < 0.9) || (c === WINDOW && y > 2.3) || (c === HIGH && y < 2.2) || (c === LOW && y < 0.85) || (c === DOOR && this.doorAtCell(cx, cz)!.open < 0.5 && y < 2.2) || (c === DOOR && y >= 2.2)))
         return { kind: 'wall' as const, x, y, z, d, actor: null, head: false };
       for (const a of cand) {
         const ex = x - a.x, ez = z - a.z;
@@ -152,7 +204,7 @@ export class Sim {
       const nx = Math.max(cx, Math.min(a.x, cx + 1)), nz = Math.max(cz, Math.min(a.z, cz + 1));
       let ex = a.x - nx, ez = a.z - nz; const d2 = ex * ex + ez * ez;
       if (d2 >= r * r) continue;
-      if (d2 < 1e-9) { // centre inside the cell: push to nearest free side
+      if (d2 < 1e-9) {
         const opts: [number, number, number][] = [[a.x - cx, -1, 0], [cx + 1 - a.x, 1, 0], [a.z - cz, 0, -1], [cz + 1 - a.z, 0, 1]];
         opts.sort((p, q) => p[0] - q[0]);
         for (const [d, sx, sz] of opts) if (!this.solidCell(cx + sx, cz + sz)) { a.x += sx * (d + r); a.z += sz * (d + r); break; }
@@ -161,7 +213,6 @@ export class Sim {
       const d = Math.sqrt(d2); ex /= d; ez /= d; a.x = nx + ex * r; a.z = nz + ez * r;
     }
   }
-  /** Moves kneeling actor k clear of o: straight away if there is room, otherwise sideways along the wall. */
   private giveWay(k: Actor, o: Actor) {
     const min = k.r + o.r; let dx = k.x - o.x, dz = k.z - o.z, d = Math.hypot(dx, dz); if (d < 1e-5) { dx = 1; dz = 0; d = 1; }
     dx /= d; dz /= d; const x0 = k.x, z0 = k.z, need = min - d;
@@ -175,7 +226,8 @@ export class Sim {
   }
   movePlayer(dx: number, dz: number) {
     const p = this.player; if (!p.alive) return;
-    if (p.cuff) { dx *= 0.2; dz *= 0.2; }
+    if (p.cuff || p.defusing) { dx *= 0.2; dz *= 0.2; }
+    if (p.shield) { dx *= 0.78; dz *= 0.78; }
     this.moveCircle(p, dx, dz); this.pushTrail(p);
   }
   pushTrail(p: Actor) {
@@ -215,7 +267,17 @@ export class Sim {
     for (const probe of [0.5, 1.0]) {
       if (probe > d + 0.5) break;
       const cx = Math.floor(a.x + f.x * probe), cz = Math.floor(a.z + f.z * probe);
-      if (this.cell(cx, cz) === DOOR) { const door = this.doorAtCell(cx, cz)!; if (door.open < 0.7) { this.setDoor(door, true); a.moving = false; a.yaw = turn(a.yaw, yawTo(dx, dz), 8 * dt); return; } }
+      if (this.cell(cx, cz) === DOOR) {
+        const door = this.doorAtCell(cx, cz)!;
+        if (door.open < 0.7) {
+          if (door.wedged) { a.moving = false; a.path = null; a.goal = null; return; }
+          const opened = this.setDoor(door, true, a.kind === 'officer' && !!door.locked);
+          if (!opened && a.kind === 'officer' && door.locked && this.time - a.lastCallT > 5) {
+            a.lastCallT = this.time; this.say(a, 'Door is locked!');
+          }
+          a.moving = false; a.yaw = turn(a.yaw, yawTo(dx, dz), 8 * dt); return;
+        }
+      }
     }
     // doorway etiquette: one at a time, the closest goes first
     const dw = this.cell(Math.floor(wp.x), Math.floor(wp.z)) === DOOR ? wp : path[1] && this.cell(Math.floor(path[1].x), Math.floor(path[1].z)) === DOOR ? path[1] : null;
@@ -234,25 +296,143 @@ export class Sim {
     a.moving = true; a.walk += moved * 2.4;
     if (moved < mv * 0.3) a.stuckT += dt; else a.stuckT = Math.max(0, a.stuckT - dt * 0.5);
   }
-  setDoor(door: Door, open: boolean, kick = false) {
-    const t = open ? 1 : 0; if (door.target === t) return;
-    if (!open && this.actors.some(a => a.alive && Math.floor(a.x) === door.cx && Math.floor(a.z) === door.cz)) return;
+  setDoor(door: Door, open: boolean, kick = false, force = false): boolean {
+    const t = open ? 1 : 0;
+    if (door.wedged && !force) {
+      if (open) this.events.push({ t: 'info', text: 'Door is wedged shut! Remove the wedge or blow with C2.' });
+      return false;
+    }
+    if (door.locked && open && !kick && !force) {
+      this.events.push({ t: 'info', text: 'Door is locked — breach/kick it or deploy C2.' });
+      return false;
+    }
+    if (kick || force) { door.locked = false; door.wedged = false; }
+    if (door.target === t) return true;
+    if (!open && this.actors.some(a => a.alive && Math.floor(a.x) === door.cx && Math.floor(a.z) === door.cz)) return false;
     door.target = t; this.events.push({ t: 'door', door, open, kick });
+    return true;
+  }
+
+  // ---------- tactical door / breaker / bomb interactions ----------
+  playerPeek(p = this.player): string | null {
+    const it = this.interactTarget(p);
+    const door = it?.door ?? this.nearestDoor(p, 2.5);
+    return door ? this.peekDoor(door, p) : null;
+  }
+  playerWedge(p = this.player): boolean {
+    const it = this.interactTarget(p);
+    const door = it?.door ?? this.nearestDoor(p, 2.5);
+    return door ? this.wedgeDoor(door, p) : false;
+  }
+  playerC2(p = this.player): boolean {
+    const it = this.interactTarget(p);
+    const door = it?.door ?? this.nearestDoor(p, 2.5);
+    return door ? this.c2Door(door, p) : false;
+  }
+  peekDoor(door: Door, by: Actor): string {
+    const side = this.doorSide(door, by);
+    const c = { x: door.cx + 0.5, z: door.cz + 0.5 };
+    const beyond = door.horiz ? { x: c.x, z: c.z - side } : { x: c.x - side, z: c.z };
+    const r = roomAt(this.level, beyond.x, beyond.z);
+    const inTarget = (a: Actor) => {
+      if (!a.alive || a.restrained) return false;
+      if (r) return roomAt(this.level, a.x, a.z)?.id === r.id;
+      return dist(a, beyond) < 7;
+    };
+    const armed = this.suspects.filter(s => !s.down && inTarget(s)).length;
+    const surr = this.suspects.filter(s => s.down && inTarget(s)).length;
+    const civs = this.civs.filter(c0 => inTarget(c0)).length;
+    const roomName = r?.name ?? 'beyond the door';
+    const lockNote = door.locked ? ' (LOCKED)' : door.wedged ? ' (WEDGED)' : '';
+    const msg = armed || civs || surr
+      ? `Optiwand [${roomName}]${lockNote}: ${armed} armed suspect${armed === 1 ? '' : 's'}, ${civs} civilian${civs === 1 ? '' : 's'}${surr ? `, ${surr} surrendered` : ''}.`
+      : `Optiwand [${roomName}]${lockNote}: looks clear.`;
+    if (by.kind === 'officer') this.say(by, msg);
+    else this.events.push({ t: 'info', text: msg });
+    return msg;
+  }
+  wedgeDoor(door: Door, by: Actor): boolean {
+    if (door.open > 0.35) {
+      this.events.push({ t: 'info', text: 'Close the door before wedging it.' });
+      return false;
+    }
+    if (door.wedged) {
+      door.wedged = false;
+      if (by.kind === 'player') by.wedges++;
+      const msg = 'Wedge removed from door.';
+      if (by.kind === 'officer') this.say(by, msg); else this.events.push({ t: 'info', text: msg });
+      return true;
+    }
+    if (by.kind === 'player' && by.wedges <= 0) {
+      this.events.push({ t: 'info', text: 'No door wedges left!' });
+      return false;
+    }
+    if (by.kind === 'player') by.wedges--;
+    door.wedged = true; door.target = 0;
+    const msg = 'Door wedged — flanks blocked.';
+    if (by.kind === 'officer') this.say(by, msg); else this.events.push({ t: 'info', text: msg });
+    return true;
+  }
+  c2Door(door: Door, by: Actor): boolean {
+    if (by.c2 <= 0) {
+      if (by.kind === 'player') this.events.push({ t: 'info', text: 'No C2 charges left!' });
+      else this.say(by, 'Out of C2!');
+      return false;
+    }
+    by.c2--;
+    this.stats.c2Used++;
+    const x = door.cx + 0.5, z = door.cz + 0.5;
+    this.setDoor(door, true, true, true);
+    this.events.push({ t: 'c2', x, z });
+    this.events.push({ t: 'bang', x, z });
+    this.noise(x, z, 28);
+    // Concussive shockwave stuns / forces surrender near the door on the far side
+    const side = this.doorSide(door, by);
+    const dir = door.horiz ? { x: 0, z: -side } : { x: -side, z: 0 };
+    for (const a of this.actors) {
+      if (!a.alive) continue;
+      const d = Math.hypot(a.x - x, a.z - z);
+      if (d > 6.5) continue;
+      const onFarSide = (a.x - x) * dir.x + (a.z - z) * dir.z >= -0.4;
+      if (!onFarSide && a.kind === 'player') continue;
+      const k = 1 - d / 7;
+      if (a.kind === 'suspect' || a.kind === 'civ') {
+        a.stun = Math.max(a.stun, 4 + 4 * k); a.path = null; a.moving = false;
+        if (d < 3.2 && a.kind === 'suspect') this.damage(a, 45 * k, by, false);
+        if (a.alive && (a.kind === 'civ' || this.rng() < 0.72)) this.surrender(a);
+      } else if (a.kind === 'officer' && d < 2.5) {
+        a.stun = Math.max(a.stun, 0.8);
+      }
+    }
+    return true;
+  }
+  togglePower(by: Actor = this.player): boolean {
+    if (!this.level.breaker) return false;
+    this.powerOn = !this.powerOn;
+    this.events.push({ t: 'power', on: this.powerOn });
+    this.events.push({ t: 'info', text: this.powerOn ? 'Power restored.' : 'Building power cut! Use NVG (N) or Flashlight (T).' });
+    const o = this.officers.find(m => m.alive);
+    if (o && !this.powerOn) this.say(o, 'Power is out — switching to optics.');
+    void by;
+    return true;
   }
 
   // ---------- combat ----------
-  /** A player made a sound (e.g. landing after a jump). */
   playerNoise(p: Actor, radius: number) { this.noise(p.x, p.z, radius); }
   private noise(x: number, z: number, radius: number) {
     for (const s of this.suspects) if (s.active && !s.surrendered && Math.hypot(s.x - x, s.z - z) < radius) { if (s.alertT <= 0) s.lastSeen = { x, z }; s.alertT = Math.max(s.alertT, 8); }
   }
-  fire(by: Actor, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, dmg: number) {
-    const h = this.ray(ox, oy, oz, dx, dy, dz, 70, by);
-    this.events.push({ t: 'shot', by, x: ox, y: oy, z: oz, x2: h.x, y2: h.y, z2: h.z, hit: h.kind });
+  fire(by: Actor, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, dmg: number, opts: boolean | { nonLethal?: boolean; taser?: boolean } = false, taserArg = false) {
+    const nonLethal = typeof opts === 'boolean' ? opts : !!opts.nonLethal;
+    const taser = typeof opts === 'boolean' ? taserArg : !!opts.taser;
+    const maxD = taser ? 9.5 : 70;
+    const h = this.ray(ox, oy, oz, dx, dy, dz, maxD, by, !taser);
+    if (taser) this.events.push({ t: 'taser', x: ox, y: oy, z: oz, x2: h.x, y2: h.y, z2: h.z });
+    else this.events.push({ t: 'shot', by, x: ox, y: oy, z: oz, x2: h.x, y2: h.y, z2: h.z, hit: h.kind });
     by.lastShotT = this.time; by.hasFired = true; this.stats.shotsFired += by.kind === 'suspect' ? 0 : 1;
-    this.noise(ox, oz, 20);
-    if (by.kind !== 'suspect') for (const c of this.civs) if (c.active && !c.surrendered && Math.hypot(c.x - ox, c.z - oz) < 12 && this.rng() < 0.2) c.panicT = 0;
-    if (h.actor) this.damage(h.actor, dmg * (h.head ? 3 : 1), by, h.head);
+    if (!taser) this.noise(ox, oz, 20);
+    if (by.kind !== 'suspect' && !taser) for (const c of this.civs) if (c.active && !c.surrendered && Math.hypot(c.x - ox, c.z - oz) < 12 && this.rng() < 0.2) c.panicT = 0;
+    if (h.actor) this.damage(h.actor, dmg * (h.head && !nonLethal ? 3 : 1), by, h.head && !nonLethal, nonLethal);
     return h;
   }
   private aiFire(a: Actor, tg: Actor, spread: number, dmg: number) {
@@ -260,7 +440,7 @@ export class Sim {
     if (a.ammo <= 0) { a.reloadT = 2.2; a.ammo = 30; return; }
     const ty = tg.down ? 0.8 : tg.kind === 'player' && tg.prone ? 0.3 : tg.kind === 'player' && tg.crouch ? 0.9 : 1.2;
     let dx = tg.x - a.x, dy = ty - 1.4, dz = tg.z - a.z; const d = Math.hypot(dx, dy, dz); dx /= d; dy /= d; dz /= d;
-    if (a.kind === 'officer') { // never shoot through friends or innocents
+    if (a.kind === 'officer') {
       for (const o of this.actors) {
         if (o === a || o === tg || !o.alive || (o.kind === 'suspect' && !o.down)) continue;
         const t = (o.x - a.x) * dx + (o.z - a.z) * dz; if (t < 0 || t > d + 1.5) continue;
@@ -272,9 +452,26 @@ export class Sim {
     a.ammo--; a.burst++; a.fireCd = a.burst >= 3 ? (a.burst = 0, 0.4 + this.rng() * 0.4) : 0.11;
     this.fire(a, a.x + dx * 0.4, 1.4, a.z + dz * 0.4, dx / n, dy / n, dz / n, dmg);
   }
-  damage(a: Actor, dmg: number, by: Actor, head: boolean) {
+  damage(a: Actor, dmg: number, by: Actor, head: boolean, nonLethal = false) {
     if (!a.alive) return;
-    if (a.kind === 'officer') dmg *= 0.42; if (a.kind === 'player') dmg *= [0.25, 0.36, 0.55][this.difficulty] ?? 0.36;
+    if (a.kind === 'officer') dmg *= 0.42;
+    if (a.kind === 'player') {
+      dmg *= [0.25, 0.36, 0.55][this.difficulty] ?? 0.36;
+      if (a.shield && Math.abs(angDiff(a.yaw, yawTo(by.x - a.x, by.z - a.z))) < 1.15) {
+        dmg *= 0.25;
+      }
+    }
+    if (nonLethal) {
+      this.stats.nonLethalHits++;
+      a.hp = Math.max(15, a.hp - dmg * 0.35);
+      this.events.push({ t: 'hurt', a, head: false });
+      if (a.kind === 'suspect' || a.kind === 'civ') {
+        a.stun = Math.max(a.stun, 5.0);
+        a.fakeSurrender = false;
+        this.surrender(a);
+      }
+      return;
+    }
     a.hp -= dmg; this.events.push({ t: 'hurt', a, head });
     if (a.kind !== 'player') this.events.push({ t: 'bark', a, kind: a.hp <= 0 ? 'die' : 'pain' });
     const police = by.kind === 'player' || by.kind === 'officer';
@@ -283,7 +480,7 @@ export class Sim {
       if (a.kind === 'suspect') { this.stats.suspectsKilled++; if (police && (a.down || (!a.hostile && !a.hasFired && a.firstChallengeT === Infinity))) { this.stats.unauthorized++; this.events.push({ t: 'info', text: 'Unauthorized force: suspect shot without warning' }); } }
       if (a.kind === 'civ') { this.stats.civsKilled++; if (police) { this.stats.civsKilledByPolice++; this.events.push({ t: 'info', text: 'A civilian was killed by police!' }); } }
       if (a.kind === 'officer') { this.stats.officersDown++; const m = this.officers.find(o => o.alive && o.team === a.team) ?? this.officers.find(o => o.alive); if (m) this.say(m, `${a.name} is down!`); }
-      if (a.kind === 'player') { if (!this.players.some(p => p.alive)) this.finish(false); else this.events.push({ t: 'info', text: `${a.name} is down!` }); }
+      if (a.kind === 'player') { if (!this.players.some(p => p.alive)) this.finish(false, 'All officers down.'); else this.events.push({ t: 'info', text: `${a.name} is down!` }); }
       if (a.claimedBy) { a.claimedBy.cuff = null; a.claimedBy = null; }
       return;
     }
@@ -293,9 +490,12 @@ export class Sim {
     }
     if (a.kind === 'officer' && a.hp < 45 && this.rng() < 0.5) this.say(a, "I'm hit!");
   }
-  private surrender(a: Actor) {
+  private surrender(a: Actor, allowFake = false) {
     if (a.surrendered) return;
     a.surrendered = true; a.armed = false; a.path = null; a.moving = false; a.target = null; a.unwatchedT = 0;
+    if (allowFake && a.kind === 'suspect' && a.morale > 0.65 && this.rng() < 0.2) {
+      a.fakeSurrender = true; a.fakeT = 3.2 + this.rng() * 2.5;
+    }
     this.events.push({ t: 'surrender', a }); this.events.push({ t: 'bark', a, kind: 'surrender' });
   }
   /** Compliance check when police shout at someone. */
@@ -308,16 +508,17 @@ export class Sim {
     let p = a.rolls < 2 ? (1 - a.morale) * 0.85 : 0; a.rolls++;
     p += bonus; if (a.stun > 0.5) p += 0.5; if (a.hp < 60) p += 0.25;
     if (this.time - a.lastShotT < 1) p -= 0.2;
-    if (this.rng() < p) this.surrender(a); else a.alertT = 8;
+    if (this.rng() < p) this.surrender(a, true); else a.alertT = 8;
   }
   playerShout(p: Actor = this.player) {
     const f = fwd(p.yaw); this.events.push({ t: 'shout', a: p }); let n = 0;
+    const zoeBonus = this.officers[3]?.alive && dist(this.officers[3], p) < 8 ? 0.12 : 0;
     for (const a of this.actors) {
       if ((a.kind !== 'suspect' && a.kind !== 'civ') || !a.active || a.surrendered) continue;
       const dx = a.x - p.x, dz = a.z - p.z, d = Math.hypot(dx, dz);
       if (d > 14 || !this.los(p.x, p.z, a.x, a.z)) continue;
       if (d > 3 && (dx * f.x + dz * f.z) / d < 0.25) continue;
-      this.challenge(a, 0.05); n++;
+      this.challenge(a, 0.05 + zoeBonus); n++;
     }
     this.noise(p.x, p.z, 9);
     return n;
@@ -330,7 +531,11 @@ export class Sim {
     for (const g of this.grenades) {
       g.t -= dt; g.vy -= 9.8 * dt;
       const nx = g.x + g.vx * dt, nz = g.z + g.vz * dt;
-      const blk = (x: number, z: number) => { const c = this.cell(Math.floor(x), Math.floor(z)); return this.opaqueCell(Math.floor(x), Math.floor(z)) || (c === LOW && g.y < 0.85); };
+      const blk = (x: number, z: number) => {
+        const cx = Math.floor(x), cz = Math.floor(z), c = this.cell(cx, cz);
+        if (c === WINDOW && g.y >= 0.9 && g.y <= 2.3) { this.breakWindow(cx, cz); return false; }
+        return this.opaqueCell(cx, cz) || (c === LOW && g.y < 0.85);
+      };
       if (blk(nx, g.z)) g.vx *= -0.35; else g.x = nx;
       if (blk(g.x, nz)) g.vz *= -0.35; else g.z = nz;
       g.y += g.vy * dt; if (g.y < 0.06) { g.y = 0.06; g.vy *= -0.3; g.vx *= 0.6; g.vz *= 0.6; }
@@ -341,20 +546,22 @@ export class Sim {
   }
   private detonate(x: number, z: number) {
     this.events.push({ t: 'bang', x, z }); this.noise(x, z, 25);
+    for (const w of this.level.windows) {
+      if (Math.hypot(w.x - x, w.z - z) < 4.5) this.breakWindow(Math.floor(w.x), Math.floor(w.z));
+    }
     for (const a of this.actors) {
       if (!a.alive) continue; const d = Math.hypot(a.x - x, a.z - z);
       if (d > 9 || !this.los(x, z, a.x, a.z)) continue;
       const k = 1 - d / 10;
       if (a.kind === 'player') { const facing = Math.abs(angDiff(a.yaw, yawTo(x - a.x, z - a.z))) < 1.2; a.flash = Math.max(a.flash, facing ? k : k * 0.4); }
       else if (a.kind === 'officer') a.stun = Math.max(a.stun, 1.5 * k);
-      else { a.stun = Math.max(a.stun, 2.5 + 4.5 * k); a.path = null; a.moving = false; if (a.kind === 'civ' || this.rng() < 0.45) this.surrender(a); }
+      else { a.stun = Math.max(a.stun, 2.5 + 4.5 * k); a.path = null; a.moving = false; a.fakeSurrender = false; if (a.kind === 'civ' || this.rng() < 0.45) this.surrender(a); }
     }
   }
 
   // ---------- speech ----------
   say(a: Actor, text: string, shout = false) { this.events.push({ t: 'say', a, text, shout }); }
   private lead(team: Team) { return this.officers.find(o => o.alive && o.team === team); }
-  /** Living officers that act on the group's order (an officer with an order of their own is not counted in the team). */
   members(g: Grp) { return typeof g === 'string' ? this.officers.filter(o => o.alive && o.team === g && !o.solo) : g.alive ? [g] : []; }
   private st(g: Grp) { return typeof g === 'string' ? this.teams[g] : g.solo!; }
   private idx(m: Actor) { return m.solo ? 0 : m.ti; }
@@ -403,7 +610,6 @@ export class Sim {
       const x0 = room.x + 1.5, x1 = room.x + room.w - 1.5, z0 = room.z + 1.5, z1 = room.z + room.h - 1.5;
       const ix = Math.min(1.5, (x1 - x0) / 3), iz = Math.min(1.5, (z1 - z0) / 3);
       for (const [x, z] of [[x0 + ix, z0 + iz], [x1 - ix, z0 + iz], [x0 + ix, z1 - iz], [x1 - ix, z1 - iz]]) {
-        // keep points within ~9 m of the door for huge rooms
         let q = { x, z }; const dd = dist(q, beyond); if (dd > 9) q = { x: beyond.x + ((x - beyond.x) * 9) / dd, z: beyond.z + ((z - beyond.z) * 9) / dd };
         const n = nearestWalkable(this.level, q.x, q.z, 3); if (n) pts.push(n);
       }
@@ -450,7 +656,7 @@ export class Sim {
     const groups: Grp[] = one ? [soloOrder ? one : one.team] : cmd.team === 'ALL' ? ['A', 'B'] : [cmd.team];
     for (const g of groups) {
       const team = typeof g === 'string' ? g : g.team;
-      if (typeof g === 'string') { if (soloOrder) for (const o of this.officers) if (o.team === g) o.solo = null; } // a team order brings everyone back into the team
+      if (typeof g === 'string') { if (soloOrder) for (const o of this.officers) if (o.team === g) o.solo = null; }
       else if (!g.solo) g.solo = { order: { type: 'follow', phase: 0, t: 0, leader: by } };
       const lead = typeof g === 'string' ? this.lead(g) : g; if (!lead) continue; any = true;
       const off = !one && cmd.team === 'ALL' && team === 'B' ? this.officers.filter(o => o.alive && o.team === 'A').length : 0, T = this.st(g);
@@ -469,17 +675,25 @@ export class Sim {
           set({ type: 'move', phase: 0, t: 0, pts, face: tg.face }); this.events.push({ t: 'marker', x: tg.p.x, z: tg.p.z, team });
           reply(lead, tag + ({ left: 'Moving left.', right: 'Moving right.', forward: 'Moving up.', back: 'Falling back.', there: 'Moving to that position.' } as const)[cmd.dir ?? 'forward']); break;
         }
-        case 'stack': case 'breach': case 'bang': case 'open': case 'close': {
+        case 'stack': case 'breach': case 'bang': case 'c2': case 'open': case 'close': case 'peek': case 'wedge': {
           const door = this.aimedDoor(by);
-          if (!door && typeof g !== 'string' && cmd.action === 'bang' && aim && dist(g, aim) > 2.5 && this.los(g.x, g.z, aim.x, aim.z)) { // no door: one officer throws it where the player aims
-            const d = dist(g, aim), dx = (aim.x - g.x) / d, dz = (aim.z - g.z) / d; g.yaw = Math.atan2(dx, dz) ; this.throwBang(g.x + dx * 0.4, 1.4, g.z + dz * 0.4, dx, 0.1, dz, Math.min(11, 3 + d * 0.9)); reply(g, 'Flashbang out!'); break;
+          if (!door && typeof g !== 'string' && cmd.action === 'bang' && aim && dist(g, aim) > 2.5 && this.los(g.x, g.z, aim.x, aim.z)) {
+            const d = dist(g, aim), dx = (aim.x - g.x) / d, dz = (aim.z - g.z) / d; g.yaw = Math.atan2(dx, dz); this.throwBang(g.x + dx * 0.4, 1.4, g.z + dz * 0.4, dx, 0.1, dz, Math.min(11, 3 + d * 0.9)); reply(g, 'Flashbang out!'); break;
           }
           if (!door) { reply(lead, tag + "I don't see a door."); break; }
           const side = this.doorSide(door, by), pts = this.stackPts(door, side, off, count);
           const c = { x: door.cx + 0.5, z: door.cz + 0.5 }; this.events.push({ t: 'marker', x: c.x, z: c.z, team });
           if (cmd.action === 'stack') { set({ type: 'stack', phase: 0, t: 0, pts, door, side }); reply(lead, tag + 'Stacking up on the door.'); }
+          else if (cmd.action === 'peek') { set({ type: 'peek', phase: 0, t: 0, pts, door, side }); reply(lead, tag + 'Checking under the door.'); }
+          else if (cmd.action === 'wedge') { set({ type: 'door', phase: 0, t: 0, pts, door, side, open: false, prev: { type: 'wedge' as any, phase: 0, t: 0 } }); reply(lead, tag + 'Wedging the door.'); }
           else if (cmd.action === 'open' || cmd.action === 'close') { set({ type: 'door', phase: 0, t: 0, pts, door, side, open: cmd.action === 'open' }); reply(lead, tag + (cmd.action === 'open' ? 'Opening the door.' : 'Closing the door.')); }
-          else { set({ type: 'breach', phase: 0, t: 0, pts, door, side, off, bang: cmd.action === 'bang' }); reply(lead, tag + (cmd.action === 'bang' ? 'Bang and clear!' : 'Breaching!')); }
+          else { set({ type: 'breach', phase: 0, t: 0, pts, door, side, off, bang: cmd.action === 'bang', c2: cmd.action === 'c2' }); reply(lead, tag + (cmd.action === 'c2' ? 'Setting C2 charge!' : cmd.action === 'bang' ? 'Bang and clear!' : 'Breaching!')); }
+          break;
+        }
+        case 'defuse': {
+          if (!this.bomb || this.bomb.defused) { reply(lead, tag + 'No active bomb to defuse.'); break; }
+          set({ type: 'defuse', phase: 0, t: 0, pts: [{ x: this.bomb.x, z: this.bomb.z }] });
+          reply(lead, tag + 'Moving to defuse the bomb!');
           break;
         }
         case 'restrain': {
@@ -514,21 +728,53 @@ export class Sim {
   private updateGroup(g: Grp, dt: number) {
     const T = this.st(g), o = T.order, mem = this.members(g), tag = typeof g === 'string' ? `Team ${g}: ` : '', alone = typeof g !== 'string'; if (!mem.length) return;
     o.t += dt;
-    // officers cuff anyone who has given up nearby without being told (otherwise civilians run off again)
     if ((o.type === 'follow' || o.type === 'hold' || o.type === 'cover' || o.type === 'move') && Math.floor(this.time * 2) !== Math.floor((this.time - dt) * 2) && !mem.some(m => m.target)) {
       const had = mem.filter(m => m.cuff).length; if (this.assignCuffs(g, 7) > had && this.time - (T.cuffSay ?? -99) > 6) { T.cuffSay = this.time; this.say(mem[0], tag + 'Securing them.'); }
     }
     const arrived = () => mem.every(m => dist(m, o.pts![this.idx(m)] ?? m) < 0.7);
     if (o.type === 'door') {
-      if (arrived() || o.t > 6) { this.setDoor(o.door!, !!o.open); T.order = { type: 'stack', phase: 0, t: 0, pts: o.pts, door: o.door, side: o.side }; }
+      if (arrived() || o.t > 6) {
+        if (o.prev && (o.prev.type as string) === 'wedge') {
+          this.setDoor(o.door!, false, false, true);
+          this.wedgeDoor(o.door!, mem[0]);
+        } else {
+          this.setDoor(o.door!, !!o.open, o.open && o.door!.locked);
+        }
+        T.order = { type: 'stack', phase: 0, t: 0, pts: o.pts, door: o.door, side: o.side };
+      }
+    } else if (o.type === 'peek') {
+      if (arrived() || o.t > 6) {
+        this.peekDoor(o.door!, mem[0]);
+        T.order = { type: 'stack', phase: 0, t: 0, pts: o.pts, door: o.door, side: o.side };
+      }
+    } else if (o.type === 'defuse') {
+      if (!this.bomb || this.bomb.defused) {
+        T.order = { type: 'hold', phase: 0, t: 0, pts: mem.map(m => ({ x: m.x, z: m.z })) };
+      } else if (dist(mem[0], this.bomb) < 1.3) {
+        this.bomb.defuseT += dt;
+        if (this.bomb.defuseT >= 3.5) {
+          this.bomb.defused = true;
+          this.events.push({ t: 'bomb', kind: 'defused', x: this.bomb.x, z: this.bomb.z });
+          this.say(mem[0], tag + 'Bomb defused!');
+          T.order = { type: 'hold', phase: 0, t: 0, pts: mem.map(m => ({ x: m.x, z: m.z })) };
+        }
+      }
     } else if (o.type === 'breach') {
       const door = o.door!, c = { x: door.cx + 0.5, z: door.cz + 0.5 }, side = o.side!;
+      const breacher = mem.find(m => m.role === 'Breacher');
+      const prepDelay = o.c2 ? (breacher ? 0.55 : 0.8) : o.bang ? 1.45 : 0.45;
       if (o.phase === 0 && (arrived() || o.t > 6)) {
-        o.phase = 1; o.t = 0; this.setDoor(door, true, !o.bang);
-        if (o.bang) { const d = door.horiz ? { x: 0, z: -side } : { x: -side, z: 0 }; this.grenades.push({ x: c.x + d.x * 0.7, y: 1.0, z: c.z + d.z * 0.7, vx: d.x * 5.5, vy: 1, vz: d.z * 5.5, t: 1.3 }); this.events.push({ t: 'throw', x: c.x, z: c.z }); this.say(mem[0], 'Flashbang out!'); }
-      } else if (o.phase === 1 && alone && o.bang && o.t > 1.45) { // one officer told to throw a flashbang stays at the door instead of going in alone
+        o.phase = 1; o.t = 0;
+        if (o.c2) {
+          const ok = this.c2Door(door, breacher ?? mem[0]);
+          if (!ok) this.setDoor(door, true, true);
+        } else {
+          this.setDoor(door, true, !o.bang);
+          if (o.bang) { const d = door.horiz ? { x: 0, z: -side } : { x: -side, z: 0 }; this.grenades.push({ x: c.x + d.x * 0.7, y: 1.0, z: c.z + d.z * 0.7, vx: d.x * 5.5, vy: 1, vz: d.z * 5.5, t: 1.3 }); this.events.push({ t: 'throw', x: c.x, z: c.z }); this.say(mem[0], 'Flashbang out!'); }
+        }
+      } else if (o.phase === 1 && alone && o.bang && o.t > prepDelay) {
         T.order = { type: 'stack', phase: 0, t: 0, pts: o.pts, door, side };
-      } else if (o.phase === 1 && o.t > (o.bang ? 1.45 : 0.45)) {
+      } else if (o.phase === 1 && o.t > prepDelay) {
         const count = alone ? 1 : Math.max(2, this.officers.filter(m => m.team === (g as Team)).length);
         o.phase = 2; o.t = 0; o.pts = this.clearPts(door, side, o.off ?? 0, count);
         for (const m of mem) { m.path = null; m.goal = null; }
@@ -544,12 +790,13 @@ export class Sim {
   }
 
   private pickThreat(o: Actor): Actor | null {
+    const range = o.role === 'Marksman' ? 48 : 40;
     let best: Actor | null = null, bd = 1e9;
     for (const s of this.suspects) {
       if (!s.alive || s.down || !s.armed) continue;
-      const d = dist(o, s); if (d > 40 || d >= bd) continue;
+      const d = dist(o, s); if (d > range || d >= bd) continue;
       const recent = this.time - s.lastShotT < 2.5;
-      if (recent ? this.los(o.x, o.z, s.x, s.z) : this.sees(o, s, 40, 3.4)) { bd = d; best = s; }
+      if (recent ? this.los(o.x, o.z, s.x, s.z) : this.sees(o, s, range, 3.4)) { bd = d; best = s; }
     }
     return best;
   }
@@ -560,10 +807,15 @@ export class Sim {
     const th = o.target;
     if (th && th.alive && !th.down) {
       const want = yawTo(th.x - o.x, th.z - o.z); o.yaw = turn(o.yaw, want, 10 * dt); o.moving = false;
-      if (this.time - th.challengeT > 2.5) { this.say(o, 'Police! Drop the weapon!', true); this.challenge(th, dist(o, th) < 8 ? 0.05 : 0); if (th.down) return; }
+      if (this.time - th.challengeT > 2.5) {
+        const bonus = (dist(o, th) < 8 ? 0.05 : 0) + (o.role === 'Negotiator' ? 0.18 : 0);
+        this.say(o, 'Police! Drop the weapon!', true);
+        this.challenge(th, bonus);
+        if (th.down) return;
+      }
       const mayFire = th.hasFired || (T.fire === 'free' && (th.hostile || this.time - th.firstChallengeT > 0.9));
       if (Math.abs(angDiff(o.yaw, want)) < 0.12) o.aimT += dt; else o.aimT = 0;
-      if (mayFire && o.aimT > 0.22) this.aiFire(o, th, 0.035, 34);
+      if (mayFire && o.aimT > 0.22) this.aiFire(o, th, o.role === 'Marksman' ? 0.022 : 0.035, 34);
       return;
     }
     o.aimT = 0;
@@ -571,7 +823,18 @@ export class Sim {
       const c = o.cuff;
       if (!c.alive || c.restrained || !c.surrendered) { c.claimedBy = null; o.cuff = null; }
       else if (dist(o, c) > 1.0) { this.goTo(o, c.x, c.z, dt, 1, 0.95); return; }
-      else { o.moving = false; o.yaw = turn(o.yaw, yawTo(c.x - o.x, c.z - o.z), 8 * dt); o.cuffT += dt; if (o.cuffT > 2) { this.restrain(c, o); o.cuff = null; o.cuffT = 0; } return; }
+      else {
+        o.moving = false; o.yaw = turn(o.yaw, yawTo(c.x - o.x, c.z - o.z), 8 * dt);
+        o.cuffT += dt;
+        const needT = o.role === 'Negotiator' ? 1.3 : 2.0;
+        if (o.cuffT > needT) { this.restrain(c, o); o.cuff = null; o.cuffT = 0; }
+        return;
+      }
+    }
+    // Proactive bomb callout if close
+    if (this.bomb && !this.bomb.defused && dist(o, this.bomb) < 8 && this.los(o.x, o.z, this.bomb.x, this.bomb.z) && this.time - o.lastCallT > 18) {
+      o.lastCallT = this.time;
+      this.say(o, `Eyes on the bomb! ${Math.ceil(this.bomb.time)} seconds left!`);
     }
     let dest: Pt | null = null, face: number | null = null;
     const p = this.leaderOf(ord.type === 'restrain' && ord.prev ? ord.prev : ord);
@@ -579,15 +842,15 @@ export class Sim {
     else if (ord.type === 'cover') { const ang = [-0.9, 0.9, -1.5, 1.5][o.ti % 4] ?? 0; dest = this.trailPoint(1.1 + o.ti * 0.85, p); face = p.yaw + Math.PI + ang; if (dist(o, p) < 1.4 + o.ti * 0.55 && !o.path) dest = null; }
     else if (ord.pts) { dest = ord.pts[this.idx(o)] ?? ord.pts[0]; face = ord.face ?? null; }
     if (ord.type === 'breach' && ord.phase === 1) { dest = null; }
-    if ((ord.type === 'stack' || ord.type === 'door' || (ord.type === 'breach' && ord.phase < 2)) && ord.door) face = yawTo(ord.door.cx + 0.5 - o.x, ord.door.cz + 0.5 - o.z);
+    if ((ord.type === 'stack' || ord.type === 'door' || ord.type === 'peek' || (ord.type === 'breach' && ord.phase < 2)) && ord.door) face = yawTo(ord.door.cx + 0.5 - o.x, ord.door.cz + 0.5 - o.z);
     const arrived = dest ? this.goTo(o, dest.x, dest.z, dt, ord.type === 'breach' && ord.phase === 2 ? 1.15 : 1) : (o.moving = false, true);
     if (arrived && face !== null) o.yaw = turn(o.yaw, face, 5 * dt);
     else if (arrived && (ord.type === 'follow') && dist(o, p) < 4) o.yaw = turn(o.yaw, p.yaw + (o.slot % 2 ? -0.5 : 0.5) * (o.slot > 1 ? 2.2 : 1), 3 * dt);
   }
   private restrain(c: Actor, by: Actor) {
-    c.restrained = true; c.surrendered = true; c.armed = false; c.claimedBy = null; this.events.push({ t: 'cuff', a: c, by });
+    c.restrained = true; c.surrendered = true; c.armed = false; c.fakeSurrender = false; c.claimedBy = null; this.events.push({ t: 'cuff', a: c, by });
     if (c.kind === 'suspect') this.stats.suspectsArrested++; else this.stats.civsSecured++;
-    if (by.kind === 'officer') this.say(by, c.kind === 'suspect' ? 'Suspect secured.' : 'Civilian secured.');
+    if (by.kind === 'officer') this.say(by, c.kind === 'suspect' ? 'Suspect secured.' : (c.vip ? 'VIP secured!' : 'Civilian secured.'));
   }
 
   private nearestPolice(s: Actor, range: number, fov: number): Actor | null {
@@ -607,9 +870,19 @@ export class Sim {
   private updateSuspect(s: Actor, dt: number) {
     if (s.stun > 0) { s.stun -= dt; s.moving = false; return; }
     if (s.surrendered) {
+      if (s.fakeSurrender && !s.claimedBy && !this.players.some(pl => pl.cuff === s)) {
+        s.fakeT -= dt;
+        const nearPolice = this.actors.find(o => (o.kind === 'player' || o.kind === 'officer') && o.alive && dist(o, s) < 7 && this.los(o.x, o.z, s.x, s.z));
+        if (s.fakeT <= 0 && nearPolice) {
+          s.fakeSurrender = false; s.surrendered = false; s.armed = true; s.hostile = true; s.alertT = 8; s.rolls = 2; s.react = 0.25;
+          this.events.push({ t: 'bark', a: s, kind: 'unrest' });
+          this.events.push({ t: 'info', text: 'Watch out — suspect faked surrender and pulled a concealed pistol!' });
+          return;
+        }
+      }
       const watched = this.actors.some(o => (o.kind === 'player' || o.kind === 'officer') && o.alive && dist(o, s) < 14 && this.los(o.x, o.z, s.x, s.z));
       s.unwatchedT = watched ? 0 : s.unwatchedT + dt;
-      if (s.unwatchedT > 10 && s.morale > 0.65 && !s.claimedBy) { s.surrendered = false; s.armed = true; s.unwatchedT = 0; s.alertT = 8; s.rolls = 2; this.events.push({ t: 'bark', a: s, kind: 'unrest' }); }
+      if (s.unwatchedT > 10 && s.morale > 0.65 && !s.claimedBy) { s.surrendered = false; s.fakeSurrender = false; s.armed = true; s.unwatchedT = 0; s.alertT = 8; s.rolls = 2; this.events.push({ t: 'bark', a: s, kind: 'unrest' }); }
       return;
     }
     s.percT -= dt; if (s.percT <= 0) { s.percT = 0.15; s.target = this.nearestPolice(s, 32, s.alertT > 0 ? 4.2 : 2.6); }
@@ -626,11 +899,12 @@ export class Sim {
     if (s.alertT > 0) {
       s.alertT -= dt;
       if (s.lastSeen) {
-        if (s.hunter && s.lostT > 1.2) { if (this.goTo(s, s.lastSeen.x, s.lastSeen.z, dt, 0.8, 0.8)) s.lastSeen = null; }
+        if (s.hunter && !s.hostage && s.lostT > 1.2) { if (this.goTo(s, s.lastSeen.x, s.lastSeen.z, dt, 0.8, 0.8)) s.lastSeen = null; }
         else { s.moving = false; s.yaw = turn(s.yaw, yawTo(s.lastSeen.x - s.x, s.lastSeen.z - s.z), 4 * dt); }
       } else s.moving = false;
       return;
     }
+    if (s.hostage) { s.moving = false; return; }
     s.timer -= dt;
     if (s.timer <= 0) { s.timer = 4 + this.rng() * 8; s.goal = null; s.path = null; s.lastSeen = this.rng() < 0.6 ? this.randomRoomPoint(s.room) : null; }
     if (s.lastSeen) { if (this.goTo(s, s.lastSeen.x, s.lastSeen.z, dt, 0.4)) s.lastSeen = null; } else s.moving = false;
@@ -638,7 +912,7 @@ export class Sim {
   private updateCiv(c: Actor, dt: number) {
     if (c.stun > 0) { c.stun -= dt; c.moving = false; return; }
     const police = (r: number) => this.actors.some(o => (o.kind === 'player' || o.kind === 'officer') && o.alive && dist(o, c) < r && this.los(o.x, o.z, c.x, c.z));
-    if (c.surrendered) { // on the knees, hands up – but without handcuffs they get up and run once nobody is watching
+    if (c.surrendered) {
       c.unwatchedT = c.claimedBy || this.players.some(pl => pl.cuff === c) || police(11) ? 0 : c.unwatchedT + dt;
       if (c.unwatchedT > 7) { c.surrendered = false; c.unwatchedT = 0; c.seeT = -4; c.panicT = 6 + this.rng() * 4; c.lastSeen = this.randomRoomPoint(Math.floor(this.rng() * this.level.rooms.length)); this.events.push({ t: 'bark', a: c, kind: 'panic' }); this.events.push({ t: 'info', text: 'A civilian without handcuffs ran off.' }); }
       return;
@@ -650,13 +924,20 @@ export class Sim {
       return;
     }
     c.moving = false; c.path = null;
-    // a civilian who sees the police close by gives up on their own: down on the knees, hands up
     c.seeT = police(8) ? c.seeT + dt : Math.min(0, c.seeT); if (c.seeT > 0.9) { c.seeT = 0; this.surrender(c); }
   }
 
   // ---------- player interaction ----------
-  interactTarget(p: Actor = this.player): { actor?: Actor; door?: Door } | null {
+  interactTarget(p: Actor = this.player): { actor?: Actor; door?: Door; breaker?: Pt; bomb?: BombState } | null {
     const f = fwd(p.yaw);
+    if (this.bomb && !this.bomb.defused) {
+      const dx = this.bomb.x - p.x, dz = this.bomb.z - p.z, d = Math.hypot(dx, dz);
+      if (d < 2.1 && (d < 0.8 || (dx * f.x + dz * f.z) / d > 0.5)) return { bomb: this.bomb };
+    }
+    if (this.level.breaker) {
+      const dx = this.level.breaker.x - p.x, dz = this.level.breaker.z - p.z, d = Math.hypot(dx, dz);
+      if (d < 2.1 && (d < 0.8 || (dx * f.x + dz * f.z) / d > 0.5)) return { breaker: this.level.breaker };
+    }
     let best: Actor | null = null, bd = 2.0;
     for (const a of this.actors) {
       if (!a.alive || !a.surrendered || a.restrained) continue;
@@ -674,42 +955,94 @@ export class Sim {
   playerUse(p: Actor = this.player) {
     if (!p.alive || this.over) return;
     const t = this.interactTarget(p); if (!t) return;
-    if (t.door) this.setDoor(t.door, t.door.target === 0);
+    if (t.bomb) { p.defusing = true; p.defuseT = 0; }
+    else if (t.breaker) this.togglePower(p);
+    else if (t.door) this.setDoor(t.door, t.door.target === 0);
     else if (t.actor) { if (t.actor.claimedBy) { t.actor.claimedBy.cuff = null; t.actor.claimedBy = null; } p.cuff = t.actor; p.cuffT = 0; }
   }
 
-  /** Call after removing a player (disconnect): fails the mission when nobody is left. */
-  checkPlayers() { if (!this.players.some(p => p.alive)) this.finish(false); }
-  private finish(win: boolean) { if (this.over) return; this.over = { win }; this.events.push({ t: 'end', win }); }
+  checkPlayers() { if (!this.players.some(p => p.alive)) this.finish(false, 'All officers down.'); }
+  private finish(win: boolean, reason?: string) { if (this.over) return; this.over = { win, reason }; this.events.push({ t: 'end', win }); }
   remaining() {
-    return { suspects: this.suspects.filter(s => s.alive && !s.restrained).length, civs: this.civs.filter(c => c.alive && !c.restrained).length };
+    return {
+      suspects: this.suspects.filter(s => s.alive && !s.restrained).length,
+      civs: this.civs.filter(c => c.alive && !c.restrained).length,
+      bomb: this.bomb && !this.bomb.defused ? Math.ceil(this.bomb.time) : 0,
+    };
   }
   score() {
-    const s = this.stats, ns = this.suspects.length, nc = this.civs.length, done = this.over?.win ? 1 : 0;
+    const s = this.stats, ns = Math.max(1, this.suspects.length), nc = Math.max(1, this.civs.length), done = this.over?.win ? 1 : 0;
     const parts = [
       { label: 'Mission completed', pts: 40 * done, max: 40 },
-      { label: `Suspects arrested alive (${s.suspectsArrested}/${ns})`, pts: Math.round((25 * s.suspectsArrested) / ns), max: 25 },
-      { label: `Civilians secured (${this.civs.filter(c => c.alive && c.restrained).length}/${nc})`, pts: Math.round((20 * this.civs.filter(c => c.alive && c.restrained).length) / nc), max: 20 },
+      { label: `Suspects arrested alive (${s.suspectsArrested}/${this.suspects.length})`, pts: Math.round((25 * s.suspectsArrested) / ns), max: 25 },
+      { label: `Civilians secured (${this.civs.filter(c => c.alive && c.restrained).length}/${this.civs.length})`, pts: Math.round((20 * this.civs.filter(c => c.alive && c.restrained).length) / nc), max: 20 },
       { label: `Team unharmed (${4 - s.officersDown}/4)`, pts: Math.round((15 * (4 - s.officersDown)) / 4), max: 15 },
       { label: `Unauthorized force (${s.unauthorized})`, pts: -10 * s.unauthorized, max: 0 },
       { label: `Civilians killed by police (${s.civsKilledByPolice})`, pts: -20 * s.civsKilledByPolice, max: 0 },
     ];
     const total = Math.max(0, Math.min(100, parts.reduce((a, p) => a + p.pts, 0)));
+    const letter = total >= 92 ? 'S' : total >= 80 ? 'A' : total >= 65 ? 'B' : total >= 45 ? 'C' : 'F';
     const rank = total >= 90 ? 'Commander' : total >= 75 ? 'Veteran' : total >= 55 ? 'Operator' : total >= 35 ? 'Recruit' : 'Failed';
-    return { parts, total, rank };
+    return { parts, total, letter, rank };
+  }
+  debriefNotes(): string[] {
+    const s = this.stats, notes: string[] = [];
+    if (!this.over?.win) {
+      notes.push(this.over?.reason ?? 'Operation aborted before all objectives were secured.');
+      return notes;
+    }
+    if (s.suspectsArrested === this.suspects.length && s.unauthorized === 0) {
+      notes.push('Textbook compliance: every suspect taken alive with zero unauthorized force.');
+    } else if (s.unauthorized > 0) {
+      notes.push(`Rule of engagement violation (${s.unauthorized}): challenge suspects, use flashbangs or non-lethal tools before firing.`);
+    } else if (s.suspectsKilled > s.suspectsArrested) {
+      notes.push('Heavy lethal force used — try Beanbag Shotgun, Taser, or C2 flashes to raise arrest scores.');
+    }
+    if (s.nonLethalHits > 0) notes.push(`Non-lethal tools deployed effectively (${s.nonLethalHits} hits).`);
+    if (s.c2Used > 0) notes.push(`Explosive C2 breaches cleared locked entryways (${s.c2Used} charges used).`);
+    if (this.bomb?.defused) notes.push(`Explosive device disarmed with ${Math.ceil(this.bomb.time)}s remaining.`);
+    if (s.officersDown === 0) notes.push('Full squad survived the operation.');
+    return notes;
   }
 
   update(dt: number) {
     if (this.over) { for (const d of this.level.doors) d.open += Math.max(-dt * 2.8, Math.min(dt * 2.8, d.target - d.open)); return; }
     this.time += dt;
     for (const d of this.level.doors) d.open += Math.max(-dt * 2.8, Math.min(dt * 2.8, d.target - d.open));
+    if (this.bomb && !this.bomb.defused) {
+      this.bomb.time -= dt;
+      if (this.bomb.time <= 60 && !this.bomb.warned60) {
+        this.bomb.warned60 = true;
+        this.events.push({ t: 'info', text: 'WARNING: 60 seconds until bomb detonation!' });
+      }
+      if (this.bomb.time <= 20 && !this.bomb.warned20) {
+        this.bomb.warned20 = true;
+        this.events.push({ t: 'info', text: 'CRITICAL: 20 seconds until detonation!' });
+      }
+      if (this.bomb.time <= 0) {
+        this.bomb.time = 0;
+        this.events.push({ t: 'bomb', kind: 'detonate', x: this.bomb.x, z: this.bomb.z });
+        this.finish(false, 'The bomb detonated!');
+        return;
+      }
+    }
     for (const p of this.players) {
-      // footsteps: running is heard far away, walking nearby; sneaking, crouching and crawling are silent
       if (p.alive) {
         p.nd += Math.hypot(p.x - p.nx, p.z - p.nz); p.nx = p.x; p.nz = p.z; p.nt += dt;
         if (p.nt >= 0.4) { const v = p.nd / p.nt; p.nd = 0; p.nt = 0; if (!p.prone && v < 9) { if (v > 4.4) this.noise(p.x, p.z, 12); else if (v > 2.4) this.noise(p.x, p.z, 6); } }
       }
       p.flash = Math.max(0, p.flash - dt * 0.22);
+      if (p.defusing) {
+        if (!p.alive || !this.bomb || this.bomb.defused || dist(p, this.bomb) > 2.4) { p.defusing = false; p.defuseT = 0; }
+        else {
+          p.defuseT += dt;
+          if (p.defuseT >= 3.2) {
+            this.bomb.defused = true; p.defusing = false; p.defuseT = 0;
+            this.events.push({ t: 'bomb', kind: 'defused', x: this.bomb.x, z: this.bomb.z });
+            this.events.push({ t: 'info', text: 'Bomb defused!' });
+          }
+        }
+      }
       if (p.cuff) {
         const c = p.cuff;
         if (!p.alive || !c.alive || c.restrained || !c.surrendered || dist(c, p) > 2.3) p.cuff = null;
@@ -723,12 +1056,10 @@ export class Sim {
       if (a.restrained) continue;
       if (a.kind === 'officer') this.updateOfficer(a, dt); else if (a.kind === 'suspect') this.updateSuspect(a, dt); else if (a.kind === 'civ') this.updateCiv(a, dt);
     }
-    // separation
     const A = this.actors;
     for (let i = 0; i < A.length; i++) for (let j = i + 1; j < A.length; j++) {
       const a = A[i], b = A[j]; if (!a.alive || !b.alive) continue;
       const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz), min = a.r + b.r; if (d >= min || d < 1e-5) continue;
-      // someone kneeling or cuffed shuffles out of the way of police, so they can never block a doorway
       const pa = a.kind === 'player' || a.kind === 'officer', pb = b.kind === 'player' || b.kind === 'officer';
       if ((a.down && pb && !b.down) || (b.down && pa && !a.down)) { const k = a.down ? a : b, o = a.down ? b : a; this.giveWay(k, o); if (o.kind === 'officer' && dist(k, o) < min) { const e = Math.hypot(o.x - k.x, o.z - k.z) || 1, q = (min - e) * 0.5; o.x += ((o.x - k.x) / e) * q; o.z += ((o.z - k.z) / e) * q; this.resolve(o); } continue; }
       const fa = a.kind === 'player' || a.down ? 0 : 1, fb = b.kind === 'player' || b.down ? 0 : 1; if (!fa && !fb) { if (a.kind === 'player') { a.x -= (dx / d) * (min - d); a.z -= (dz / d) * (min - d); this.resolve(a); } continue; }
@@ -738,6 +1069,10 @@ export class Sim {
     }
     this.updateGrenades(dt);
     this.checkT -= dt;
-    if (this.checkT <= 0) { this.checkT = 0.5; const r = this.remaining(); if (r.suspects === 0 && r.civs === 0) this.finish(true); }
+    if (this.checkT <= 0) {
+      this.checkT = 0.5;
+      const r = this.remaining();
+      if (r.suspects === 0 && r.civs === 0 && (!this.bomb || this.bomb.defused)) this.finish(true);
+    }
   }
 }
