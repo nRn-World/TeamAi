@@ -11,3 +11,8 @@ Vehicle 3D Models — Licenses & Attributions
    Author: Innerscene (adapted via https://github.com/mohammedemara48-code/police-command)
    File: police_suv.glb
    License: CC0 1.0
+
+3. White four-door sedan (CC0 1.0 Universal — Public Domain)
+   Author: Innerscene (https://www.innerscene.com/tools/library/3d-parts/white-four-door-sedan-1f271353, adapted via https://github.com/mohammedemara48-code/police-command)
+   File: sedan_parked.glb
+   License: CC0 1.0
