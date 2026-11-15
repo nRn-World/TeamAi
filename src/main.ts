@@ -37,7 +37,7 @@ const WEAPONS = [
   { name: 'CARBINE', mag: 30, rate: 0.095, dmg: 34, auto: true, spread: 0.004, reload: 2.0, kick: 0.011 },
   { name: 'PISTOL', mag: 15, rate: 0.15, dmg: 26, auto: false, spread: 0.008, reload: 1.4, kick: 0.016 },
 ];
-const ORDER_LABEL: Record<string, string> = { follow: 'FOLLOWING', hold: 'HOLDING', move: 'MOVING', cover: 'COVERING YOU', stack: 'AT DOOR', breach: 'STORMAR', door: 'DOOR', restrain: 'SECURING' };
+const ORDER_LABEL: Record<string, string> = { follow: 'FOLLOWING', hold: 'HOLDING', move: 'MOVING', cover: 'COVERING YOU', stack: 'AT DOOR', breach: 'BREACHING', door: 'DOOR', restrain: 'SECURING' };
 
 class Game {
   renderer: THREE.WebGLRenderer; scene = new THREE.Scene(); camera = new THREE.PerspectiveCamera(74, 1, 0.06, 120);
@@ -49,7 +49,7 @@ class Game {
   state: 'menu' | 'play' | 'pause' | 'end' = 'menu'; mission = 0; seed = 1;
   yaw = 0; pitch = 0; keys = new Set<string>(); mouseDown = false; eye = 1.62; bob = 0; stepAcc = 0; recoil = 0; vmKick = 0; sway = new THREE.Vector2();
   weapon = 0; ammo = [30, 15]; reserve = [150, 60]; fireCd = 0; reloadT = 0; semiLock = false; torchOn = true; mapOn = true;
-  selTeam: Team | 'ALL' = 'ALL'; lastTeam: Team | 'ALL' = 'ALL'; typing = false; dmgFx = 0; hitFx = 0; hudT = 0; last = performance.now(); mapBase: HTMLCanvasElement | null = null; endT = 0; parsedT = 0;
+  selTeam: Team | 'ALL' = 'ALL'; lastTeam: Team | 'ALL' = 'ALL'; lastWho: number | null = null; typing = false; dmgFx = 0; hitFx = 0; hudT = 0; last = performance.now(); mapBase: HTMLCanvasElement | null = null; endT = 0; parsedT = 0;
 
   constructor() {
     const canvas = $<HTMLCanvasElement>('c');
@@ -62,7 +62,7 @@ class Game {
     this.voice.onFinal = t => this.heard(t, true); this.voice.onInterim = t => { $('heard').textContent = '« ' + t + ' … »'; this.parsedT = Math.max(this.parsedT, 3); };
     this.voice.onState = (s, d) => this.micState(s, d);
     this.voice.onIgnored = t => { // heard an order while V was not held: tell the player instead of silently dropping it
-      if (this.state !== 'play' || !t || !parseCommand(t, this.lastTeam)) return;
+      if (this.state !== 'play' || !t || !parseCommand(t, this.lastTeam, this.lastWho)) return;
       $('heard').textContent = '« ' + t + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'HOLD V WHILE YOU SPEAK – the order was not sent'; this.parsedT = 5; this.audio.fail();
     };
     this.applySettings();
@@ -230,7 +230,7 @@ class Game {
     this.views.clear(); for (const a of sim.actors) { if (a === sim.player) continue; const v = new ActorView(a); this.views.set(a, v); this.scene.add(v.root); }
     this.scene.add(this.camera); this.camera.add(this.torch); this.torch.position.set(0.15, -0.1, 0); this.camera.add(this.torch.target); this.torch.target.position.set(0, 0, -1);
     this.yaw = sim.player.yaw; this.pitch = 0; this.weapon = 0; this.ammo = [30, 15]; this.reserve = [150, 60]; this.reloadT = 0; this.fireCd = 0; this.recoil = 0; this.dmgFx = 0; this.endT = 0;
-    this.selTeam = this.lastTeam = 'ALL'; this.state = 'play'; this.last = performance.now(); $('log').innerHTML = ''; $('heard').textContent = ''; $('parsed').textContent = '';
+    this.selTeam = this.lastTeam = 'ALL'; this.lastWho = null; this.state = 'play'; this.last = performance.now(); $('log').innerHTML = ''; $('heard').textContent = ''; $('parsed').textContent = '';
     this.buildMap(); show('menu', false); show('hud', true); this.updateHud(true);
     if (S.mic && !AUTO) this.voice.start();
     if (mp && !document.pointerLockElement) this.log('Click in the game to take control of the mouse.', 'warn');
@@ -304,7 +304,7 @@ class Game {
       $('heard').textContent = '« ' + text.split('|')[0].trim() + ' »'; const q = $('parsed'); q.className = 'bad'; q.textContent = 'Ignored – the team was talking at the same time (say it again)'; this.parsedT = 4; return;
     }
     const alts = text.split('|').map(s => s.trim()).filter(Boolean); let cmd: Command | null = null;
-    for (const a of alts) { cmd = parseCommand(a, this.lastTeam); if (cmd) break; }
+    for (const a of alts) { cmd = parseCommand(a, this.lastTeam, this.lastWho); if (cmd) break; }
     $('heard').textContent = '« ' + alts[0] + ' »'; this.parsedT = 4;
     const p = $('parsed');
     if (!cmd) { p.className = 'bad'; p.textContent = 'No order recognised'; this.audio.fail(); return; }
@@ -313,11 +313,11 @@ class Game {
   exec(cmd: Command, byKey: boolean) {
     const sim = this.sim!; const p = $('parsed'); p.className = ''; this.parsedT = 4;
     if (cmd.action === 'shout') { p.textContent = ACTION_LABEL.shout; this.shout(byKey); return; }
-    const tname = cmd.team === 'ALL' ? 'ALL' : 'TEAM ' + cmd.team;
+    const one = cmd.who != null ? sim.officers[cmd.who] : null, tname = one ? one.name.toUpperCase() : cmd.team === 'ALL' ? 'ALL' : 'TEAM ' + cmd.team;
     p.textContent = `${tname} › ${ACTION_LABEL[cmd.action]}${cmd.action === 'move' && cmd.dir ? ' ' + DIR_LABEL[cmd.dir] : ''}`;
-    this.lastTeam = cmd.team; this.selTeam = cmd.team;
+    this.lastTeam = cmd.team; this.selTeam = cmd.team; this.lastWho = cmd.who ?? null;
     if (this.mirror) this.net.send({ t: 'cmd', cmd, aim: this.aimPoint() });
-    const ok = this.mirror ? true : sim.command(cmd, this.aimPoint()); if (ok) this.audio.ok(); else { this.audio.fail(); this.log('Nobody on that team can answer.', 'warn'); }
+    const ok = this.mirror ? true : sim.command(cmd, this.aimPoint()); if (ok) this.audio.ok(); else { this.audio.fail(); this.log(one ? `${one.name} is down.` : 'Nobody on that team can answer.', 'warn'); }
     this.updateHud(true);
   }
   aimDir() { const cp = Math.cos(this.pitch); return new THREE.Vector3(-Math.sin(this.yaw) * cp, Math.sin(this.pitch), -Math.cos(this.yaw) * cp); }
@@ -365,7 +365,7 @@ class Game {
       }
       case 'hurt': this.views.get(e.a)?.wound(); if (e.a === p) { this.dmgFx = 1; this.audio.hurt(); this.recoil += 0.03; } else if (e.a.kind !== 'officer') { /* hit marker only for own shots handled below */ } break;
       case 'death': if (e.a !== p) { fx.burst(e.a.x, 1.1, e.a.z, 26, 0x8a0f0f, 2.6, 8, 0.7); fx.burst(e.a.x, 0.5, e.a.z, 14, 0x6a0808, 1.4, 6, 0.9); } if (e.a.kind === 'officer') this.log(`${e.a.name} has been killed.`, 'warn'); break;
-      case 'door': { const q = this.pan(e.door.cx + 0.5, e.door.cz + 0.5); this.audio.door(q.d, q.pan); break; }
+      case 'door': { const q = this.pan(e.door.cx + 0.5, e.door.cz + 0.5); this.audio.door(q.d, q.pan, e.open, !!e.kick); break; }
       case 'say': {
         const o = e.a; this.log(`${o.name}: ${e.text.replace(/^Team [AB]: /, '')}`, o.team);
         // an order to both teams gives one spoken reply, not the same sentence twice
@@ -457,7 +457,7 @@ class Game {
     let html = '';
     for (const t of ['A', 'B'] as Team[]) {
       const T = sim.teams[t]; html += `<div class="tcard ${t} ${this.selTeam === t || this.selTeam === 'ALL' ? 'sel' : ''}"><h4>TEAM ${t}<span>${ORDER_LABEL[T.order.type]}${T.fire === 'hold' ? ' · HOLD FIRE' : ''}</span></h4>`;
-      for (const o of sim.officers.filter(o => o.team === t)) html += `<div class="mem ${o.alive ? '' : 'dead'}">${o.name}<i><u style="width:${o.hp}%;background:${o.hp > 60 ? '#5fe08a' : o.hp > 30 ? '#f2c14e' : '#e04848'}"></u></i></div>`;
+      for (const o of sim.officers.filter(o => o.team === t)) html += `<div class="mem ${o.alive ? '' : 'dead'}"><span>${o.name}${o.solo && o.alive ? `<em>${ORDER_LABEL[o.solo.order.type]}</em>` : ''}</span><i><u style="width:${o.hp}%;background:${o.hp > 60 ? '#5fe08a' : o.hp > 30 ? '#f2c14e' : '#e04848'}"></u></i></div>`;
       html += '</div>';
     }
     $('team').innerHTML = html;

@@ -78,3 +78,11 @@ The first-person view shows animated gloved arms from «Animated FPS hands (rifl
 ## Aiming and civilians
 
 Hold the right mouse button to zoom in and aim: the field of view narrows, the weapon comes up to the eye, the mouse slows down and the spread shrinks. Civilians who see the police close by kneel on their own with their hands up. Without handcuffs they get up and run when no officer has seen them for about seven seconds. The teams therefore cuff everyone nearby who has given up, without a separate order.
+
+## Officers by name
+
+The four officers have names: **Ken** and **Maya** are Team A, **Jack** and **Zoe** are Team B (`OFFICER_NAMES` in `src/sim/sim.ts`). An order that starts with a name goes to that officer alone — «Ken, you cover us», «Maya, go in», «Jack, throw flash», «Zoe, hold here» — and a following «you …» keeps addressing the same officer. The parser (`src/sim/commands.ts`, `NAMES`) also accepts common mis-hearings such as «Kenny» or «Zoey». In the sim the officer gets `Actor.solo`, an order of their own that runs through the same code as a team order (`updateGroup`); any new order to the team clears it. «Throw flash» at a door throws through the door and the officer then waits there; with no door in sight it is thrown at the spot the player aims at.
+
+## Door sounds
+
+Doors use recordings from Kenney's «RPG Audio» pack (CC0, `public/sfx/door-*.mp3`, sources in `public/sfx/LICENSE.txt`): latch and swing when opening, sometimes a hinge creak, the leaf meeting the frame when closing, and a slowed slam with a low thump when a team kicks a door in on «breach». Distance lowers and muffles them (`GameAudio.door`).

@@ -19,7 +19,27 @@ const cases: [string, string][] = [
   ['Police! Get on the ground!', 'ALL shout'], ['show me your hands', 'ALL shout'], ['team b wait', 'B hold'], ['alpha sitrep', 'A report'], ['bravo bang and clear', 'B bang'], ['team a secure them', 'A restrain'],
 ];
 for (const [t, exp] of cases) { const c = parseCommand(t); const got = c ? [c.team, c.action, c.dir].filter(Boolean).join(' ') : 'null'; ok(got === exp, `parse "${t}" => ${got} (expected ${exp})`); }
-console.log('parser cases:', cases.length);
+const named: [string, string, number?][] = [
+  ['Ken, you cover us', 'A cover 0'], ['Ken throw flash', 'A bang 0'], ['Maya go in', 'A breach 1'], ['Jack you protect me', 'B cover 2'], ['zoey hold here', 'B hold 3'],
+  ['you go in', 'A breach 0', 0], ['you protect us', 'B cover 3', 3], ['you cover me', 'ALL cover'], ['Kenny follow me', 'A follow 0'], ['team b follow me', 'B follow', 0], ['Jack, flashbang', 'B bang 2'], ['Zoe cuff him', 'B restrain 3'],
+];
+for (const [t, exp, last] of named) { const c = parseCommand(t, 'ALL', last ?? null); const got = c ? [c.team, c.action, c.dir, c.who].filter(v => v != null).join(' ') : 'null'; ok(got === exp, `parse "${t}" => ${got} (expected ${exp})`); }
+{ // one officer on an order of their own, then back into the team
+  const sim = new Sim(0, 5), [ken, maya] = sim.officers, p = sim.player;
+  ok(ken.name === 'Ken' && sim.officers[3].name === 'Zoe', 'officers have names');
+  sim.command({ team: 'A', action: 'hold', who: 0 });
+  ok(!!ken.solo && ken.solo.order.type === 'hold' && !maya.solo && sim.teams.A.order.type === 'follow', 'solo order leaves the team order alone');
+  const k0 = { x: ken.x, z: ken.z }, m0 = { x: maya.x, z: maya.z };
+  for (let i = 0, a = p.yaw; i < 240; i++) { (sim as any).checkT = 9; p.x += Math.sin(a) * 0.03; p.z += Math.cos(a) * 0.03; if (sim.solidCell(Math.floor(p.x), Math.floor(p.z))) { p.x -= Math.sin(a) * 0.03; p.z -= Math.cos(a) * 0.03; a += 1.3; } sim.update(1 / 30); }
+  ok(Math.hypot(ken.x - k0.x, ken.z - k0.z) < 1, 'Ken holds while the others follow');
+  ok(Math.hypot(maya.x - m0.x, maya.z - m0.z) > 0.5, 'Maya keeps following');
+  sim.command({ team: 'A', action: 'cover', who: 1 }); ok(maya.solo?.order.type === 'cover', 'Maya covers alone');
+  sim.command({ team: 'A', action: 'follow' }); ok(!ken.solo && !maya.solo, 'a team order brings them back');
+  const g0 = sim.grenades.length; sim.command({ team: 'B', action: 'bang', who: 2 }, { x: sim.officers[2].x + 3, z: sim.officers[2].z });
+  console.log('solo flash without a door: grenades', sim.grenades.length - g0, 'order', sim.officers[2].solo?.order.type);
+  ken.alive = false; ok(!sim.command({ team: 'A', action: 'follow', who: 0 }), 'a dead officer cannot take orders');
+}
+console.log('parser cases:', cases.length + named.length);
 
 // ---- headless bot playthrough ----
 function play(mission: number, seed: number, verbose = false) {

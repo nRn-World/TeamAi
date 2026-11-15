@@ -76,7 +76,7 @@
   <h2 id="briefTitle"></h2>
   <div class="briefgrid"><div class="plan"><canvas id="briefMap"></canvas><div class="planlbl">Floor plan · <i class="dotE"></i> entrance</div></div>
   <div><p id="briefText"></p><div id="briefFacts" class="facts"></div></div></div>
-  <div class="tips"><b>Say for example:</b> «Team A go left» · «Team B cover me» · «Everyone stack up on the door» · «Bravo bang and clear» · «Police! Drop the weapon!» · «Team A cuff them»</div>
+  <div class="tips"><b>Say for example:</b> «Team A go left» · «Team B cover me» · «Everyone stack up on the door» · «Bravo bang and clear» · «Ken, you cover us» · «Jack, throw flash» · «Police! Drop the weapon!» · «Team A cuff them»</div>
   <div class="row"><button id="btnBack">Back</button><button id="btnGo" class="primary">Begin operation</button></div>
 </div></div>
 
@@ -104,6 +104,7 @@
   <div class="note">Quick keys (selected team): <kbd>3</kbd> Follow <kbd>4</kbd> Hold <kbd>5</kbd> Move where I aim <kbd>6</kbd> Cover me <kbd>7</kbd> Stack up <kbd>8</kbd> Breach <kbd>9</kbd> Bang and clear <kbd>0</kbd> Secure</div>
   <h2>Voice commands</h2>
   <p>Hold <kbd>V</kbd> while you speak and release it when you are done (can be changed to «always on» in Settings). Start with the team you mean – <b>«Team A»</b> (also «Alpha», «red team»), <b>«Team B»</b> («Bravo», «blue team») or <b>«Everyone»</b> – then say what they should do. Without a team name the order goes to the team you last spoke to.</p>
+  <p>You can also give an order to <b>one officer by name</b>: Team A is <b>Ken</b> and <b>Maya</b>, Team B is <b>Jack</b> and <b>Zoe</b>. «Ken, you cover us» · «Maya, go in» · «Jack, throw flash» · «Zoe, hold here». After that «you …» keeps talking to the same officer («you go in»). The officer acts alone until the team gets a new order, for example «Team A follow me». «Throw flash» at a door is thrown through that door; without a door it is thrown where you aim.</p>
   <table class="cmds">
     <tr><td>«go left / right / forward / back»</td><td>Moves that way as seen from you</td></tr>
     <tr><td>«go over there»</td><td>Moves to the spot you are aiming at</td></tr>
@@ -158,6 +159,7 @@
     <ul class="credits">
       <li><div><b>The Free Firearm Sound Library</b><span>gunshots – recordings of real firearms</span></div><div class="by">Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney</div><div class="src">opengameart.org/content/the-free-firearm-sound-library</div><em>CC0</em></li>
       <li><div><b>Reload and handling sounds</b><span>«Gun Reload Sounds», «Gun Reload Sound Effects», «Handgun Reload Sound Effect», «Equipment Clicks III»</span></div><div class="by">SpringySpringo · BMacZero (Brian MacIntosh) · zer0_sol · LFA</div><div class="src">opengameart.org · cut and normalised in the project Turf War (github.com/madeyexz/turfwar, MIT)</div><em>CC0</em></li>
+      <li><div><b>RPG Audio</b><span>doors – recorded handle, latch, hinge creak and the door meeting its frame</span></div><div class="by">Kenney (kenney.nl)</div><div class="src">kenney.nl/assets/rpg-audio · mixed to mono and levelled</div><em>CC0</em></li>
       <li><div><b>Kokoro-82M</b><span>speech model behind every spoken line</span></div><div class="by">hexgrad · huggingface.co/hexgrad/Kokoro-82M</div><div class="src">Changes: shouted lines are sped up, compressed and given a room echo</div><em>Apache-2.0</em></li>
       <li><div><b>kokoro-onnx</b><span>runs the speech model</span></div><div class="by">thewh1teagle</div><em>MIT</em></li>
       <li><div><b>FFmpeg</b><span>audio processing</span></div><div class="by">the FFmpeg developers · ffmpeg.org</div><em>LGPL / GPL</em></li>

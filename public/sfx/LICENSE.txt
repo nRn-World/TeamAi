@@ -58,3 +58,8 @@ foley-click.mp3 ← clipload1.wav @ 0.02 s
 foley-latch.mp3 ← clipload2.wav @ 0.03 s
 foley-shell.mp3 ← ShotgunSounds/Subsequent Shells.mp3 @ 0.64 s
 foley-rack.mp3 ← ShotgunSounds/Rack.mp3 @ 0.6 s
+
+Doors (door-*): "RPG Audio" (1.0) by Kenney (www.kenney.nl), CC0 1.0 — https://kenney.nl/assets/rpg-audio
+Credit not required but given. Mixed to mono, short fades, peak-normalized to -6 dBFS, encoded to MP3.
+door-open-1/2 ← doorOpen_1/2.ogg · door-close-1/2/3 ← doorClose_1/2/4.ogg · door-slam ← doorClose_3.ogg
+door-creak-1/2 ← creak1/2.ogg · door-latch ← metalLatch.ogg

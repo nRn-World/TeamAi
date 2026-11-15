@@ -1,7 +1,8 @@
-// Weapon sounds are real recordings (public/sfx, CC0 – see public/sfx/LICENSE.txt); everything else is synthesized with WebAudio.
+// Weapon and door sounds are real recordings (public/sfx, CC0 – see public/sfx/LICENSE.txt); everything else is synthesized with WebAudio.
 export type Gun = 'rifle' | 'pistol' | 'smg';
 const SFX = ['shot-m4a1-1', 'shot-m4a1-2', 'shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3', 'shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3', 'shot-m1014-1', 'far-rifle', 'far-pistol', 'far-smg', 'far-sniper',
-  'foley-mag-out', 'foley-mag-in', 'foley-charge', 'foley-pistol-out', 'foley-pistol-in', 'foley-slide', 'foley-click', 'foley-bolt'];
+  'foley-mag-out', 'foley-mag-in', 'foley-charge', 'foley-pistol-out', 'foley-pistol-in', 'foley-slide', 'foley-click', 'foley-bolt',
+  'door-open-1', 'door-open-2', 'door-close-1', 'door-close-2', 'door-close-3', 'door-slam', 'door-creak-1', 'door-creak-2', 'door-latch'];
 const NEAR: Record<Gun, string[]> = { rifle: ['shot-m4a1-1', 'shot-m4a1-2'], pistol: ['shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3'], smg: ['shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3'] };
 // Voice levels. Every clip is measured when it is loaded and scaled to LINE_LEVEL (RMS of its voiced parts, dBFS), so a shouted
 // line is not louder than a spoken one – it only sounds shouted. CH_* even out what the radio / rough-voice filters add.
@@ -125,7 +126,14 @@ export class GameAudio {
   /** Weapon raised after switching. */
   draw() { if (!this.ctx) return; this.sample('foley-bolt', this.out(0.1, 0.7, false)); }
   step(vol = 0.25, pan = 0) { if (!this.ctx) return; const o = this.out(pan, vol * 4, false); this.burst(o, 0.07, 'lowpass', 500 + Math.random() * 200, 120, 1, 0.9); this.burst(o, 0.03, 'bandpass', 1800, 900, 1.5, 0.25); }
-  door(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 3 / (1 + dist * 0.12)); this.tone(o, 'sawtooth', 95, 150, 0.32, 0.12); this.burst(o, 0.12, 'lowpass', 600, 90, 1, 0.9, 0.3); }
+  /** Recorded door: handle and latch, the leaf swinging (sometimes a dry hinge), or the leaf meeting the frame. `kick` = forced open on a breach. */
+  door(dist: number, pan: number, open = true, kick = false) {
+    if (!this.ctx) return; const near = 1 / (1 + dist * 0.12), o = this.out(pan, (kick ? 1.5 : 1.9) * near), lp = Math.max(1100, 12000 - dist * 650), rate = 0.9 + Math.random() * 0.1, pick = (n: number) => 1 + Math.floor(Math.random() * n);
+    if (!this.sfx.has('door-open-1')) { this.tone(o, 'sawtooth', 95, 150, 0.32, 0.06); this.burst(o, 0.12, 'lowpass', 600, 90, 1, 0.45, 0.3); return; }
+    if (kick) { this.sample('door-slam', o, 1, 0.72, 0, lp); this.sample('door-close-' + pick(3), o, 0.7, 0.6, 0.015, lp); this.tone(o, 'sine', 82, 34, 0.22, 0.5); this.burst(o, 0.09, 'bandpass', 2200, 700, 0.8, 0.22); this.sample('door-creak-' + pick(2), o, 0.35, 0.9, 0.16, lp); }
+    else if (open) { this.sample('door-latch', o, 0.55, rate, 0, lp); this.sample('door-open-' + pick(2), o, 1, rate, 0.07, lp); if (Math.random() < 0.4) this.sample('door-creak-' + pick(2), o, 0.4, 0.72 + Math.random() * 0.15, 0.3, lp); }
+    else { if (Math.random() < 0.3) this.sample('door-creak-' + pick(2), o, 0.3, 0.8, 0, lp); this.sample('door-close-' + pick(3), o, 1, rate, 0.22, lp); }
+  }
   cuff() { if (!this.ctx) return; const o = this.out(0, 2.5, false); for (let i = 0; i < 6; i++) this.burst(o, 0.02, 'bandpass', 3500 + i * 250, 3000, 8, 0.6, i * 0.04); }
   bang(dist: number, pan: number, deaf: number) {
     if (!this.ctx) return; const o = this.out(pan, 1.0 / (1 + dist * 0.06));
