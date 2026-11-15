@@ -11,7 +11,20 @@
 
 <div id="hud" class="hidden">
   <div id="nvg" class="hidden"></div>
-  <div id="bodycam" class="hidden"><div class="bc-frame"></div><div class="bc-top"><div class="bc-rec">● REC · BODYCAM 04</div><div id="bcTime"></div><div>TEAMAI TAC-UNIT</div></div></div>
+  <div id="bodycam" class="hidden">
+    <div class="bc-frame"></div>
+    <div id="bcCensor"></div>
+    <div class="bc-top">
+      <div class="bc-rec">● REC · BODYCAM 04</div>
+      <div id="bcTime"></div>
+      <div id="bcSector">POLIS · KISTA SECTOR</div>
+      <div id="bcBpm">HR 78 BPM · TAC-AUDIO ON</div>
+    </div>
+  </div>
+  <div id="pipFrame" class="hidden">
+    <div class="pip-head"><span class="pip-dot">●</span><span id="pipLabel">HELMET CAM · KEN</span><small>P</small></div>
+    <div class="pip-scan"></div>
+  </div>
   <div id="cross"><i></i><i></i><i></i><i></i><b></b></div>
   <div id="hitmark"></div>
   <div id="dmg"></div><div id="flash"></div>
@@ -20,7 +33,7 @@
   <div id="vc" class="hidden"></div>
   <canvas id="minimap"></canvas>
   <div id="team"></div>
-  <div id="voice"><div id="microw"><span id="micdot"></span><span id="micstate">MIC OFF</span><span id="aibadge" class="hidden"></span></div><div id="heard"></div><div id="parsed"></div></div>
+  <div id="voice"><div id="microw"><span id="micdot"></span><span id="micstate">MIC OFF</span><span id="aibadge" class="hidden"></span></div><div id="radioCard" class="hidden"></div><div id="heard"></div><div id="parsed"></div></div>
   <div id="log"></div>
   <div id="prompt"></div>
   <div id="progress"><div></div></div>
@@ -28,6 +41,16 @@
   <div id="status"><div id="hpbar"><div></div></div><div id="hptxt">100</div></div>
   <div id="ammo"><div id="wname">CARBINE</div><div id="acount"><b>30</b> / 150</div><div id="bangs">◉◉◉</div></div>
   <div id="quick"></div>
+  <div id="dispatchPanel" class="hidden">
+    <div class="dp-head"><span>DISPATCH // CHAT CHAOS</span><button type="button" id="btnCloseDispatch">×</button></div>
+    <div class="dp-btns">
+      <button type="button" data-dp="blackout">Power Blackout</button>
+      <button type="button" data-dp="panic">Hostage Panic</button>
+      <button type="button" data-dp="rush">Suspect Flank</button>
+      <button type="button" data-dp="false_alarm">Burner Phone</button>
+    </div>
+    <div class="dp-vip"><input id="dpVipName" maxlength="14" placeholder="Chat VIP name..." /><button type="button" id="btnDpVip">Name VIP</button></div>
+  </div>
   <div id="cmdbox" class="hidden"><span>ORDER ›</span><input id="cmdinput" autocomplete="off" spellcheck="false" placeholder="e.g. Ken follow me, Maya peek that door, Team B C2" /></div>
   <div id="wheel" class="hidden"><div class="wring"><div class="wcenter"><span id="wTarget">ALL TEAMS</span><small>Click order</small></div></div></div>
 </div>
@@ -78,6 +101,7 @@
         </div>
       </div>
       <button id="btnStartMission" class="deploybtn">START MISSION</button>
+      <button id="btnDailyRaid" type="button" class="dailybtn"><span>DAILY RAID · IRONMAN</span><small id="dailyBestBadge"></small></button>
     </section>
 
     <section id="tabMp" class="atab hidden">
@@ -187,13 +211,24 @@
 
 <div id="pause" class="screen hidden"><div class="panel">
   <h2>Paused</h2>
-  <div class="col"><button id="btnResume" class="primary">Resume</button><button id="btnHelp2">Controls &amp; voice commands</button><button id="btnSettings2">Settings</button><button id="btnRestart">Restart mission</button><button id="btnMicRetry">Try starting the microphone again</button><button id="btnNewTab">Open the game in its own tab</button><button id="btnQuit">Quit to main menu</button></div>
+  <div class="col"><button id="btnResume" class="primary">Resume</button><button id="btnHelp2">Controls &amp; voice commands</button><button id="btnSettings2">Settings</button><button id="btnDispatchToggle">Dispatch / Chat Chaos (F8)</button><button id="btnRestart">Restart mission</button><button id="btnMicRetry">Try starting the microphone again</button><button id="btnNewTab">Open the game in its own tab</button><button id="btnQuit">Quit to main menu</button></div>
   <div id="micHelp" class="note"></div>
 </div></div>
 
-<div id="debrief" class="screen hidden"><div class="panel">
-  <h2 id="debTitle"></h2><div id="debRank"></div><table id="debTable"></table>
-  <div id="debNotes"></div>
+<div id="debrief" class="screen hidden"><div class="panel wide scroll">
+  <h2 id="debTitle"></h2><div id="debRank"></div>
+  <div id="debAwards" class="awards"></div>
+  <div class="debgrid">
+    <div>
+      <table id="debTable"></table>
+      <div id="debNotes"></div>
+    </div>
+    <div id="debReplayWrap" class="debreplay">
+      <div class="dr-head"><span>AFTER-ACTION REPLAY</span><span id="debReplayTime">0:00</span></div>
+      <canvas id="debMap"></canvas>
+      <div class="dr-ctrl"><button type="button" id="btnReplayToggle">Pause</button><button type="button" id="btnReplayRestart">Replay 8x</button></div>
+    </div>
+  </div>
   <div class="row"><button id="btnMenu">Main menu</button><button id="btnAgain">Play again</button><button id="btnNext" class="primary">Next mission</button></div>
 </div></div>
 
@@ -205,6 +240,7 @@
     <div><kbd>F</kbd> Open door / handcuff / breaker / defuse</div><div><kbd>G</kbd> Throw flashbang</div>
     <div><kbd>E</kbd> Optiwand peek door · <kbd>U</kbd> C2 charge</div><div><kbd>Y</kbd> Wedge door · <kbd>N</kbd> Night Vision (NVG)</div>
     <div><kbd>V</kbd> (hold) Talk to your team · <kbd>Q</kbd> Shout «Police! Drop the weapon!»</div><div><kbd>T</kbd> Flashlight · <kbd>K</kbd> Bodycam · <kbd>M</kbd> Map</div>
+    <div><kbd>P</kbd> Helmet Cam PiP · <kbd>F8</kbd> Dispatch / Chat Chaos</div>
     <div><kbd>B</kbd> Voice chat: microphone on/off (online)</div><div><kbd>H</kbd> Radial Command Wheel</div>
     <div><kbd>Enter</kbd> Type an order (if you have no microphone)</div><div><kbd>Tab</kbd> Choose team for the quick keys</div>
   </div>
@@ -260,6 +296,9 @@
     <label>I use headphones <select id="sHead"><option value="0">No (ignore the microphone while the team talks)</option><option value="1">Yes</option></select></label>
     <label>Graphics <select id="sQual"><option value="0">Low</option><option value="1">Medium</option><option value="2">High</option></select></label>
     <label>Difficulty <select id="sDiff"><option value="0">Easy</option><option value="1">Normal</option><option value="2">Hard</option></select></label>
+    <label>Streamer Mode (clean bodycam HUD) <select id="sStream"><option value="0">Off (standard tactical HUD)</option><option value="1">On (minimal HUD + Pro Bodycam telemetry)</option></select></label>
+    <label>Bodycam face censor <select id="sCensor"><option value="1">On (blur/redact faces in Bodycam)</option><option value="0">Off</option></select></label>
+    <label>Auto Helmet Cam PiP <select id="sPip"><option value="1">On (auto on breach/peek)</option><option value="0">Manual only (P key)</option></select></label>
   </div>
   </div>
   <div id="sPaneCred" class="hidden">

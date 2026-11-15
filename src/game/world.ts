@@ -327,7 +327,12 @@ export class LevelView {
           const pl = new THREE.PointLight(0xffdfb0, 16, 11, 1.5); pl.position.set(lx, 2.95, 21.35); g.add(pl);
         }
       }
-      addSign('EXIT', '#093818', '#52ff88', '#34e86a', 0.9, 0.3, 14.5, 2.52, 21.03);
+      addSign('EXIT · NÖDUTGÅNG', '#093818', '#52ff88', '#34e86a', 1.35, 0.3, 14.5, 2.52, 21.03);
+      addSign('KISTA TECH CENTER', '#0c1624', '#dbeafe', '#3b82f6', 3.4, 0.48, 15.0, 3.55, 22.32);
+      // Stockholm SL-style blue-white T-BANA KISTA metro totem on the sidewalk
+      g.add(box(0.14, 2.9, 0.14, darkSteel, 7.2, 1.45, 25.1));
+      addSign('T  KISTA', '#0a3a8a', '#ffffff', '#60a5fa', 1.7, 0.46, 7.2, 2.95, 25.18);
+      addSign('T  KISTA', '#0a3a8a', '#ffffff', '#60a5fa', 1.7, 0.46, 7.2, 2.95, 25.02, Math.PI);
       // Bollards + entrance planters & courtyard trees
       for (const bx of [10.4, 11.7, 12.8, 16.2]) addBollard(bx, 22.85);
       addShrub(10.5, 21.45); addShrub(17.4, 21.45);
@@ -722,6 +727,10 @@ export class ActorView {
         mat.map = T.labelTex(a.name.slice(0, 7), '#' + tcol.toString(16));
         mat.needsUpdate = true;
       }
+    }
+    if (a.kind !== 'officer' && a.kind !== 'player' && a.name !== 'Suspect' && a.name !== 'Civilian' && a.name !== 'VIP Hostage' && !this.label) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.labelTex(a.name.slice(0, 10), '#f2c14e'), transparent: true, depthWrite: false }));
+      sp.scale.set(0.46, 0.22, 1); sp.position.y = 2.05; this.root.add(sp); this.label = sp;
     }
     r.position.x = lerp(r.position.x, a.x, Math.min(1, dt * 25)); r.position.z = lerp(r.position.z, a.z, Math.min(1, dt * 25));
     let dy = a.yaw - r.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); r.rotation.y += dy * Math.min(1, dt * 14);

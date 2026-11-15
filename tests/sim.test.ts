@@ -368,6 +368,20 @@ ok(wins >= 4, 'bot should be able to win across missions');
     }
   }
   ok(placeFails === 0, `zero furniture/window/breaker/door/exterior placement defects across 60 builds (got ${placeFails})`);
+
+  // 10. Stream-quality features: Dispatch Director, Awards, S+ rank, Replay recording
+  const sDisp = new Sim(0, 1, 1);
+  sDisp.update(0.35);
+  ok(sDisp.replayFrames.length >= 1, 'replayFrames records initial tactical positions');
+  ok(sDisp.dispatchAction('blackout').includes('Power'), 'dispatch blackout executes cleanly');
+  ok(!sDisp.powerOn, 'dispatch blackout cuts building power');
+  ok(sDisp.dispatchAction('vip_name', 'StreamVIP').includes('StreamVIP'), 'dispatch vip_name renames an active subject');
+  ok(sDisp.actors.some(a => a.name === 'StreamVIP'), 'renamed actor visible in sim.actors');
+  ok(sDisp.dispatchAction('false_alarm').includes('pinged'), 'dispatch false_alarm triggers ambient phone event');
+  ok(sDisp.events.some(e => e.t === 'phone'), 'false_alarm emits phone event');
+  sDisp.over = { win: true, reason: 'Area secure' };
+  const aw = sDisp.awards();
+  ok(Array.isArray(aw) && aw.length >= 1 && !!aw[0].title, 'awards() generates tactical badges on win');
 }
 
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);

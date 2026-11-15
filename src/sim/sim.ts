@@ -41,17 +41,27 @@ export type Ev =
   | { t: 'c2'; x: number; z: number } | { t: 'glass'; x: number; z: number }
   | { t: 'break'; kind: 'pc' | 'server' | 'glass'; x: number; y: number; z: number }
   | { t: 'power'; on: boolean }
+  | { t: 'phone'; x: number; z: number }
   | { t: 'taser'; x: number; y: number; z: number; x2: number; y2: number; z2: number }
   | { t: 'bomb'; kind: 'defused' | 'detonate'; x: number; z: number }
   | { t: 'cuff'; a: Actor; by: Actor } | { t: 'surrender'; a: Actor } | { t: 'marker'; x: number; z: number; team: Team }
   | { t: 'bark'; a: Actor; kind: 'spot' | 'surrender' | 'pain' | 'die' | 'panic' | 'unrest' }
   | { t: 'info'; text: string } | { t: 'end'; win: boolean };
 
+export interface ReplayActor {
+  id: number; kind: Kind; team: Team; x: number; z: number; alive: boolean; down: boolean; restrained: boolean;
+}
+export interface ReplayFrame { t: number; actors: ReplayActor[]; }
+export interface ReplayEvent {
+  t: number; kind: 'shot' | 'bang' | 'c2' | 'death' | 'arrest' | 'bomb';
+  x: number; z: number; x2?: number; z2?: number; team?: Team;
+}
+
 export class Actor {
   x = 0; z = 0; yaw = 0; r = 0.3; hp = 100; alive = true; speed = 3.2;
   path: Pt[] | null = null; goal: Pt | null = null; repathT = 0; moving = false; stuckT = 0; walk = 0;
   stun = 0; surrendered = false; restrained = false; armed = false; morale = 0.5; rolls = 0; lastRoll = -9;
-  fakeSurrender = false; fakeT = 0; vip = false; hostage = false;
+  fakeSurrender = false; fakeT = 0; wasFake = false; vip = false; hostage = false;
   target: Actor | null = null; aimT = 0; fireCd = 0; burst = 0; ammo = 30; reloadT = 0; lastShotT = -9;
   hostile = false; hasFired = false; react = -1; alertT = 0; lastSeen: Pt | null = null; hunter = false; timer = 0; lostT = 0;
   challengeT = -9; firstChallengeT = Infinity; unwatchedT = 0; panicT = 0; seeT = 0; room = -1;
@@ -104,6 +114,7 @@ export interface Stats {
   shotsFired: number; suspectsKilled: number; suspectsArrested: number;
   civsSecured: number; civsKilled: number; civsKilledByPolice: number;
   officersDown: number; unauthorized: number; c2Used: number; nonLethalHits: number;
+  bangsUsed?: number;
 }
 
 export class Sim {
@@ -116,8 +127,16 @@ export class Sim {
   brokenDoorGlass = new Set<number>();
   powerOn = true;
   bomb: BombState | null = null;
-  stats: Stats = { shotsFired: 0, suspectsKilled: 0, suspectsArrested: 0, civsSecured: 0, civsKilled: 0, civsKilledByPolice: 0, officersDown: 0, unauthorized: 0, c2Used: 0, nonLethalHits: 0 };
+  stats: Stats = { shotsFired: 0, suspectsKilled: 0, suspectsArrested: 0, civsSecured: 0, civsKilled: 0, civsKilledByPolice: 0, officersDown: 0, unauthorized: 0, c2Used: 0, nonLethalHits: 0, bangsUsed: 0 };
   players: Actor[] = []; private checkT = 0;
+  replayFrames: ReplayFrame[] = [];
+  replayEvents: ReplayEvent[] = [];
+  private replayT = 0;
+  private banterT = -20;
+  private soloWarnT = -30;
+  private lowHpWarned = false;
+  private arrestStreak = 0;
+  private phoneT = 10;
 
   constructor(public mission: number, seed: number, public difficulty = 1, nPlayers = 1) {
     this.level = buildLevel(mission, seed); this.rng = mulberry32(seed + 99);
@@ -579,6 +598,7 @@ export class Sim {
     by.c2--;
     this.stats.c2Used++;
     const x = door.cx + 0.5, z = door.cz + 0.5;
+    this.replayEvents.push({ t: this.time, kind: 'c2', x, z });
     this.setDoor(door, true, true, true);
     this.events.push({ t: 'c2', x, z });
     this.events.push({ t: 'bang', x, z });
@@ -625,7 +645,10 @@ export class Sim {
     const maxD = taser ? 9.5 : 70;
     const h = this.ray(ox, oy, oz, dx, dy, dz, maxD, by, !taser);
     if (taser) this.events.push({ t: 'taser', x: ox, y: oy, z: oz, x2: h.x, y2: h.y, z2: h.z });
-    else this.events.push({ t: 'shot', by, x: ox, y: oy, z: oz, x2: h.x, y2: h.y, z2: h.z, hit: h.kind });
+    else {
+      this.events.push({ t: 'shot', by, x: ox, y: oy, z: oz, x2: h.x, y2: h.y, z2: h.z, hit: h.kind });
+      if (this.replayEvents.length < 800) this.replayEvents.push({ t: this.time, kind: 'shot', x: ox, z: oz, x2: h.x, z2: h.z, team: by.kind === 'officer' ? by.team : undefined });
+    }
     by.lastShotT = this.time; by.hasFired = true; this.stats.shotsFired += by.kind === 'suspect' ? 0 : 1;
     if (!taser) this.noise(ox, oz, 20);
     if (by.kind !== 'suspect' && !taser) for (const c of this.civs) if (c.active && !c.surrendered && Math.hypot(c.x - ox, c.z - oz) < 12 && this.rng() < 0.2) c.panicT = 0;
@@ -657,6 +680,10 @@ export class Sim {
       if (a.shield && Math.abs(angDiff(a.yaw, yawTo(by.x - a.x, by.z - a.z))) < 1.15) {
         dmg *= 0.25;
       }
+      if (a.hp - dmg < 35 && a.hp - dmg > 0 && !this.lowHpWarned) {
+        this.lowHpWarned = true;
+        this.banter("Lead's bleeding! Cover the boss!");
+      }
     }
     if (nonLethal) {
       this.stats.nonLethalHits++;
@@ -674,7 +701,12 @@ export class Sim {
     const police = by.kind === 'player' || by.kind === 'officer';
     if (a.hp <= 0) {
       a.alive = false; a.hp = 0; a.moving = false; a.path = null; this.events.push({ t: 'death', a });
-      if (a.kind === 'suspect') { this.stats.suspectsKilled++; if (police && (a.down || (!a.hostile && !a.hasFired && a.firstChallengeT === Infinity))) { this.stats.unauthorized++; this.events.push({ t: 'info', text: 'Unauthorized force: suspect shot without warning' }); } }
+      this.replayEvents.push({ t: this.time, kind: 'death', x: a.x, z: a.z });
+      if (a.kind === 'suspect') {
+        this.stats.suspectsKilled++;
+        if (a.wasFake && police) this.banter('Nice catch — he had a piece tucked!');
+        if (police && (a.down || (!a.hostile && !a.hasFired && a.firstChallengeT === Infinity))) { this.stats.unauthorized++; this.events.push({ t: 'info', text: 'Unauthorized force: suspect shot without warning' }); }
+      }
       if (a.kind === 'civ') { this.stats.civsKilled++; if (police) { this.stats.civsKilledByPolice++; this.events.push({ t: 'info', text: 'A civilian was killed by police!' }); } }
       if (a.kind === 'officer') { this.stats.officersDown++; const m = this.officers.find(o => o.alive && o.team === a.team) ?? this.officers.find(o => o.alive); if (m) this.say(m, `${a.name} is down!`); }
       if (a.kind === 'player') { if (!this.players.some(p => p.alive)) this.finish(false, 'All officers down.'); else this.events.push({ t: 'info', text: `${a.name} is down!` }); }
@@ -687,11 +719,18 @@ export class Sim {
     }
     if (a.kind === 'officer' && a.hp < 45 && this.rng() < 0.5) this.say(a, "I'm hit!");
   }
+  private banter(text: string, actor?: Actor) {
+    if (this.time - this.banterT < 12) return;
+    const o = actor && actor.alive ? actor : this.officers.find(m => m.alive);
+    if (!o) return;
+    this.banterT = this.time;
+    this.say(o, text);
+  }
   private surrender(a: Actor, allowFake = false) {
     if (a.surrendered) return;
     a.surrendered = true; a.armed = false; a.path = null; a.moving = false; a.target = null; a.unwatchedT = 0;
-    if (allowFake && a.kind === 'suspect' && a.morale > 0.65 && this.rng() < 0.2) {
-      a.fakeSurrender = true; a.fakeT = 3.2 + this.rng() * 2.5;
+    if (allowFake && a.kind === 'suspect' && a.morale > 0.56 && this.rng() < 0.26) {
+      a.fakeSurrender = true; a.wasFake = true; a.fakeT = 3.0 + this.rng() * 2.4;
     }
     this.events.push({ t: 'surrender', a }); this.events.push({ t: 'bark', a, kind: 'surrender' });
   }
@@ -721,6 +760,7 @@ export class Sim {
     return n;
   }
   throwBang(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, speed = 11) {
+    this.stats.bangsUsed = (this.stats.bangsUsed ?? 0) + 1;
     this.grenades.push({ x: ox, y: oy, z: oz, vx: dx * speed, vy: dy * speed + 1.5, vz: dz * speed, t: 1.5 });
     this.events.push({ t: 'throw', x: ox, z: oz });
   }
@@ -743,17 +783,20 @@ export class Sim {
   }
   private detonate(x: number, z: number) {
     this.events.push({ t: 'bang', x, z }); this.noise(x, z, 25);
+    this.replayEvents.push({ t: this.time, kind: 'bang', x, z });
     for (const w of this.level.windows) {
       if (Math.hypot(w.x - x, w.z - z) < 4.5) this.breakWindow(Math.floor(w.x), Math.floor(w.z));
     }
+    let flashedOfficer: Actor | null = null;
     for (const a of this.actors) {
       if (!a.alive) continue; const d = Math.hypot(a.x - x, a.z - z);
       if (d > 9 || !this.los(x, z, a.x, a.z)) continue;
       const k = 1 - d / 10;
       if (a.kind === 'player') { const facing = Math.abs(angDiff(a.yaw, yawTo(x - a.x, z - a.z))) < 1.2; a.flash = Math.max(a.flash, facing ? k : k * 0.4); }
-      else if (a.kind === 'officer') a.stun = Math.max(a.stun, 1.5 * k);
+      else if (a.kind === 'officer') { a.stun = Math.max(a.stun, 1.5 * k); if (d < 5.5 && !flashedOfficer) flashedOfficer = a; }
       else { a.stun = Math.max(a.stun, 2.5 + 4.5 * k); a.path = null; a.moving = false; a.fakeSurrender = false; if (a.kind === 'civ' || this.rng() < 0.45) this.surrender(a); }
     }
+    if (flashedOfficer) this.banter('Seriously boss?! My retinas!', flashedOfficer);
   }
 
   // ---------- speech ----------
@@ -1046,7 +1089,12 @@ export class Sim {
   }
   private restrain(c: Actor, by: Actor) {
     c.restrained = true; c.surrendered = true; c.armed = false; c.fakeSurrender = false; c.claimedBy = null; this.events.push({ t: 'cuff', a: c, by });
-    if (c.kind === 'suspect') this.stats.suspectsArrested++; else this.stats.civsSecured++;
+    this.replayEvents.push({ t: this.time, kind: 'arrest', x: c.x, z: c.z });
+    if (c.kind === 'suspect') {
+      this.stats.suspectsArrested++;
+      this.arrestStreak++;
+      if (this.arrestStreak >= 2 && by.kind === 'officer') this.banter('Textbook arrest, clean.', by);
+    } else this.stats.civsSecured++;
     if (by.kind === 'officer') this.say(by, c.kind === 'suspect' ? 'Suspect secured.' : (c.vip ? 'VIP secured!' : 'Civilian secured.'));
   }
 
@@ -1159,7 +1207,12 @@ export class Sim {
   }
 
   checkPlayers() { if (!this.players.some(p => p.alive)) this.finish(false, 'All officers down.'); }
-  private finish(win: boolean, reason?: string) { if (this.over) return; this.over = { win, reason }; this.events.push({ t: 'end', win }); }
+  private finish(win: boolean, reason?: string) {
+    if (this.over) return;
+    this.recordReplay();
+    this.over = { win, reason };
+    this.events.push({ t: 'end', win });
+  }
   remaining() {
     return {
       suspects: this.suspects.filter(s => s.alive && !s.restrained).length,
@@ -1178,9 +1231,73 @@ export class Sim {
       { label: `Civilians killed by police (${s.civsKilledByPolice})`, pts: -20 * s.civsKilledByPolice, max: 0 },
     ];
     const total = Math.max(0, Math.min(100, parts.reduce((a, p) => a + p.pts, 0)));
-    const letter = total >= 92 ? 'S' : total >= 80 ? 'A' : total >= 65 ? 'B' : total >= 45 ? 'C' : 'F';
+    const letter = total >= 98 && s.officersDown === 0 && s.unauthorized === 0 ? 'S+' : total >= 92 ? 'S' : total >= 80 ? 'A' : total >= 65 ? 'B' : total >= 45 ? 'C' : 'F';
     const rank = total >= 90 ? 'Commander' : total >= 75 ? 'Veteran' : total >= 55 ? 'Operator' : total >= 35 ? 'Recruit' : 'Failed';
     return { parts, total, letter, rank };
+  }
+  awards(): { title: string; desc: string }[] {
+    const s = this.stats, out: { title: string; desc: string }[] = [];
+    if (!this.over?.win) {
+      if (s.shotsFired > 50) out.push({ title: 'BLAZE OF GLORY', desc: `${s.shotsFired} rounds fired` });
+      return out;
+    }
+    if (s.suspectsArrested === this.suspects.length && s.unauthorized === 0) out.push({ title: 'TEXTBOOK ARREST', desc: '100% suspects arrested alive' });
+    if (s.shotsFired <= 4 && s.unauthorized === 0) out.push({ title: 'GHOST SQUAD', desc: 'Minimal gunfire & silent entry' });
+    else if (s.shotsFired >= 60) out.push({ title: 'TRIGGER HAPPY', desc: `${s.shotsFired} rounds expended` });
+    if ((s.bangsUsed ?? 0) >= 3) out.push({ title: 'FLASH MASTER', desc: `${s.bangsUsed} flashbangs deployed` });
+    if (s.nonLethalHits >= 2) out.push({ title: 'PACIFIST', desc: 'Non-lethal compliance pro' });
+    if (s.c2Used >= 2) out.push({ title: 'DOOR KICKER', desc: `${s.c2Used} C2 breaches` });
+    if (this.bomb?.defused) out.push({ title: 'BOMB TECH', desc: `${Math.ceil(this.bomb.time)}s left on clock` });
+    if (s.officersDown === 0) out.push({ title: 'NO ONE LEFT BEHIND', desc: 'Full squad survived' });
+    if (this.player.hp >= 95) out.push({ title: 'UNTOUCHABLE', desc: 'Took almost zero damage' });
+    return out.slice(0, 4);
+  }
+  dispatchAction(kind: 'blackout' | 'panic' | 'rush' | 'false_alarm' | 'vip_name', payload?: string): string {
+    if (this.over) return 'Operation already ended.';
+    if (kind === 'blackout') {
+      if (this.powerOn) {
+        this.powerOn = false;
+        this.events.push({ t: 'power', on: false });
+      }
+      this.events.push({ t: 'info', text: 'DISPATCH: Sector power grid failure!' });
+      return 'Power grid cut.';
+    }
+    if (kind === 'panic') {
+      let n = 0;
+      for (const c of this.civs) {
+        if (!c.alive || c.restrained) continue;
+        c.surrendered = false; c.panicT = 6; c.lastSeen = this.randomRoomPoint(c.room);
+        this.events.push({ t: 'bark', a: c, kind: 'panic' });
+        n++; if (n >= 2) break;
+      }
+      this.events.push({ t: 'info', text: 'DISPATCH: Hostage panic reported inside!' });
+      return 'Hostage panic triggered.';
+    }
+    if (kind === 'rush') {
+      const cand = this.suspects.filter(s => s.alive && !s.down).sort((a, b) => dist(a, this.player) - dist(b, this.player));
+      const s = cand[0];
+      if (!s) return 'No active suspects left.';
+      s.hunter = true; s.alertT = 14; s.lastSeen = { x: this.player.x, z: this.player.z };
+      this.events.push({ t: 'bark', a: s, kind: 'spot' });
+      this.events.push({ t: 'info', text: 'DISPATCH: Suspect flanking towards lead!' });
+      return 'Suspect flanking.';
+    }
+    if (kind === 'false_alarm') {
+      const rm = this.level.rooms[Math.floor(Math.random() * this.level.rooms.length)];
+      const px = rm ? rm.x + rm.w / 2 : this.player.x, pz = rm ? rm.z + rm.h / 2 : this.player.z;
+      this.events.push({ t: 'phone', x: px, z: pz });
+      this.events.push({ t: 'info', text: 'DISPATCH: Burner phone ringing inside the building!' });
+      return 'Caller pinged.';
+    }
+    if (kind === 'vip_name') {
+      const clean = String(payload || 'VIP').replace(/[<>&]/g, '').trim().slice(0, 14) || 'VIP';
+      const target = this.civs.find(c => c.vip && c.alive) ?? this.civs.find(c => c.alive) ?? this.suspects.find(s => s.alive);
+      if (!target) return 'No target available.';
+      target.name = clean;
+      this.events.push({ t: 'info', text: `DISPATCH: Subject identified as "${clean}".` });
+      return `Renamed subject to ${clean}.`;
+    }
+    return '';
   }
   debriefNotes(): string[] {
     const s = this.stats, notes: string[] = [];
@@ -1233,9 +1350,37 @@ export class Sim {
     }
   }
 
+  private recordReplay() {
+    if (this.replayFrames.length >= 1600) return;
+    this.replayFrames.push({
+      t: this.time,
+      actors: this.actors.map(a => ({
+        id: a.id, kind: a.kind, team: a.team, x: +a.x.toFixed(2), z: +a.z.toFixed(2),
+        alive: a.alive, down: a.down, restrained: a.restrained,
+      })),
+    });
+  }
+
   update(dt: number) {
     if (this.over) { this.stepDoors(dt); return; }
     this.time += dt;
+    this.replayT -= dt;
+    if (this.replayT <= 0) { this.replayT = 0.5; this.recordReplay(); }
+    if (this.time - this.soloWarnT > 35 && this.officers.some(o => o.alive)) {
+      const minD = Math.min(...this.officers.filter(o => o.alive).map(o => dist(o, this.player)));
+      if (minD > 15 && this.teams.A.order.type !== 'follow' && this.teams.B.order.type !== 'follow') {
+        this.soloWarnT = this.time;
+        this.banter('Command, lead went solo again...');
+      }
+    }
+    if (this.level.theme === 'office' || this.level.theme === 'bank' || this.level.theme === 'hotel') {
+      this.phoneT -= dt;
+      if (this.phoneT <= 0) {
+        this.phoneT = 16 + (Math.floor(this.time * 7) % 12);
+        const rm = this.level.rooms.find(r => r.spawn && Math.hypot(r.x + r.w / 2 - this.player.x, r.z + r.h / 2 - this.player.z) < 16);
+        if (rm) this.events.push({ t: 'phone', x: rm.x + rm.w / 2, z: rm.z + rm.h / 2 });
+      }
+    }
     this.stepDoors(dt);
     if (this.bomb && !this.bomb.defused) {
       this.bomb.time -= dt;
@@ -1249,6 +1394,7 @@ export class Sim {
       }
       if (this.bomb.time <= 0) {
         this.bomb.time = 0;
+        this.replayEvents.push({ t: this.time, kind: 'bomb', x: this.bomb.x, z: this.bomb.z });
         this.events.push({ t: 'bomb', kind: 'detonate', x: this.bomb.x, z: this.bomb.z });
         this.finish(false, 'The bomb detonated!');
         return;
@@ -1266,6 +1412,7 @@ export class Sim {
           p.defuseT += dt;
           if (p.defuseT >= 3.2) {
             this.bomb.defused = true; p.defusing = false; p.defuseT = 0;
+            this.replayEvents.push({ t: this.time, kind: 'bomb', x: this.bomb.x, z: this.bomb.z });
             this.events.push({ t: 'bomb', kind: 'defused', x: this.bomb.x, z: this.bomb.z });
             this.events.push({ t: 'info', text: 'Bomb defused!' });
           }
