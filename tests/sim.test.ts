@@ -1,6 +1,6 @@
 import { Sim, yawTo, fwd } from '../src/sim/sim';
 import { parseCommand, parseCommands, shouldUseAiBrain } from '../src/sim/commands';
-import { buildLocalReport, buildTacticalContext, isSwedishText } from '../src/sim/context';
+import { buildLocalReport, buildTacticalContext } from '../src/sim/context';
 import { findPath } from '../src/sim/nav';
 import { MISSIONS } from '../src/sim/level';
 import { encodeSnap, applySnap, encodeEv, decodeEv } from '../src/sim/netstate';
@@ -26,31 +26,45 @@ const named: [string, string, number?][] = [
 ];
 for (const [t, exp, last] of named) { const c = parseCommand(t, 'ALL', last ?? null); const got = c ? [c.team, c.action, c.dir, c.who].filter(v => v != null).join(' ') : 'null'; ok(got === exp, `parse "${t}" => ${got} (expected ${exp})`); }
 
-// ---- Swedish & compound / relay parser ----
-const svCases: [string, string][] = [
-  ['Lag A gå vänster', 'A move left'], ['Lag B täck mig', 'B cover'], ['Alla stanna', 'ALL hold'],
-  ['Maya bryt in', 'A breach 1'], ['Ken kasta flash', 'A bang 0'], ['Polis! Släpp vapnet!', 'ALL shout'],
-  ['Lag B säkra dem', 'B restrain'], ['Lag A lägesrapport', 'A report'], ['Öppna dörren Lag A', 'A open'],
-];
-for (const [t, exp] of svCases) { const c = parseCommand(t); const got = c ? [c.team, c.action, c.dir, c.who].filter(v => v != null).join(' ') : 'null'; ok(got === exp, `sv parse "${t}" => ${got} (expected ${exp})`); }
-
+// ---- compound, relay & dynamic team reassignment ----
 {
+  const j1 = parseCommand('Maya join Team B');
+  ok(!!j1 && j1.action === 'joinTeam' && j1.who === 1 && j1.team === 'B', 'Maya join Team B');
+  const j2 = parseCommand('put Jack on Team A');
+  ok(!!j2 && j2.action === 'joinTeam' && j2.who === 2 && j2.team === 'A', 'put Jack on Team A');
+  const j3 = parseCommand('you switch to Team B', 'A', 0);
+  ok(!!j3 && j3.action === 'joinTeam' && j3.who === 0 && j3.team === 'B', 'you switch to Team B');
+
+  const b0 = parseCommands('Ken follow me, Maya join Team B, team be cover me');
+  ok(
+    b0.commands.length === 3
+      && b0.commands[0].who === 0 && b0.commands[0].action === 'follow'
+      && b0.commands[1].who === 1 && b0.commands[1].action === 'joinTeam' && b0.commands[1].team === 'B'
+      && b0.commands[2].who == null && b0.commands[2].team === 'B' && b0.commands[2].action === 'cover',
+    'compound: Ken follow me, Maya join Team B, team be cover me',
+  );
+
   const b1 = parseCommands('Ken throw flash and Maya go in');
   ok(b1.commands.length === 2 && b1.commands[0].who === 0 && b1.commands[0].action === 'bang' && b1.commands[1].who === 1 && b1.commands[1].action === 'breach', 'compound English named');
-  const b2 = parseCommands('Lag A ställ upp vid dörren och Lag B täck mig');
-  ok(b2.commands.length === 2 && b2.commands[0].team === 'A' && b2.commands[0].action === 'stack' && b2.commands[1].team === 'B' && b2.commands[1].action === 'cover', 'compound Swedish');
+  const b2 = parseCommands('Team A stack up on the door and Team B cover me');
+  ok(b2.commands.length === 2 && b2.commands[0].team === 'A' && b2.commands[0].action === 'stack' && b2.commands[1].team === 'B' && b2.commands[1].action === 'cover', 'compound teams');
   const b3 = parseCommands('Ken, tell Team B to breach');
   ok(b3.relayFrom === 0 && b3.commands.length === 1 && b3.commands[0].team === 'B' && b3.commands[0].action === 'breach', 'English relay');
-  const b4 = parseCommands('Maya, säg till Lag B att stanna');
-  ok(b4.relayFrom === 1 && b4.commands.length === 1 && b4.commands[0].team === 'B' && b4.commands[0].action === 'hold', 'Swedish relay');
-  ok(shouldUseAiBrain('Ser ni några misstänkta i rummet?', parseCommands('Ser ni några misstänkta i rummet?')), 'question triggers AI brain');
+
+  ok(shouldUseAiBrain('Do you see any suspects in the next room?', parseCommands('Do you see any suspects in the next room?')), 'question triggers AI brain');
   ok(!shouldUseAiBrain('Team A follow me', parseCommands('Team A follow me')), 'short direct command stays fast');
-  ok(isSwedishText('Lag A gå vänster') && !isSwedishText('Team A go left'), 'Swedish text detection');
+
   const sim = new Sim(0, 5);
+  for (const cmd of b0.commands) sim.command(cmd);
+  ok(sim.officers[1].team === 'B' && sim.members('B').length === 3 && sim.members('A').length === 0, 'Maya moved to Team B while Ken stayed solo follow on A');
+  sim.command({ team: 'B', action: 'breach' });
+  sim.command({ team: 'A', action: 'follow' });
+  ok(sim.members('A').length === 1 && sim.members('A')[0].name === 'Ken', 'Team A now has only Ken');
+
   const ctx = buildTacticalContext(sim);
-  ok(ctx.includes('Ken (Team A') && ctx.includes('Zoe (Team B'), 'tactical context lists officers');
-  const repSv = buildLocalReport(sim, 'A', undefined, true);
-  ok(repSv.includes('2 uppe.'), 'Swedish local report');
+  ok(ctx.includes('Ken (Team A') && ctx.includes('Maya (Team B'), 'tactical context reflects Maya on Team B');
+  const repEn = buildLocalReport(sim, 'B');
+  ok(repEn.includes('3 up.'), 'English local report reflects 3 officers on Team B');
 }
 { // one officer on an order of their own, then back into the team
   const sim = new Sim(0, 5), [ken, maya] = sim.officers, p = sim.player;

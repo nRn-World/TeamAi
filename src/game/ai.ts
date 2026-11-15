@@ -4,13 +4,14 @@ import type { InitProgressReport, MLCEngineInterface } from '@mlc-ai/web-llm';
 import type { Action, Command, Dir, Sim, Team } from '../sim/sim';
 import { OFFICER_NAMES } from '../sim/sim';
 import { parseCommands } from '../sim/commands';
-import { buildLocalReport, buildTacticalContext, isSwedishText } from '../sim/context';
+import { buildLocalReport, buildTacticalContext } from '../sim/context';
 
 export const AI_MODELS = [
-  { id: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', label: 'Qwen 2.5 0.5B (~450 MB · Fast · EN/SV)' },
-  { id: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', label: 'Qwen 2.5 1.5B (~950 MB · Smarter · EN/SV)' },
-  { id: 'SmolLM2-360M-Instruct-q4f16_1-MLC', label: 'SmolLM2 360M (~280 MB · Lightest · EN)' },
-  { id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', label: 'Llama 3.2 1B (~600 MB · Balanced · EN)' },
+  { id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', label: 'Llama 3.2 1B (~880 MB · Fast & Sharp EN)' },
+  { id: 'gemma3-1b-it-q4f16_1-MLC', label: 'Gemma 3 1B (~710 MB · Fast EN)' },
+  { id: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', label: 'Qwen 2.5 1.5B (~1.6 GB · High Accuracy)' },
+  { id: 'Llama-3.2-3B-Instruct-q4f16_1-MLC', label: 'Llama 3.2 3B (~2.2 GB · Smartest EN)' },
+  { id: 'SmolLM2-360M-Instruct-q4f16_1-MLC', label: 'SmolLM2 360M (~380 MB · Lightest EN)' },
 ] as const;
 
 export type AiState = 'off' | 'loading' | 'ready' | 'unsupported' | 'error';
@@ -25,7 +26,7 @@ export interface AiResult {
 }
 
 const VALID_ACTIONS = new Set<Action>([
-  'follow', 'hold', 'move', 'cover', 'stack', 'breach', 'bang', 'open', 'close', 'restrain', 'fireFree', 'fireHold', 'report', 'shout',
+  'follow', 'hold', 'move', 'cover', 'stack', 'breach', 'bang', 'open', 'close', 'restrain', 'fireFree', 'fireHold', 'report', 'shout', 'joinTeam',
 ]);
 const VALID_DIRS = new Set<Dir>(['left', 'right', 'forward', 'back', 'there']);
 
@@ -47,9 +48,9 @@ function resolveTarget(raw: unknown): number | Team | 'ALL' | null {
   if (!s || s === 'null' || s === 'none') return null;
   const idx = OFFICER_NAMES.findIndex(n => s.includes(n.toLowerCase()));
   if (idx >= 0) return idx;
-  if (s === 'all' || s.includes('both') || s.includes('alla') || s.includes('everyone')) return 'ALL';
-  if (s === 'a' || s.includes('team a') || s.includes('lag a') || s.includes('alpha')) return 'A';
-  if (s === 'b' || s.includes('team b') || s.includes('lag b') || s.includes('bravo')) return 'B';
+  if (s === 'all' || s.includes('both') || s.includes('everyone')) return 'ALL';
+  if (s === 'a' || s.includes('team a') || s.includes('alpha')) return 'A';
+  if (s === 'b' || s.includes('team b') || s.includes('bravo')) return 'B';
   return null;
 }
 
@@ -65,41 +66,42 @@ function extractJson(text: string): any {
   }
 }
 
-const SYSTEM_PROMPT = `You are the tactical SWAT radio coordinator AI for a 3D tactical shooter.
-Your squad:
-- Team A: Ken (0), Maya (1)
-- Team B: Jack (2), Zoe (3)
+const SYSTEM_PROMPT = `You are the tactical SWAT radio coordinator AI for a 3D tactical shooter (English only).
+Your four SWAT officers:
+- Ken (slot 0), Maya (slot 1), Jack (slot 2), Zoe (slot 3).
+Check LIVE TACTICAL STATE to see which team (Team A or Team B) each officer is currently on.
 
-The player talks via microphone or text chat in English or Swedish.
-Understand what the player wants, use the LIVE TACTICAL STATE, issue valid squad commands, and respond concisely in-character over radio (in the same language as the player: Swedish or English).
+Understand everything the player says (via voice or text), translate tactical instructions into squad commands in order, answer questions accurately using LIVE TACTICAL STATE, and respond concisely in-character over radio in English.
+If the player asks an officer to join/switch to Team A or Team B, use action "joinTeam" with "team": "A" or "B" and "who": officer slot (0..3).
 If the player asks one officer/team to inform or relay something to another SWAT officer/team, set "relayTo" and "relayMsg" AND include the commands for the target team/officer.
 
 Output ONLY a single valid JSON object with this exact schema:
 {
   "speaker": "Ken|Maya|Jack|Zoe",
-  "reply": "short radio reply (max 22 words)",
+  "reply": "short in-character English radio reply (max 22 words)",
   "relayTo": "Ken|Maya|Jack|Zoe|Team A|Team B|ALL|null",
-  "relayMsg": "short relayed order/info to other SWAT or null",
+  "relayMsg": "short relayed message to other SWAT or null",
   "commands": [
-    { "team": "A|B|ALL", "who": 0|1|2|3|null, "action": "follow|hold|move|cover|stack|breach|bang|open|close|restrain|fireFree|fireHold|report|shout", "dir": "left|right|forward|back|there|null" }
+    { "team": "A|B|ALL", "who": 0|1|2|3|null, "action": "follow|hold|move|cover|stack|breach|bang|open|close|restrain|fireFree|fireHold|report|shout|joinTeam", "dir": "left|right|forward|back|there|null" }
   ]
 }
 
 Rules:
 - "action" MUST be one of the exact allowed values. Use "move" only with "dir".
-- Use "who" (0=Ken, 1=Maya, 2=Jack, 3=Zoe) when addressing one officer; otherwise null.
-- Keep "commands": [] if the player is only asking a question ("status?", "do you see enemies?", "var är ni?").
-- Never invent enemies or hostages that are not in LIVE TACTICAL STATE.
+- For "joinTeam", set "team" to the destination team ("A" or "B") and "who" to the officer slot (0=Ken, 1=Maya, 2=Jack, 3=Zoe).
+- Use "who" (0..3) when addressing one specific officer; otherwise null to command the whole team.
+- Keep "commands": [] if the player is only asking a question ("status?", "do you see any suspects?").
+- Never invent suspects or civilians that are not in LIVE TACTICAL STATE.
 
 Examples:
-Player: "Ken, säg till Team B att bryta in medan du täcker mig"
-{"speaker":"Ken","reply":"Uppfattat, jag täcker dig och meddelar Team B!","relayTo":"Team B","relayMsg":"Team B, order från chefen: bryt in nu!","commands":[{"team":"A","who":0,"action":"cover","dir":null},{"team":"B","who":null,"action":"breach","dir":null}]}
+Player: "Ken follow me, Maya join Team B, Team B cover me"
+{"speaker":"Ken","reply":"Copy, on you. Maya switching to Team B, Team B covering your six.","relayTo":"Team B","relayMsg":"Maya is with you now. Team B, cover lead!","commands":[{"team":"A","who":0,"action":"follow","dir":null},{"team":"B","who":1,"action":"joinTeam","dir":null},{"team":"B","who":null,"action":"cover","dir":null}]}
+
+Player: "Ken, tell Team B to flash and breach that door while you watch my back"
+{"speaker":"Ken","reply":"Copy, watching your back and relaying breach order to Team B.","relayTo":"Team B","relayMsg":"Team B, lead says bang and clear that door now!","commands":[{"team":"A","who":0,"action":"cover","dir":null},{"team":"B","who":null,"action":"bang","dir":null}]}
 
 Player: "Do you see any suspects right now?"
-{"speaker":"Ken","reply":"Negative on armed suspects from here, Team A is holding behind you.","relayTo":null,"relayMsg":null,"commands":[]}
-
-Player: "Team A stack up and Team B follow me"
-{"speaker":"Ken","reply":"Team A stacking on the door. Team B, fall in on lead.","relayTo":"Team B","relayMsg":"Team B, follow lead.","commands":[{"team":"A","who":null,"action":"stack","dir":null},{"team":"B","who":null,"action":"follow","dir":null}]}`;
+{"speaker":"Ken","reply":"Negative on armed suspects from our angle, holding position.","relayTo":null,"relayMsg":null,"commands":[]}`;
 
 export class TacticalAi {
   state: AiState = 'off';
@@ -136,21 +138,21 @@ export class TacticalAi {
 
     this.loadPromise = (async () => {
       if (!TacticalAi.hasWebGpu) {
-        this.setState('unsupported', 'WebGPU saknas i den här webbläsaren/enheten. Använd Chrome eller Edge med WebGPU påslaget.');
+        this.setState('unsupported', 'WebGPU is not supported in this browser/device. Use Chrome or Edge with WebGPU enabled.');
         return false;
       }
       try {
         const adapter = await (navigator as any).gpu.requestAdapter();
         if (!adapter) {
-          this.setState('unsupported', 'Ingen WebGPU-grafikadapter hittades.');
+          this.setState('unsupported', 'No WebGPU graphics adapter was found.');
           return false;
         }
       } catch {
-        this.setState('unsupported', 'WebGPU kunde inte startas.');
+        this.setState('unsupported', 'WebGPU could not be initialized.');
         return false;
       }
 
-      this.setState('loading', 'Förbereder AI-motorn…');
+      this.setState('loading', 'Preparing AI engine…');
       try {
         const webllm = await import('@mlc-ai/web-llm');
         if (this.engine) {
@@ -160,16 +162,16 @@ export class TacticalAi {
         this.engine = await webllm.CreateMLCEngine(this.modelId, {
           initProgressCallback: (rep: InitProgressReport) => {
             const pct = rep.progress ? ` (${Math.round(rep.progress * 100)}%)` : '';
-            this.setState('loading', `${rep.text || 'Laddar modell'}${pct}`);
+            this.setState('loading', `${rep.text || 'Loading model'}${pct}`);
           },
         });
         this.loadedModel = this.modelId;
-        this.setState('ready', `Klar: ${this.modelId}`);
+        this.setState('ready', `Ready: ${this.modelId}`);
         return true;
       } catch (e: any) {
         this.engine = null;
         this.loadedModel = '';
-        this.setState('error', String(e?.message || e || 'Kunde inte ladda AI-modellen.'));
+        this.setState('error', String(e?.message || e || 'Failed to load AI model.'));
         return false;
       } finally {
         this.loadPromise = null;
@@ -195,20 +197,17 @@ export class TacticalAi {
     sim: Sim,
     lastTeam: Team | 'ALL',
     lastWho: number | null,
-    preferSwedish: boolean,
   ): Promise<AiResult> {
-    const swedish = preferSwedish || isSwedishText(userText);
     const localBatch = parseCommands(userText, lastTeam, lastWho);
 
     if (!this.engine || this.state !== 'ready') {
-      return this.fallbackResult(sim, localBatch, lastTeam, lastWho, swedish);
+      return this.fallbackResult(sim, localBatch, lastTeam, lastWho);
     }
 
     this.busy = true;
     try {
       const ctx = buildTacticalContext(sim, sim.player);
-      const langNote = swedish ? 'Respond in Swedish.' : 'Respond in English.';
-      const userPrompt = `LIVE TACTICAL STATE:\n${ctx}\n\n${langNote}\nPlayer says: "${userText}"`;
+      const userPrompt = `LIVE TACTICAL STATE:\n${ctx}\n\nPlayer says: "${userText}"`;
 
       const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
         { role: 'system', content: SYSTEM_PROMPT },
@@ -219,14 +218,14 @@ export class TacticalAi {
       const resp = await this.engine.chat.completions.create({
         messages,
         temperature: 0.2,
-        max_tokens: 220,
+        max_tokens: 240,
         response_format: { type: 'json_object' },
       });
 
       const raw = resp.choices?.[0]?.message?.content ?? '';
       const parsed = extractJson(raw);
       if (!parsed || typeof parsed !== 'object') {
-        return this.fallbackResult(sim, localBatch, lastTeam, lastWho, swedish);
+        return this.fallbackResult(sim, localBatch, lastTeam, lastWho);
       }
 
       const commands: Command[] = [];
@@ -241,10 +240,13 @@ export class TacticalAi {
             if (typeof w === 'number') who = w;
           }
           const tRaw = resolveTarget(item.team);
-          let team: Team | 'ALL' = tRaw === 'A' || tRaw === 'B' || tRaw === 'ALL' ? tRaw : (who != null ? (who < 2 ? 'A' : 'B') : lastTeam);
+          const offTeam = who != null ? (sim.officers[who]?.team ?? (who < 2 ? 'A' : 'B')) : lastTeam;
+          const team: Team | 'ALL' = action === 'joinTeam'
+            ? (tRaw === 'B' ? 'B' : 'A')
+            : (tRaw === 'A' || tRaw === 'B' || tRaw === 'ALL' ? tRaw : offTeam);
           const dirRaw = typeof item.dir === 'string' ? item.dir.trim().toLowerCase() as Dir : undefined;
           const dir = dirRaw && VALID_DIRS.has(dirRaw) ? dirRaw : (action === 'move' ? 'forward' : undefined);
-          commands.push(who != null ? { team: who < 2 ? 'A' : 'B', action, dir, who } : { team, action, dir });
+          commands.push(who != null ? { team, action, dir, who } : { team, action, dir });
         }
       }
 
@@ -257,7 +259,7 @@ export class TacticalAi {
       const speaker = resolveSpeaker(parsed.speaker, defaultSpeaker);
       const reply = typeof parsed.reply === 'string' && parsed.reply.trim()
         ? parsed.reply.trim()
-        : (swedish ? 'Uppfattat.' : 'Copy.');
+        : 'Copy.';
       const relayTo = resolveTarget(parsed.relayTo);
       const relayMsg = typeof parsed.relayMsg === 'string' && parsed.relayMsg.trim() ? parsed.relayMsg.trim() : null;
 
@@ -267,7 +269,7 @@ export class TacticalAi {
 
       return { speaker, reply, relayTo, relayMsg, commands };
     } catch {
-      return this.fallbackResult(sim, localBatch, lastTeam, lastWho, swedish);
+      return this.fallbackResult(sim, localBatch, lastTeam, lastWho);
     } finally {
       this.busy = false;
     }
@@ -278,19 +280,17 @@ export class TacticalAi {
     localBatch: ReturnType<typeof parseCommands>,
     lastTeam: Team | 'ALL',
     lastWho: number | null,
-    swedish: boolean,
   ): AiResult {
     if (localBatch.commands.length) {
       const first = localBatch.commands[0];
       const speaker = localBatch.relayFrom ?? first.who ?? (first.team === 'B' ? 2 : 0);
-      const reply = swedish ? 'Uppfattat.' : 'Copy.';
-      return { speaker, reply, commands: localBatch.commands, fromFallback: true };
+      return { speaker, reply: 'Copy.', commands: localBatch.commands, fromFallback: true };
     }
     const team: Team = lastTeam === 'B' ? 'B' : 'A';
     const speaker = lastWho ?? (team === 'B' ? 2 : 0);
     return {
       speaker,
-      reply: buildLocalReport(sim, team, lastWho ?? undefined, swedish),
+      reply: buildLocalReport(sim, team, lastWho ?? undefined),
       commands: [],
       fromFallback: true,
     };

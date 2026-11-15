@@ -2,12 +2,6 @@
 import { roomAt } from './level';
 import type { Actor, Sim, Team } from './sim';
 
-const SWEDISH_HINT = /[åäö]|(\b(lag|och|att|meddela|säg|täck|följ|bryt|öppna|stäng|säkra|vänster|höger|framåt|bakåt|dörren|rummet|hur|vad|var|ser|ni|mår|vi|jag|du|alla|stanna|vänta|släpp|polis|rapport|läget|kasta|släng|granat)\b)/i;
-
-export function isSwedishText(text: string): boolean {
-  return SWEDISH_HINT.test(text);
-}
-
 function relDir(from: Actor, to: Actor): string {
   const dx = to.x - from.x, dz = to.z - from.z;
   const d = Math.hypot(dx, dz);
@@ -51,26 +45,15 @@ export function buildTacticalContext(sim: Sim, player: Actor = sim.player): stri
   return lines.join('\n');
 }
 
-export function buildLocalReport(sim: Sim, team: Team, who?: number, swedish = false): string {
+export function buildLocalReport(sim: Sim, team: Team, who?: number): string {
   const one = who != null ? sim.officers[who] : null;
   const members = one ? (one.alive ? [one] : []) : sim.officers.filter(o => o.alive && o.team === team);
-  if (!members.length) return swedish ? 'Inga svar, alla är nere.' : 'No response, team down.';
+  if (!members.length) return 'No response, team down.';
 
   const wounded = members.some(o => o.hp < 60);
   const armed = members.reduce((n, o) => n + sim.suspects.filter(s => s.alive && !s.down && sim.sees(o, s, 26, 3.2)).length, 0);
   const cuffs = members.reduce((n, o) => n + sim.actors.filter(a => a.alive && a.surrendered && !a.restrained && sim.sees(o, a, 16, 3.2)).length, 0);
   const rem = sim.remaining();
-
-  if (swedish) {
-    const parts = [
-      one ? `${one.name} redo (${Math.ceil(one.hp)} HP).` : `${members.length} uppe.`,
-      wounded ? 'Vi har skadade.' : 'Inga skador.',
-    ];
-    if (armed > 0) parts.push(`Ser ${armed} beväpnade misstänkta!`);
-    if (cuffs > 0) parts.push(`${cuffs} personer väntar på handfängsel.`);
-    if (!armed && !cuffs) parts.push(`Kvar i byggnaden: ${rem.suspects} misstänkta, ${rem.civs} civila.`);
-    return parts.join(' ');
-  }
 
   const parts = [
     one ? `${one.name} up (${Math.ceil(one.hp)} HP).` : `${members.length} up.`,

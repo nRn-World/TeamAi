@@ -1,15 +1,15 @@
-// Natural-language (English & Swedish) voice/text command parser. Pure function, unit-tested.
+// Natural-language (English) voice & text command parser. Pure function, unit-tested.
 import type { Command, Action, Dir, Team } from './sim';
 
 const norm = (s: string) => ' ' + s.toLowerCase().replace(/[.,!?;:"\-–]/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
 
 const fix = (re: RegExp) => new RegExp(re.source.replace(/\\b\(/g, '(?<= )(').replace(/\)\\b/g, ')(?= )'));
 
-const TEAM_A = fix(/\b(team|teem|tim|squad|group|element|lag|grupp|styrka)\s*(a|ay|eh|hey|alpha|alfa|one|1|red|röd|röda)\b|\b(alpha|alfa|red team|a team|a-team|teama|röda laget|röd grupp|lag a|grupp a|ettan)\b/);
-const TEAM_B = fix(/\b(team|teem|tim|squad|group|element|lag|grupp|styrka)\s*(b|be|bee|bravo|two|2|blue|blå|blåa)\b|\b(bravo|blue team|b team|b-team|teamb|blåa laget|blå grupp|lag b|grupp b|tvåan)\b/);
-const TEAM_ALL = fix(/\b(everyone|everybody|all teams|both teams|all of you|whole team|all|team|alla|allihop|allihopa|båda lagen|båda|hela teamet|hela gruppen|teamet|grabbar)\b/);
+const TEAM_A = fix(/\b(team|teem|tim|squad|group|element)\s*(a|ay|eh|hey|alpha|alfa|one|1|red)\b|\b(alpha|alfa|red team|a team|a-team|teama)\b/);
+const TEAM_B = fix(/\b(team|teem|tim|squad|group|element)\s*(b|be|bee|bravo|two|2|blue)\b|\b(bravo|blue team|b team|b-team|teamb)\b/);
+const TEAM_ALL = fix(/\b(everyone|everybody|all teams|both teams|all of you|whole team|all|team|guys|squad)\b/);
 
-// One officer by name (same order as OFFICER_NAMES), with the spellings speech recognition tends to produce.
+// One officer by name (same order as OFFICER_NAMES), with spellings speech recognition tends to produce.
 const NAMES = [
   /\b(ken|kenn|kent|kenny|kenneth|kan)\b|^ (can) /,
   /\b(maya|maia|mya|mayer|myer|maja|my a)\b/,
@@ -17,35 +17,48 @@ const NAMES = [
   /\b(zoe|zoey|zooey|zoë|zoie|zoé|zo e)\b|^ (joey) /,
 ].map(fix);
 
+// Reassigning an officer to Team A or Team B (e.g. "Maya join Team B", "put Ken on Alpha").
+const JOIN_TEAM = fix(/\b(join|switch to|move to|go to|transfer to|assign to|put .+ (?:on|in|to)|you are (?:on|in)|you're (?:on|in))\b/);
+
 // Ordered by priority: first match wins.
 const RULES: [Action, RegExp, Dir?][] = ([
-  ['shout', /\b(police|polis|polisen|hands up|hands in the air|show me your hands|drop (the|your|that) (gun|weapon)|drop it|put (the|your) (gun|weapon) down|put it down|get down|on the ground|on your knees|give up|surrender|freeze|upp med händerna|händerna i luften|visa händerna|släpp vapnet|lägg ner vapnet|ner på marken|på knä|ge upp)\b/],
-  ['fireHold', /\b(hold fire|hold your fire|cease fire|ceasefire|don't shoot|do not shoot|weapons tight|weapons hold|eld upphör|skjut inte|håll elden|spara skott)\b/],
-  ['fireFree', /\b(weapons free|fire at will|open fire|free fire|engage|fri eld|skjut fritt|öppna eld)\b/],
-  ['bang', /\b(flashbang|flash bang|flash and clear|bang and clear|bang|grenade|stun grenade|flash|flush|flesh|chockgranat|blända|kasta flash|släng flash|granat)\b/],
-  ['breach', /\b(breach|breaching|storm|clear|clear the room|move in|go in|get in|enter|take the room|kick it|kick the door|bryt in|storma|rensa|rensa rummet|gå in|ta rummet|sparka in)\b/],
-  ['stack', /\b(stack up|stack|line up|on the door|at the door|to the door|ställ upp|ställda|vid dörren|till dörren|redo vid dörren)\b/],
-  ['close', /\b(close|shut|stäng|stänga)\b/],
-  ['open', /\b(open|opens|öppna)\b/],
-  ['restrain', /\b(restrain|cuff|cuffs|cuff them|handcuff|handcuffs|arrest|secure|zip ?tie|tie them|säkra|handfängsel|fängsla|grip|arrestera|boja|bind)\b/],
-  ['cover', /\b(cover|cover me|protect|protect me|watch my|guard|my back|my six|täck|täck mig|skydda|skydda mig|håll ryggen|vakta ryggen|backa upp)\b/],
-  ['report', /\b(report|status|sitrep|sit rep|rapport|lägesrapport|läge|läget|hur mår ni|var är ni|ser ni någon|ser ni något)\b/],
-  ['move', /\b(over there|there|that position|that spot|dit|dit bort|där borta|den positionen|den platsen)\b/, 'there'],
-  ['move', /\b(left|vänster|åt vänster)\b/, 'left'],
-  ['move', /\b(right|höger|åt höger)\b/, 'right'],
-  ['move', /\b(back|backwards|fall back|retreat|pull back|back up|bakåt|backa|dra er tillbaka)\b/, 'back'],
-  ['follow', /\b(follow|follow me|on me|regroup|with me|come|come here|fall in|to me|följ|följ med|följ mig|kom hit|hit|med mig|till mig|samlas)\b/],
-  ['move', /\b(forward|forwards|advance|move up|push|push up|go ahead|framåt|fram|ryck fram|gå fram)\b/, 'forward'],
-  ['hold', /\b(hold|hold position|stop|stay|wait|halt|stand by|stanna|håll position|vänta|stå kvar|stanna där|håll)\b/],
-  ['stack', /\b(door|dörr|dörren)\b/],
+  ['shout', /\b(police|hands up|hands in the air|show me your hands|drop (the|your|that) (gun|weapon)|drop it|put (the|your) (gun|weapon) down|put it down|get down|on the ground|on your knees|give up|surrender|freeze)\b/],
+  ['fireHold', /\b(hold fire|hold your fire|cease fire|ceasefire|don't shoot|do not shoot|weapons tight|weapons hold)\b/],
+  ['fireFree', /\b(weapons free|fire at will|open fire|free fire|engage)\b/],
+  ['bang', /\b(flashbang|flash bang|flash and clear|bang and clear|bang|grenade|stun grenade|flash|flush|flesh)\b/],
+  ['breach', /\b(breach|breaching|storm|clear|clear the room|move in|go in|get in|enter|take the room|kick it|kick the door)\b/],
+  ['stack', /\b(stack up|stack|line up|on the door|at the door|to the door)\b/],
+  ['close', /\b(close|shut)\b/],
+  ['open', /\b(open|opens)\b/],
+  ['restrain', /\b(restrain|cuff|cuffs|cuff them|cuff him|cuff her|handcuff|handcuffs|arrest|secure|zip ?tie|tie them)\b/],
+  ['cover', /\b(cover|cover me|cover us|protect|protect me|protect us|watch my|guard|my back|my six)\b/],
+  ['report', /\b(report|status|sitrep|sit rep)\b/],
+  ['move', /\b(over there|there|that position|that spot)\b/, 'there'],
+  ['move', /\b(left)\b/, 'left'],
+  ['move', /\b(right)\b/, 'right'],
+  ['move', /\b(back|backwards|fall back|retreat|pull back|back up)\b/, 'back'],
+  ['follow', /\b(follow|follow me|on me|regroup|with me|come|come here|come with me|fall in|to me)\b/],
+  ['move', /\b(forward|forwards|advance|move up|push|push up|go ahead)\b/, 'forward'],
+  ['hold', /\b(hold|hold position|hold here|stop|stay|stay here|wait|halt|stand by)\b/],
+  ['stack', /\b(door)\b/],
 ] as [Action, RegExp, Dir?][]).map(([a, re, d]) => [a, fix(re), d]);
 
-const YOU_WORD = fix(/\b(you|du)\b/);
+const YOU_WORD = fix(/\b(you)\b/);
 
-/** `lastWho`: the officer the previous order went to, so that «you cover us» / «du täcker oss» keeps talking to the same one. */
+/** `lastWho`: the officer the previous order went to, so that «you cover us» keeps talking to the same one. */
 export function parseCommand(text: string, lastTeam: Team | 'ALL' = 'ALL', lastWho: number | null = null): Command | null {
   let s = norm(text);
+
+  // Check for officer + destination team reassignment first (e.g. "Maya join Team B", "put Ken on Team A").
   const a = TEAM_A.exec(s), b = TEAM_B.exec(s);
+  const namedAll = NAMES.map((re, i) => (re.test(s) ? i : -1)).filter(i => i >= 0);
+  if ((a || b) && !(a && b) && JOIN_TEAM.test(s)) {
+    const destTeam: Team = a ? 'A' : 'B';
+    if (namedAll.length === 1) return { team: destTeam, action: 'joinTeam', who: namedAll[0] };
+    if (lastWho != null && YOU_WORD.test(s)) return { team: destTeam, action: 'joinTeam', who: lastWho };
+    if (TEAM_ALL.test(s)) return { team: destTeam, action: 'joinTeam' };
+  }
+
   let team: Team | 'ALL' | null = null, who: number | undefined;
   if (a && b) team = 'ALL'; else if (a) team = 'A'; else if (b) team = 'B';
   // strip team words so e.g. "team b" is not parsed as something else
@@ -59,7 +72,7 @@ export function parseCommand(text: string, lastTeam: Team | 'ALL' = 'ALL', lastW
   for (const [action, re, dir] of RULES) {
     if (re.test(s)) {
       if (action === 'shout') { if ((team && team !== 'ALL') || who != null) continue; return { team: 'ALL', action }; }
-      if (who != null) return { team: who < 2 ? 'A' : 'B', action, dir, who };
+      if (who != null) return { team: team ?? (who < 2 ? 'A' : 'B'), action, dir, who };
       return { team: team ?? lastTeam, action, dir };
     }
   }
@@ -71,14 +84,14 @@ export interface ParsedBatch {
   relayFrom?: number; // officer index if player asked one officer to relay to another unit
 }
 
-const RELAY_PREFIX = /^\s*(?:(ken|kenn|kent|kenny|maya|maja|jack|zoe|zoey)\s*[,:]?\s*)?(?:tell|inform|ask|relay to|pass on to|say to|säg till|meddela|be|hälsa till)\s+(.+?)\s+(?:to|att|om att)\s+(.+)$/i;
+const RELAY_PREFIX = /^\s*(?:(ken|kenn|kent|kenny|maya|maia|maja|jack|zoe|zoey)\s*[,:]?\s*)?(?:tell|inform|ask|relay to|pass on to|say to)\s+(.+?)\s+(?:to|that)\s+(.+)$/i;
 
-/** Parses compound utterances (e.g. "Ken throw flash and Maya go in", "Lag A framåt och Lag B täck mig") or relay phrases. */
+/** Parses compound utterances (e.g. "Ken follow me, Maya join Team B, Team B cover me") or relay phrases. */
 export function parseCommands(text: string, lastTeam: Team | 'ALL' = 'ALL', lastWho: number | null = null): ParsedBatch {
   const trimmed = text.trim();
   if (!trimmed) return { commands: [] };
 
-  // Relay pattern: "Ken, tell Team B to breach" / "Säg till Team B att stanna"
+  // Relay pattern: "Ken, tell Team B to breach"
   const rel = RELAY_PREFIX.exec(trimmed);
   if (rel) {
     let relayFrom: number | undefined;
@@ -92,15 +105,13 @@ export function parseCommands(text: string, lastTeam: Team | 'ALL' = 'ALL', last
     if (sub.commands.length) return { commands: sub.commands, relayFrom };
   }
 
-  // Protect "flash and clear", "bang and clear", "team a and team b", "lag a och lag b" before splitting clauses.
+  // Protect "flash and clear", "bang and clear", "team a and team b" before splitting clauses.
   const safe = trimmed
     .replace(/\b(flash|bang)\s+and\s+clear\b/gi, '$1_and_clear')
-    .replace(/\b(team\s*a|alpha)\s+and\s+(team\s*b|bravo)\b/gi, '$1_both_$2')
-    .replace(/\b(lag\s*a|alfa)\s+och\s+(lag\s*b|bravo)\b/gi, '$1_both_$2')
-    .replace(/\bblända\s+och\s+gå\s+in\b/gi, 'flash_and_clear');
+    .replace(/\b(team\s*a|alpha)\s+and\s+(team\s*b|bravo)\b/gi, '$1_both_$2');
 
   const parts = safe
-    .split(/\s*(?:[,.;]+|\b(?:and then|and|then|while|och sedan|och sen|och|sedan|sen|medan)\b)\s*/i)
+    .split(/\s*(?:[,.;]+|\b(?:and then|and|then|while)\b)\s*/i)
     .map(p => p.replace(/_and_clear/g, ' and clear').replace(/_both_/g, ' and ').trim())
     .filter(Boolean);
 
@@ -119,7 +130,6 @@ export function parseCommands(text: string, lastTeam: Team | 'ALL' = 'ALL', last
       curTeam = c.team;
       curWho = c.who ?? null;
     } else {
-      // Check if this part only named a team/officer for the following clause (unlikely, but safe)
       const ns = norm(part);
       if (TEAM_A.test(ns)) { curTeam = 'A'; curWho = null; }
       else if (TEAM_B.test(ns)) { curTeam = 'B'; curWho = null; }
@@ -137,9 +147,9 @@ export function parseCommands(text: string, lastTeam: Team | 'ALL' = 'ALL', last
   return { commands: out };
 }
 
-const CONVERSATIONAL_HINT = /\?|\b(tell|inform|relay|ask|say to|why|what|where|who|how|when|do you see|can you|are there|status|situation|säg|meddela|berätta|fråga|hälsa|varför|vad|var|vem|vilka|hur|ser ni|finns det|kan ni|tycker|plan|läget)\b/i;
+const CONVERSATIONAL_HINT = /\?|\b(tell|inform|relay|ask|say to|why|what|where|who|how|when|do you see|can you|could you|are there|status|situation|please|make sure|want you to|need you to|check)\b/i;
 
-/** Heuristic: returns true when an utterance is conversational, a question, a relay request, or unrecognized by the fast parser, so the AI brain should handle it. */
+/** Returns true when an utterance is conversational, a question, a relay request, or nuanced natural English for the AI brain. */
 export function shouldUseAiBrain(text: string, batch: ParsedBatch): boolean {
   if (!batch.commands.length) return true;
   if (batch.relayFrom !== undefined) return true;
@@ -151,6 +161,6 @@ export function shouldUseAiBrain(text: string, batch: ParsedBatch): boolean {
 
 export const ACTION_LABEL: Record<Action, string> = {
   follow: 'FOLLOW ME', hold: 'HOLD POSITION', move: 'MOVE', cover: 'COVER ME', stack: 'STACK UP ON DOOR', breach: 'BREACH THE ROOM', bang: 'BANG AND CLEAR',
-  open: 'OPEN DOOR', close: 'CLOSE DOOR', restrain: 'SECURE / HANDCUFF', fireFree: 'WEAPONS FREE', fireHold: 'HOLD FIRE', report: 'REPORT', shout: 'POLICE! GIVE UP!',
+  open: 'OPEN DOOR', close: 'CLOSE DOOR', restrain: 'SECURE / HANDCUFF', fireFree: 'WEAPONS FREE', fireHold: 'HOLD FIRE', report: 'REPORT', shout: 'POLICE! GIVE UP!', joinTeam: 'JOIN TEAM',
 };
 export const DIR_LABEL: Record<Dir, string> = { left: 'LEFT', right: 'RIGHT', forward: 'FORWARD', back: 'BACK', there: 'THERE' };
