@@ -138,10 +138,11 @@ td { border-bottom:1px solid rgba(255,255,255,.08); }
   grid-row:1; display:flex; justify-content:space-between; align-items:flex-start;
   padding:28px 42px 0;
 }
-.logo { font:700 68px/.84 var(--hd); letter-spacing:.03em; color:#fff; }
-.logo span { color:#fff; }
+.brand { display:inline-flex; flex-direction:column; align-items:center; }
+.logo { font:700 68px/.84 var(--hd); letter-spacing:.03em; color:#fff; text-align:center; }
+.logo span { color:#4f96ff; }
 .tag {
-  position:relative; padding-left:34px; margin:10px 0 0 2px;
+  position:relative; padding-left:34px; margin:10px 0 0;
   font:600 13px/1 var(--hd); letter-spacing:.26em; text-transform:uppercase; color:#b8c7d9;
 }
 .tag::before { content:""; position:absolute; left:0; top:50%; width:24px; height:2px; background:var(--tac); transform:translateY(-50%); }
