@@ -700,5 +700,16 @@ loadWeapons().then(async () => {
     game.vm.rifle.clear(); game.vm.pistol.clear(); game.viewCam.add(game.arms.root); game.viewScene.environment = studioEnv(game.renderer); game.viewScene.environmentIntensity = 0.5;
   }
 });
-loadModels().then(() => { game.menu.squad(); if (S.qual > 0) { game.menu.env(game.renderer); operatorEnv(game.menu.scene.environment); game.menu.hero(3); game.menu.vehicle('./models/vehicle/marauder.glb'); } $('modelStatus').textContent = modelsReady ? '' : 'The 3D characters could not be loaded – built-in figures are used.'; });
+const modelsDone = loadModels().then(() => {
+  $('modelStatus').textContent = modelsReady ? '' : 'The 3D characters could not be loaded – built-in figures are used.';
+});
+if (S.qual > 0) {
+  game.menu.env(game.renderer);
+  operatorEnv(game.menu.scene.environment);
+  void Promise.all([game.menu.hero(3), game.menu.vehicle('./models/vehicle/marauder.glb')]).then(async ([heroOk]) => {
+    if (!heroOk) { await modelsDone; game.menu.squad(); }
+  });
+} else {
+  void modelsDone.then(() => game.menu.squad());
+}
 (window as any).__ta = game;
