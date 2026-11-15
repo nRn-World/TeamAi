@@ -407,4 +407,57 @@ body.stream-mode #log { bottom:105px; }
 .loadbar i { display:block; height:100%; width:15%; background:linear-gradient(90deg, #2563c2, #63a8ff); transition:width .18s ease; }
 .loadmsg { font-size:13px; color:#9eb0c2; }
 
+/* Co-op HUD, IFF, Breach Countdown, Lobby & Debrief Squad MVP */
+#ffWarn {
+  position:fixed; left:50%; top:calc(50% + 26px); transform:translateX(-50%);
+  padding:4px 12px; background:rgba(16,130,68,.92); border:1px solid #4fd07a; color:#fff;
+  font:700 12px/1 var(--hd); letter-spacing:.16em; text-transform:uppercase; z-index:9; pointer-events:none;
+}
+#breachBanner {
+  position:fixed; left:50%; top:96px; transform:translateX(-50%);
+  padding:10px 26px; background:rgba(16,26,38,.92); border:2px solid #f0b429; color:#fde68a;
+  font:700 22px/1 var(--hd); letter-spacing:.2em; text-transform:uppercase; z-index:10;
+  box-shadow:0 0 28px rgba(240,180,41,.38); pointer-events:none;
+}
+#coopHud {
+  position:fixed; right:18px; top:304px; width:240px; display:flex; flex-direction:column; gap:6px;
+  pointer-events:none; z-index:6;
+}
+.coop-card {
+  padding:6px 10px; background:rgba(8,13,20,.82); border-left:3px solid #4fd07a;
+  font:600 12px/1.25 "Barlow", sans-serif; color:#e5eef6;
+}
+.coop-card.downed { border-left-color:#ff4a4a; background:rgba(60,12,14,.88); }
+.coop-card.dead { border-left-color:#64748b; opacity:.65; }
+.coop-top { display:flex; justify-content:space-between; align-items:center; gap:6px; font:700 11.5px/1 var(--hd); letter-spacing:.1em; text-transform:uppercase; }
+.coop-mic { color:#38bdf8; }
+.coop-rdy { color:#f0b429; }
+.coop-hp { height:4px; background:rgba(255,255,255,.12); margin-top:5px; overflow:hidden; }
+.coop-hp i { display:block; height:100%; background:#4fd07a; }
+.coop-card.downed .coop-hp i { background:#ff4a4a; }
+
+.lobby-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:10px 0 12px; text-align:left; }
+.lobby-box { background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.1); padding:10px 12px; }
+.lobby-lo { display:flex; flex-direction:column; gap:6px; margin-top:6px; }
+.lobby-lo select { width:100%; background:#141b24; color:#e5eef6; border:1px solid rgba(255,255,255,.16); padding:5px 7px; font-size:12px; }
+.lobby-mods { display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-top:6px; font-size:12px; color:#cbd5e1; }
+.lobby-mods label { display:flex; align-items:center; gap:6px; cursor:pointer; }
+#lobbyPlayers li { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.lp-tags { display:flex; align-items:center; gap:6px; font:600 11px/1 var(--hd); letter-spacing:.08em; text-transform:uppercase; }
+.lp-lo { color:#94a3b8; }
+.lp-mic { color:#38bdf8; }
+.lp-rdy { color:#4fd07a; }
+.lp-wait { color:#f59e0b; }
+
+.deb-mvp { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:8px; margin:6px 0 14px; }
+.mvp-card { background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.12); border-top:2px solid #4fd07a; padding:8px 10px; text-align:left; }
+.mvp-card.top { border-top-color:#f0b429; background:rgba(240,180,41,.08); }
+.mvp-name { font:700 13px/1.1 var(--hd); letter-spacing:.1em; text-transform:uppercase; color:#fff; }
+.mvp-badge { font:700 10.5px/1 var(--hd); letter-spacing:.14em; color:#fde68a; margin:3px 0 5px; }
+.mvp-stat { font-size:11.5px; color:#b8c7d4; }
+.deb-ready { display:flex; align-items:center; gap:12px; margin:10px 0 4px; }
+#debReadyTxt { font-size:13px; color:#94a3b8; }
+@media (max-width:640px) { .lobby-grid { grid-template-columns:1fr; } }
+
+
 

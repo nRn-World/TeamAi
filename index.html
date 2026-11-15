@@ -26,11 +26,14 @@
     <div class="pip-scan"></div>
   </div>
   <div id="cross"><i></i><i></i><i></i><i></i><b></b></div>
+  <div id="ffWarn" class="hidden">FRIENDLY — HOLD FIRE</div>
+  <div id="breachBanner" class="hidden"></div>
   <div id="hitmark"></div>
   <div id="dmg"></div><div id="flash"></div>
   <div id="objective"></div>
   <div id="bombtimer" class="hidden"></div>
   <div id="vc" class="hidden"></div>
+  <div id="coopHud" class="hidden"></div>
   <canvas id="minimap"></canvas>
   <div id="team"></div>
   <div id="voice"><div id="microw"><span id="micdot"></span><span id="micstate">MIC OFF</span><span id="aibadge" class="hidden"></span></div><div id="radioCard" class="hidden"></div><div id="heard"></div><div id="parsed"></div></div>
@@ -186,15 +189,42 @@
   </footer>
 </div>
 
-<div id="lobby" class="screen hidden"><div class="panel">
+<div id="lobby" class="screen hidden"><div class="panel wide">
   <h2 id="lobbyTitle">Co-op room</h2>
   <div id="lobbyWait" class="lobbywait hidden"></div>
   <div class="codebox">Room code <b id="lobbyCode"></b></div>
   <button id="btnCopy" type="button">Copy invite link</button>
   <ul id="lobbyPlayers"></ul>
+  <div class="lobby-grid">
+    <div class="lobby-box">
+      <div class="clabel">YOUR CO-OP LOADOUT</div>
+      <div class="lobby-lo">
+        <select id="lobbyPrim">
+          <option value="carbine">M4 Carbine</option>
+          <option value="shotgun">M870 Shotgun</option>
+          <option value="beanbag">Beanbag (NL)</option>
+          <option value="shield">Ballistic Shield</option>
+        </select>
+        <select id="lobbySec">
+          <option value="pistol">Glock 17</option>
+          <option value="taser">X26 Taser</option>
+        </select>
+      </div>
+    </div>
+    <div class="lobby-box">
+      <div class="clabel">CO-OP MODIFIERS</div>
+      <div id="lobbyMods" class="lobby-mods">
+        <label><input type="checkbox" id="modBlackout" /> Lights Out</label>
+        <label><input type="checkbox" id="modExtra" /> +4 Hostiles</label>
+        <label><input type="checkbox" id="modPistol" /> Pistol Only</label>
+        <label><input type="checkbox" id="modFF" /> Friendly Fire</label>
+        <label><input type="checkbox" id="modDaily" /> Daily Ironman</label>
+      </div>
+    </div>
+  </div>
   <label class="lobbysel"><span id="lobbySelLabel">Mission</span> <select id="lobbyMission"></select></label>
   <div id="lobbyInfo" class="note"></div>
-  <div class="row"><button id="btnLeave">Leave</button><button id="btnLobbyStart" class="primary">Start mission</button></div>
+  <div class="row"><button id="btnLeave">Leave</button><button id="btnLobbyReady">Ready</button><button id="btnLobbyStart" class="primary">Start mission</button></div>
 </div></div>
 
 <div id="brief" class="screen hidden"><div class="panel wide briefp">
@@ -218,6 +248,7 @@
 <div id="debrief" class="screen hidden"><div class="panel wide scroll">
   <h2 id="debTitle"></h2><div id="debRank"></div>
   <div id="debAwards" class="awards"></div>
+  <div id="debSquadMvp" class="deb-mvp hidden"></div>
   <div class="debgrid">
     <div>
       <table id="debTable"></table>
@@ -229,6 +260,7 @@
       <div class="dr-ctrl"><button type="button" id="btnReplayToggle">Pause</button><button type="button" id="btnReplayRestart">Replay 8x</button></div>
     </div>
   </div>
+  <div id="debReadyRow" class="deb-ready hidden"><button id="btnDebReady" type="button">Ready for Next Op</button><span id="debReadyTxt"></span></div>
   <div class="row"><button id="btnMenu">Main menu</button><button id="btnAgain">Play again</button><button id="btnNext" class="primary">Next mission</button></div>
 </div></div>
 
@@ -237,10 +269,11 @@
   <div class="grid2">
     <div><kbd>W A S D</kbd> Walk</div><div><kbd>Shift</kbd> Run (heard far away)</div><div><kbd>X</kbd> Sneak on/off (silent)</div><div><kbd>C</kbd> Crouch · <kbd>Z</kbd> Crawl (silent)</div><div><kbd>Space</kbd> Jump / stand up</div>
     <div><kbd>Mouse</kbd> Look · <kbd>Left click</kbd> Fire</div><div><kbd>Right click</kbd> (hold) Zoom / aim</div><div><kbd>R</kbd> Reload · <kbd>1</kbd>/<kbd>2</kbd> Weapons</div>
-    <div><kbd>F</kbd> Open door / handcuff / breaker / defuse</div><div><kbd>G</kbd> Throw flashbang</div>
+    <div><kbd>F</kbd> Open door / cuff / breaker / defuse / revive ally</div><div><kbd>G</kbd> Throw flashbang · <kbd>O</kbd> Share gear/ammo</div>
     <div><kbd>E</kbd> Optiwand peek door · <kbd>U</kbd> C2 charge</div><div><kbd>Y</kbd> Wedge door · <kbd>N</kbd> Night Vision (NVG)</div>
     <div><kbd>V</kbd> (hold) Talk to your team · <kbd>Q</kbd> Shout «Police! Drop the weapon!»</div><div><kbd>T</kbd> Flashlight · <kbd>K</kbd> Bodycam · <kbd>M</kbd> Map</div>
-    <div><kbd>P</kbd> Helmet Cam PiP · <kbd>F8</kbd> Dispatch / Chat Chaos</div>
+    <div><kbd>P</kbd> Helmet Cam PiP (cycle team/players) · <kbd>F8</kbd> Dispatch</div>
+    <div><kbd>Middle Click</kbd> Tactical 3D Ping · <kbd>J</kbd> Sync Breach Countdown</div>
     <div><kbd>B</kbd> Voice chat: microphone on/off (online)</div><div><kbd>H</kbd> Radial Command Wheel</div>
     <div><kbd>Enter</kbd> Type an order (if you have no microphone)</div><div><kbd>Tab</kbd> Choose team for the quick keys</div>
   </div>

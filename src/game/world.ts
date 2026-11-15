@@ -620,6 +620,8 @@ export class ActorView {
   head = new THREE.Group(); gun = new THREE.Group(); label?: THREE.Sprite; fall = 0; flashT = 0; flash: THREE.Sprite;
   pool?: THREE.Mesh; poolT = 0; dropped?: THREE.Group; wounds = 0;
   rig?: Rig; private shootT = 0; private rifle = false; op?: OperatorBody; private teamMat?: THREE.MeshStandardMaterial; private teamShown?: Team;
+  private playerShield?: THREE.Group; private playerTorch?: THREE.SpotLight; private torchGlow?: THREE.Mesh;
+  private labelState = '';
   constructor(public a: Actor) {
     const v = a.variant, off = a.kind === 'officer' || a.kind === 'player', tcol = a.kind === 'player' ? 0x4fd07a : TEAM_COLOR[a.team];
     const cloth = std({ color: off ? 0x1b2434 : a.kind === 'suspect' ? HOOD[v] : SHIRT[v] });
@@ -627,6 +629,28 @@ export class ActorView {
     const skin = std({ color: SKIN[(v + a.id) % 6], roughness: 0.7 }), black = std({ color: 0x0e1014, roughness: 0.6 }), boot = std({ color: 0x15130f });
     const tc = off ? std({ color: tcol, emissive: tcol, emissiveIntensity: 0.35 }) : null;
     if (a.kind === 'officer' && tc) { this.teamMat = tc; this.teamShown = a.team; }
+    if (a.kind === 'player') {
+      const sg = new THREE.Group();
+      sg.add(
+        box(0.46, 0.92, 0.04, std({ color: 0x161c24, metalness: 0.45, roughness: 0.45 }), -0.14, 1.08, -0.42),
+        box(0.28, 0.14, 0.05, new THREE.MeshPhysicalMaterial({ color: 0x99d0e8, transparent: true, opacity: 0.42, roughness: 0.1 }), -0.14, 1.32, -0.42),
+      );
+      sg.visible = false;
+      this.root.add(sg);
+      this.playerShield = sg;
+
+      const tg = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), new THREE.MeshBasicMaterial({ color: 0xfff0cc }));
+      tg.position.set(0.16, 1.38, -0.45);
+      tg.visible = false;
+      this.root.add(tg);
+      this.torchGlow = tg;
+
+      const sp = new THREE.SpotLight(0xfff1d4, 0, 14, 0.48, 0.55, 1.4);
+      sp.position.set(0.16, 1.38, -0.42);
+      sp.target.position.set(0.16, 1.28, -6);
+      this.root.add(sp, sp.target);
+      this.playerTorch = sp;
+    }
     this.root.add(this.body); const sh = new THREE.Mesh(shadowGeo, shadowMat); sh.rotation.x = -Math.PI / 2; sh.position.y = 0.012; this.root.add(sh);
     for (const s of [-1, 1]) {
       const hip = new THREE.Group(); hip.position.set(s * 0.1, 0.92, 0); hip.add(box(0.16, 0.48, 0.18, pants, 0, -0.23, 0));
@@ -670,12 +694,12 @@ export class ActorView {
   private updateRig(dt: number, time: number) {
     const a = this.a, g = this.rig!, armed = a.armed && a.kind !== 'civ';
     this.flashT -= dt; this.shootT -= dt; this.flash.visible = this.flashT > 0 && a.alive; if (this.flash.visible) this.flash.material.rotation = time * 50;
-    const kneel = a.alive && a.down;
+    const kneel = a.alive && (a.down || a.downed);
     if (!a.alive) g.play('Death', 0.1, true);
     else if (kneel) g.play('Idle', 0.25);
     else if (a.stun > 0.3 && a.kind !== 'officer' && a.kind !== 'player') g.play('HitRecieve', 0.1, false, 0.8);
     else if (a.moving) { if (armed) g.play(a.target || this.shootT > 0 ? 'Run_Shoot' : 'Run', 0.15, false, a.kind === 'suspect' ? 0.9 : 1.1); else g.play(a.kind === 'civ' ? 'Run' : 'Walk', 0.15); }
-    else if (armed) g.play(this.shootT > 0 ? 'Idle_Gun_Shoot' : a.target ? 'Idle_Gun_Pointing' : 'Idle_Gun', 0.12);
+    else if (armed) g.play(this.shootT > 0 ? 'Idle_Gun_Shoot' : a.target || a.ads ? 'Idle_Gun_Pointing' : 'Idle_Gun', 0.12);
     else g.play(a.kind === 'civ' ? 'Idle_Neutral' : 'Idle', 0.25);
     g.mixer.update(dt);
     this.kneelK = lerp(this.kneelK, kneel ? 1 : 0, Math.min(1, dt * 6));
@@ -687,11 +711,11 @@ export class ActorView {
       }
       B['Head']?.rotateX((a.restrained ? P.head : 0) * k);
     }
-    this.proneK = lerp(this.proneK, a.alive && a.prone ? 1 : 0, Math.min(1, dt * 7));
-    g.obj.rotation.x = -this.proneK * Math.PI / 2; // crawling: lying face down
+    this.proneK = lerp(this.proneK, a.alive && (a.prone || a.downed) ? 1 : 0, Math.min(1, dt * 7));
+    g.obj.rotation.x = -this.proneK * Math.PI / 2; // crawling or downed: lying low
     g.obj.position.y = -P_DROP() * this.kneelK - (a.kind === 'player' && a.crouch && a.alive ? 0.25 : 0) + this.proneK * 0.2 + (a.alive ? a.jumpY : 0); g.obj.position.z = this.proneK * 0.8;
-    if (g.gun) g.gun.visible = armed && a.alive && !a.down;
-    if (this.op) { this.op.update(g, dt, { alive: a.alive, aim: !!a.target || this.shootT > 0, armed }); this.gun.visible = false; }
+    if (g.gun) g.gun.visible = armed && a.alive && !a.down && !a.downed;
+    if (this.op) { this.op.update(g, dt, { alive: a.alive, aim: !!a.target || a.ads || this.shootT > 0, armed }); this.gun.visible = false; }
     else if (this.rifle) { this.gun.visible = armed && a.alive; const G = (window as any).__gun; if (G) { this.gun.position.set(G.p[0], G.p[1], G.p[2]); this.gun.rotation.set(G.r[0], G.r[1], G.r[2]); this.gun.scale.setScalar(G.s); } }
     if (this.label) this.label.visible = a.alive;
     if (this.dropped) this.dropped.visible = !a.armed || !a.alive;
@@ -717,6 +741,25 @@ export class ActorView {
   }
   update(dt: number, time: number) {
     const a = this.a, k = Math.min(1, dt * 12), r = this.root;
+    if (a.kind === 'player') {
+      if (this.playerShield) this.playerShield.visible = a.alive && !a.downed && a.shield;
+      if (this.torchGlow) this.torchGlow.visible = a.alive && !a.downed && a.torch;
+      if (this.playerTorch) {
+        this.playerTorch.intensity = a.alive && !a.downed && a.torch ? 5.5 : 0;
+        this.playerTorch.target.position.set(0.16, 1.28 + Math.sin(a.pitch) * 5, -6 * Math.cos(a.pitch));
+      }
+      if (this.label) {
+        const st = a.downed ? `DOWN ${Math.ceil(a.bleedT)}s` : a.speaking ? `${a.name.slice(0, 7)} [MIC]` : a.readyBreach ? `${a.name.slice(0, 7)} [RDY]` : a.name.slice(0, 8);
+        if (st !== this.labelState) {
+          this.labelState = st;
+          const mat = this.label.material as THREE.SpriteMaterial;
+          mat.map?.dispose();
+          mat.map = T.labelTex(st, a.downed ? '#ff4a4a' : a.speaking ? '#52e8ff' : a.readyBreach ? '#f2c14e' : '#4fd07a');
+          mat.needsUpdate = true;
+        }
+        this.label.position.y = a.downed ? 1.15 : 2.04;
+      }
+    }
     if (a.kind === 'officer' && this.teamShown && a.team !== this.teamShown) {
       this.teamShown = a.team;
       const tcol = TEAM_COLOR[a.team];
@@ -754,7 +797,10 @@ export class ActorView {
     let by = 0, lean = 0, hipL = 0, hipR = 0, kneeL = 0, kneeR = 0, aL = 0.05, aR = 0.05, eL = 0.1, eR = 0.1, zL = 0, zR = 0, headX = 0, gun = false;
     const armed = a.armed && a.kind !== 'civ';
     if (!a.alive) { this.fall = Math.min(1, this.fall + dt * 2.6); aL = 0.6; aR = -0.4; zL = -0.7; zR = 0.6; hipL = 0.3; kneeR = 0.5; }
-    else if (a.down) {
+    else if (a.downed) {
+      by = -0.58; kneeL = kneeR = 1.57; lean = -0.35; headX = -0.2;
+      aL = 0.5; aR = 0.4; eL = eR = 0.9; zL = 0.3; zR = -0.3;
+    } else if (a.down) {
       by = -0.44; kneeL = kneeR = 1.57; lean = a.restrained ? 0.22 : 0.05; headX = a.restrained ? 0.45 : 0.1;
       if (a.restrained) { aL = aR = -0.55; eL = eR = 0.5; zL = 0.25; zR = -0.25; } else { aL = aR = 2.85 + Math.sin(time * 9 + a.id) * 0.03; zL = -0.3; zR = 0.3; eL = eR = 0.25; }
     } else if (a.stun > 0.3 && a.kind !== 'officer') { lean = 0.5; aL = aR = 2.3; eL = eR = 1.6; zL = 0.35; zR = -0.35; headX = 0.4; by = -0.05; hipL = 0.25; hipR = 0.25; kneeL = kneeR = 0.4; }
@@ -785,7 +831,9 @@ export class FX {
   group = new THREE.Group(); private pos = new Float32Array(MAXP * 3); private col = new Float32Array(MAXP * 3); private vel = new Float32Array(MAXP * 3); private life = new Float32Array(MAXP); private grav = new Float32Array(MAXP);
   private pts: THREE.Points; private pi = 0; private tracers: { line: THREE.Line; t: number }[] = []; private ti = 0;
   private holes: THREE.Points; private hpos = new Float32Array(200 * 3); private hi = 0;
-  light = new THREE.PointLight(0xffc070, 0, 12, 1.6); private lightT = 0; private markers: { m: THREE.Mesh; t: number }[] = []; nades: THREE.Mesh[] = [];
+  light = new THREE.PointLight(0xffc070, 0, 12, 1.6); private lightT = 0; private markers: { m: THREE.Mesh; t: number }[] = [];
+  private pings: { g: THREE.Group; ring: THREE.Mesh; sp: THREE.Sprite; t: number }[] = [];
+  nades: THREE.Mesh[] = [];
   constructor() {
     const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(this.col, 3));
     this.pos.fill(-999); this.pts = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.05, vertexColors: true, transparent: true, depthWrite: false })); this.pts.frustumCulled = false; this.group.add(this.pts);
@@ -821,6 +869,19 @@ export class FX {
   marker(x: number, z: number, color: number) {
     const m = new THREE.Mesh(new THREE.RingGeometry(0.32, 0.42, 28), new THREE.MeshBasicMaterial({ color, transparent: true, depthTest: false, side: THREE.DoubleSide })); m.rotation.x = -Math.PI / 2; m.position.set(x, 0.05, z); m.renderOrder = 5; this.group.add(m); this.markers.push({ m, t: 2.5 });
   }
+  ping(x: number, y: number, z: number, color: number, label: string) {
+    const g = new THREE.Group();
+    g.position.set(x, Math.max(0.05, y), z);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.18, 0.28, 24), new THREE.MeshBasicMaterial({ color, transparent: true, depthTest: false, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2; ring.renderOrder = 8;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 1.2, 8), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, depthTest: false }));
+    beam.position.y = 0.6; beam.renderOrder = 8;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.labelTex(label, '#' + color.toString(16).padStart(6, '0')), transparent: true, depthTest: false, depthWrite: false }));
+    sp.scale.set(0.55, 0.24, 1); sp.position.y = 1.35; sp.renderOrder = 9;
+    g.add(ring, beam, sp);
+    this.group.add(g);
+    this.pings.push({ g, ring, sp, t: 7.0 });
+  }
   update(dt: number, sim: Sim) {
     for (let j = 0; j < MAXP; j++) {
       if (this.life[j] <= 0) continue; this.life[j] -= dt;
@@ -833,6 +894,15 @@ export class FX {
     this.lightT -= dt; if (this.lightT <= 0) this.light.intensity = 0;
     for (const m of this.markers) { m.t -= dt; (m.m.material as THREE.MeshBasicMaterial).opacity = Math.min(1, m.t); m.m.scale.setScalar(1 + Math.sin(m.t * 8) * 0.12); if (m.t <= 0) { this.group.remove(m.m); m.m.geometry.dispose(); } }
     this.markers = this.markers.filter(m => m.t > 0);
+    for (const p of this.pings) {
+      p.t -= dt;
+      const op = Math.min(1, p.t * 0.8);
+      p.ring.scale.setScalar(1 + Math.sin(p.t * 7) * 0.16);
+      (p.ring.material as THREE.MeshBasicMaterial).opacity = op;
+      (p.sp.material as THREE.SpriteMaterial).opacity = op;
+      if (p.t <= 0) { this.group.remove(p.g); }
+    }
+    this.pings = this.pings.filter(p => p.t > 0);
     this.nades.forEach((n, i) => { const g = sim.grenades[i]; n.visible = !!g; if (g) { n.position.set(g.x, g.y, g.z); n.rotation.x += dt * 9; n.rotation.z += dt * 6; } });
   }
 }

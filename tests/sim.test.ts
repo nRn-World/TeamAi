@@ -407,6 +407,52 @@ ok(wins >= 4, 'bot should be able to win across missions');
   // Sub-2mm wall surface accuracy (e.g. solid wall at z=20 in column x=15.5)
   const hWall = sRay.ray(15.5, 1.6, 22.0, 0, 0, -1, 5, sRay.player);
   ok(hWall.kind === 'wall' && Math.abs(hWall.z - 21.0) < 0.002, `wall hit lands on exact surface (<2mm, z=${hWall.z.toFixed(4)})`);
+
+  // 12. Co-op features: tactical ping, downed/revive, breach sync, share gear, modifiers, MVP & snap interpolation
+  const sCoop = new Sim(0, 1, 1, 2, { blackout: true, extraHostiles: 3, pistolOnly: true });
+  ok(!sCoop.powerOn, 'blackout modifier starts power off');
+  ok(sCoop.mods.pistolOnly === true, 'pistolOnly modifier preserved');
+  const p1 = sCoop.players[0], p2 = sCoop.players[1];
+  const sBase = new Sim(0, 1, 1, 2);
+  ok(sCoop.suspects.length === sBase.suspects.length + 3, 'extraHostiles modifier adds extra suspects');
+
+  // Ping
+  const pg = sCoop.playerPing(p1, p1.x, 1.6, p1.z, 0, 0, -1);
+  ok(!!pg && sCoop.events.some(e => e.t === 'ping' && e.by === p1), 'playerPing emits ping event');
+
+  // Share gear
+  p2.x = p1.x + 1.0; p2.z = p1.z;
+  const b1 = p1.bangs, b2 = p2.bangs;
+  ok(sCoop.shareGear(p1) && p1.bangs === b1 - 1 && p2.bangs === b2 + 1, 'shareGear transfers flashbang to nearby teammate');
+
+  // Downed + Revive
+  const attacker = sCoop.suspects[0];
+  p2.hp = 10;
+  sCoop.damage(p2, 400, attacker, false);
+  ok(p2.alive && p2.downed && p2.bleedT > 30 && !sCoop.over, 'fatal damage in co-op puts player into downed bleedout state while ally is alive');
+  p1.x = p2.x + 0.7; p1.z = p2.z;
+  p1.yaw = yawTo(p2.x - p1.x, p2.z - p1.z);
+  sCoop.playerUse(p1);
+  ok(p1.reviving === p2, 'playerUse targets downed teammate for revive');
+  for (let k = 0; k < 30; k++) sCoop.update(0.1);
+  ok(p2.alive && !p2.downed && p2.hp >= 35, 'completing revive restores downed teammate');
+
+  // Breach sync countdown
+  const door = sCoop.level.doors.find(d => !d.locked)!;
+  p1.x = door.cx + 0.5; p1.z = door.cz + 1.2; p2.x = door.cx + 0.5; p2.z = door.cz + 1.4;
+  sCoop.toggleBreachSync(p1); sCoop.toggleBreachSync(p2);
+  ok(sCoop.breachSyncT > 2.5, 'breach sync starts countdown when 2 players ready up');
+  for (let k = 0; k < 33; k++) sCoop.update(0.1);
+  ok(door.target === 1, 'breach sync opens door at 0');
+
+  // Snap sync for downed, torch, ads, speaking, shield & NetTarget interpolation
+  p1.torch = false; p1.ads = true; p1.shield = true; p1.speaking = true; p1.weapon = 1; p1.pitch = 0.42;
+  const mir2 = new Sim(0, 1, 1, 2);
+  const tgMap = new Map<any, { x: number; z: number; yaw: number }>();
+  applySnap(mir2, JSON.parse(JSON.stringify(encodeSnap(sCoop))), mir2.players[1], tgMap);
+  ok(mir2.players[0].torch === false && mir2.players[0].ads === true && mir2.players[0].shield === true && mir2.players[0].speaking === true && mir2.players[0].weapon === 1 && Math.abs(mir2.players[0].pitch - 0.42) < 0.02, 'encodeSnap/applySnap syncs torch, ads, shield, speaking, weapon & pitch');
+  ok(tgMap.has(mir2.players[0]), 'applySnap populates NetTarget map for smooth client interpolation');
+  ok(sCoop.squadMvp().length === 2 && sCoop.squadMvp()[0].badge === 'SQUAD MVP', 'squadMvp ranks co-op players');
 }
 
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);
