@@ -52,6 +52,17 @@ Enemies can still *see* you when you are silent.
 
 The operators in the main menu are «S.W.A.T. Operator» by Mateusz Woliński (CC BY 4.0, source and licence in `public/models/operator/license.txt`). `tools/pack_operator.py` downscales the textures of the original download.
 
+## Officers and the truck
+
+The officers are the same «S.W.A.T. Operator» model in the menu and in the game (`src/game/operator.ts`). The model has a single animation (standing ready), so in the game it follows the animated stand-in skeleton: legs and hips always, the whole body when an officer goes down, and both arms are solved onto the rifle when it is shouldered. On the lowest graphics setting the simpler figures are used instead.
+
+The armoured truck in the menu is «Paramount Marauder» (CC BY 4.0). It only existed as a Unity import, so `tools/pack_unity_prefab.py` rebuilds a `.glb` from the prefab, and glTF Transform shrinks it:
+
+    python3 tools/pack_unity_prefab.py <Paramount_Marauder folder> out 1024 0.92
+    npx @gltf-transform/cli optimize out/model.glb public/models/vehicle/marauder.glb --compress meshopt --simplify-error 0.0015 --simplify-ratio 0.35 --texture-size 1024 --texture-compress webp
+
+Every third-party asset is credited in the game under Settings → Credits & thanks; add new ones there (title, author, source, licence, changes) and ship the model's `license.txt`.
+
 ## Weapon sounds
 
 Shots, reloads, clicks and the flashbang are built from recordings of real firearms in `public/sfx/` (all CC0, sources in `public/sfx/LICENSE.txt`). The carbine is an AR-15, the pistol a Walther PPQ and the suspects' weapon a Carl Gustav m/45. At a distance the sound crossfades to a recording of the same weapon from far away. If the files cannot be loaded the synthetic sounds are used.

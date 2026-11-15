@@ -5,6 +5,7 @@ import { WALL, OUT, Door } from '../sim/level';
 import * as T from './textures';
 import { modelsReady, Rig, droppedPistol } from './models';
 import { weaponModel } from './weapons';
+import { OperatorBody, operatorReady } from './operator';
 
 const BOX = new THREE.BoxGeometry(1, 1, 1);
 const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...o });
@@ -102,11 +103,13 @@ const GUNPOSE = { p: [0, 0.08, 0], r: [1.57, 0, 0], s: 1.15 }; // carbine in the
 const POSE = { thigh: 0, shin: 1.7, drop: 0.42, up: [2.4, 0.4, 0, 0, 0.7], cuff: [-0.5, 0.5, 0, 0, 0.9], head: 0.4 };
 const P_DROP = () => ((window as any).__pose ?? POSE).drop;
 export class ActorView {
+  /** Officers use the detailed operator model (off on the lowest graphics setting). */
+  static detailed = true;
   root = new THREE.Group(); body = new THREE.Group(); torso = new THREE.Group();
   legs: { hip: THREE.Group; knee: THREE.Group }[] = []; arms: { sh: THREE.Group; el: THREE.Group }[] = [];
   head = new THREE.Group(); gun = new THREE.Group(); label?: THREE.Sprite; fall = 0; flashT = 0; flash: THREE.Sprite;
   pool?: THREE.Mesh; poolT = 0; dropped?: THREE.Group; wounds = 0;
-  rig?: Rig; private shootT = 0; private rifle = false;
+  rig?: Rig; private shootT = 0; private rifle = false; op?: OperatorBody;
   constructor(public a: Actor) {
     const v = a.variant, off = a.kind === 'officer' || a.kind === 'player', tcol = a.kind === 'player' ? 0x4fd07a : TEAM_COLOR[a.team];
     const cloth = std({ color: off ? 0x1b2434 : a.kind === 'suspect' ? HOOD[v] : SHIRT[v] });
@@ -177,7 +180,8 @@ export class ActorView {
     g.obj.rotation.x = -this.proneK * Math.PI / 2; // crawling: lying face down
     g.obj.position.y = -P_DROP() * this.kneelK - (a.kind === 'player' && a.crouch && a.alive ? 0.25 : 0) + this.proneK * 0.2 + (a.alive ? a.jumpY : 0); g.obj.position.z = this.proneK * 0.8;
     if (g.gun) g.gun.visible = armed && a.alive && !a.down;
-    if (this.rifle) { this.gun.visible = armed && a.alive; const G = (window as any).__gun; if (G) { this.gun.position.set(G.p[0], G.p[1], G.p[2]); this.gun.rotation.set(G.r[0], G.r[1], G.r[2]); this.gun.scale.setScalar(G.s); } }
+    if (this.op) { this.op.update(g, dt, { alive: a.alive, aim: !!a.target || this.shootT > 0, armed }); this.gun.visible = false; }
+    else if (this.rifle) { this.gun.visible = armed && a.alive; const G = (window as any).__gun; if (G) { this.gun.position.set(G.p[0], G.p[1], G.p[2]); this.gun.rotation.set(G.r[0], G.r[1], G.r[2]); this.gun.scale.setScalar(G.s); } }
     if (this.label) this.label.visible = a.alive;
     if (this.dropped) this.dropped.visible = !a.armed || !a.alive;
     if (!a.alive) {
@@ -214,6 +218,9 @@ export class ActorView {
         const G = (window as any).__gun ?? GUNPOSE; this.gun.position.set(G.p[0], G.p[1], G.p[2]); this.gun.rotation.set(G.r[0], G.r[1], G.r[2]); this.gun.scale.setScalar(G.s); hand.add(this.gun); this.rifle = true;
         const real = weaponModel('rifle'); if (real) { this.gun.clear(); real.scale.setScalar(0.9); real.position.set(0, -0.03, -0.08); this.gun.add(real); }
       }
+    }
+    if (this.rig && !this.op && ActorView.detailed && operatorReady() && (a.kind === 'officer' || a.kind === 'player')) { // the same operator as in the menu
+      this.op = new OperatorBody(); this.rig.obj.traverse((o: any) => { if (o.isMesh) o.visible = false; }); this.body.add(this.op.obj); this.flash.position.set(0.13, 1.45, -1.0);
     }
     if (this.rig) { this.updateRig(dt, time); return; }
     this.flashT -= dt; this.flash.visible = this.flashT > 0; if (this.flash.visible) this.flash.material.rotation = time * 50;
