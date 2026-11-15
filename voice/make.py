@@ -1,6 +1,6 @@
 """Renders every spoken line in voice/lines.json with the free Kokoro speech model (Apache-2.0) into public/voice/.
 Run by .github/workflows/voices.yml (needs internet for the model files). Output: <voice>/<index>.mp3 + manifest.json.
-Each character role has its own set of voices; lines marked "s" are shouted: faster delivery, raised pitch, hard compression,
+Each character role has its own set of voices; lines marked "s" are shouted: faster delivery, hard compression (women's voices also slightly raised in pitch),
 a presence boost, light overdrive and a short room echo, so a command sounds yelled across a room rather than spoken."""
 import json, pathlib, shutil, subprocess, sys, traceback, wave
 import numpy as np
@@ -12,9 +12,9 @@ OUT = ROOT / 'public' / 'voice'
 MODELS = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else '/tmp/kokoro')
 # key: (Kokoro voice, speaking speed). First letter = role: p player, o officer, s suspect, c civilian.
 VOICES = {
-    'p1': ('am_fenrir', 1.0),
+    'p1': ('am_onyx', 1.0),
     'o1': ('am_michael', 1.0), 'o2': ('af_bella', 1.0), 'o3': ('am_puck', 0.97), 'o4': ('af_heart', 1.03),
-    's1': ('am_onyx', 1.0), 's2': ('am_eric', 1.05), 's3': ('bm_george', 1.0), 's4': ('af_kore', 1.0), 's5': ('am_echo', 0.95),
+    's1': ('am_fenrir', 1.0), 's2': ('am_eric', 1.05), 's3': ('bm_george', 1.0), 's4': ('af_kore', 1.0), 's5': ('am_echo', 0.95),
     'c1': ('af_sarah', 1.05), 'c2': ('am_liam', 1.05), 'c3': ('bf_emma', 1.0), 'c4': ('am_adam', 1.1), 'c5': ('af_nova', 1.0),
 }
 lines = json.load(open(ROOT / 'voice' / 'lines.json', encoding='utf-8'))
@@ -49,7 +49,7 @@ try:
             pcm = (np.clip(np.asarray(samples, dtype=np.float32), -1, 1) * 32767).astype('<i2')
             wav = tmp / f'{key}-{i}.wav'
             with wave.open(str(wav), 'wb') as w: w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr); w.writeframes(pcm.tobytes())
-            up = 1.1 if key[0] in 'po' else 1.07
+            up = 1.07 if name[1] == 'f' else 1.0 if key[0] == 'p' else 1.03  # men keep their register: a raised male voice reads as a woman
             subprocess.run([FFMPEG, '-y', '-loglevel', 'error', '-i', str(wav), '-af', shout(up) if loud else CALM,
                             '-ac', '1', '-ar', '24000', '-b:a', '56k', str(OUT / key / f'{i}.mp3')], check=True)
             n += 1
