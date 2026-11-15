@@ -241,6 +241,16 @@ ok(wins >= 4, 'bot should be able to win across missions');
   host.bomb!.time = 42.5;
   applySnap(mir, JSON.parse(JSON.stringify(encodeSnap(host))), mir.players[1]);
   ok(!mir.powerOn && !!mir.level.doors[0].wedged && Math.abs(mir.bomb!.time - 42.5) < 0.1 && mir.brokenWindows.size === host.brokenWindows.size, 'netstate syncs power, wedge, bomb, and broken windows');
+
+  // 6. Locked door touched by AI suspects/civs must not spam player 'info' events
+  const sLock = new Sim(0, 1);
+  const ld = sLock.level.doors.find(d => d.locked)!;
+  const civ = sLock.civs[0];
+  civ.x = ld.cx + 0.5; civ.z = ld.cz + (ld.horiz ? 1.2 : 0.5); if (!ld.horiz) civ.x = ld.cx + 1.2;
+  civ.panicT = 5; civ.lastSeen = { x: ld.cx + 0.5 - (ld.horiz ? 0 : 2), z: ld.cz + 0.5 - (ld.horiz ? 2 : 0) };
+  sLock.events.length = 0;
+  for (let i = 0; i < 30; i++) sLock.update(1 / 30);
+  ok(!sLock.events.some(e => e.t === 'info' && e.text.includes('Door is locked')), 'AI walking near locked door does not spam info events');
 }
 
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);
