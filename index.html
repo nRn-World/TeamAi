@@ -38,7 +38,7 @@
       <div class="logo">TEAM<span>AI</span></div>
       <div class="tag">Tactical Response Unit</div>
     </div>
-    <div id="micwarn" class="note"></div>
+    <div id="micwarn" class="note hidden"></div>
   </header>
 
   <aside id="armoryCard" class="acard">
@@ -46,18 +46,32 @@
       <div class="ckicker">// MISSION BRIEFING</div>
       <div id="mPills" class="mpills"></div>
       <h2 id="mTitle">THE OFFICE COMPLEX</h2>
-      <div class="clabel">OBJECTIVE &amp; INTEL</div>
-      <p id="mBrief" class="cbrief"></p>
-      <div class="cplan">
-        <canvas id="mPlan"></canvas>
-        <div class="cplanmeta"><span id="mFacts"></span><span id="mBestBadge"></span></div>
+      <div class="cmeta">
+        <div><span>LOCATION</span><b id="mLoc">KISTA, STOCKHOLM</b></div>
+        <div><span>OBJECTIVE</span><b id="mObj">RESCUE CIVILIANS · NEUTRALIZE THREATS</b></div>
       </div>
+      <p id="mBrief" class="cbrief"></p>
+      <div class="cpreview">
+        <img id="mPhoto" src="./missions/0.jpg" alt="Mission preview" />
+        <canvas id="mPlan" class="hidden"></canvas>
+        <button type="button" id="btnViewMode" class="viewtoggle">FLOORPLAN</button>
+      </div>
+      <div class="cplanmeta"><span id="mFacts"></span><span id="mBestBadge"></span></div>
       <div class="cdiff">
         <span>DIFFICULTY</span>
         <div id="mDiffPips" class="diffpips">
-          <button type="button" data-diff="0">Easy</button>
-          <button type="button" data-diff="1">Normal</button>
-          <button type="button" data-diff="2">Hard</button>
+          <button type="button" data-diff="0" title="Easy">
+            <svg viewBox="0 0 24 24"><path d="M12 2l7 4v6c0 5-3.5 9-7 10-3.5-1-7-5-7-10V6l7-4z"/></svg>
+            <i>Easy</i>
+          </button>
+          <button type="button" data-diff="1" title="Normal">
+            <svg viewBox="0 0 24 24"><path d="M12 2l7 4v6c0 5-3.5 9-7 10-3.5-1-7-5-7-10V6l7-4z"/></svg>
+            <i>Normal</i>
+          </button>
+          <button type="button" data-diff="2" title="Hard">
+            <svg viewBox="0 0 24 24"><path d="M12 2l7 4v6c0 5-3.5 9-7 10-3.5-1-7-5-7-10V6l7-4z"/></svg>
+            <i>Hard</i>
+          </button>
         </div>
       </div>
       <button id="btnStartMission" class="deploybtn">START MISSION</button>
