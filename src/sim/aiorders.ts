@@ -15,31 +15,32 @@ export const ORDER_SCHEMA = JSON.stringify({
   } } } },
 });
 
-const SYSTEM = `You turn what a police squad leader says into orders for his squad. He may speak English or Swedish, and the text may contain speech-recognition mistakes.
+const SYSTEM = `You turn what a police squad leader says into orders for his squad. He speaks English or Swedish; the text may contain speech-recognition mistakes.
 Squad: Team A = ${OFFICER_NAMES[0]} and ${OFFICER_NAMES[1]}. Team B = ${OFFICER_NAMES[2]} and ${OFFICER_NAMES[3]}.
-"to" says who the order is for: "A", "B", "ALL" or one name.
-"action" is one of:
-follow = come with the leader, regroup
-hold = stay, stop, wait
-move = go somewhere, with "dir": left, right, forward, back, or there (the spot the leader points at)
-cover = protect or guard the leader, watch his back
-stack = line up at the door
-breach = go in, storm or clear the room
-bang = throw a flashbang
-open, close = the door
-restrain = handcuff, arrest or secure people
-fireHold = stop shooting. fireFree = allowed to shoot
-report = status report
-shout = the leader yells at a suspect (police, drop the weapon, hands up)
-none = not an order
-Answer with JSON only: {"orders":[{"to":"...","action":"...","dir":"..."}]}. One entry per order, at most ${MAX_ORDERS}, in the order they were said.`;
+"to" = who the order is for. A name in the sentence (${OFFICER_NAMES.join(', ')}) -> that name. "team A"/"lag A" -> "A". "team B"/"lag B" -> "B". "everybody", "all", "both teams", "alla" -> "ALL". Nobody mentioned (only "you", "du", "ni") -> copy the "Last spoken to" value.
+"action" = one of:
+follow: come with me, on me, come back, regroup (följ, kom)
+hold: stay, stop, wait (stanna, vänta, håll)
+move: go left, right, forward, back, or there = the spot the leader points at (vänster, höger, framåt, bakåt, dit). Put the direction in "dir".
+cover: cover, protect or guard the leader, watch his back (täck, skydda)
+stack: line up at the door (ställ upp vid dörren)
+breach: go in, get in there, enter, storm or clear the room, kick the door in (gå in, storma, rensa)
+bang: throw a flashbang (släng/kasta flash, chockgranat)
+open, close: the door (öppna, stäng)
+restrain: handcuff, cuff, arrest or secure people (handbojor, grip, säkra)
+fireHold: do not shoot, hold fire (skjut inte, eld upphör). fireFree: allowed to shoot (fri eld)
+report: give a status report (rapportera, läget)
+shout: the leader yells at a suspect: police, drop the weapon, hands up
+none: anything that is not an order to the squad
+Answer with JSON only: {"orders":[{"to":"...","action":"...","dir":"..."}]}. One entry per order, at most ${MAX_ORDERS}. "dir" is "" unless the action is move.`;
 
 const SHOTS: [string, string, string][] = [
   ['ALL', 'Ken cover the door while team B goes in with a flash', '{"orders":[{"to":"Ken","action":"cover","dir":""},{"to":"B","action":"bang","dir":""}]}'],
   ['A', 'ni tar höger', '{"orders":[{"to":"A","action":"move","dir":"right"}]}'],
-  ['ALL', 'Maya stanna här och Jack du följer med mig', '{"orders":[{"to":"Maya","action":"hold","dir":""},{"to":"Jack","action":"follow","dir":""}]}'],
-  ['B', 'nice weather today', '{"orders":[{"to":"B","action":"none","dir":""}]}'],
-  ['ALL', 'everybody get those people in cuffs then team a kick that door in', '{"orders":[{"to":"ALL","action":"restrain","dir":""},{"to":"A","action":"breach","dir":""}]}'],
+  ['B', 'I think it is going to rain later', '{"orders":[{"to":"B","action":"none","dir":""}]}'],
+  ['ALL', 'get in there Maya and Jack du stannar här', '{"orders":[{"to":"Maya","action":"breach","dir":""},{"to":"Jack","action":"hold","dir":""}]}'],
+  ['Zoe', 'grip dem', '{"orders":[{"to":"Zoe","action":"restrain","dir":""}]}'],
+  ['B', 'okay everybody back on me', '{"orders":[{"to":"ALL","action":"follow","dir":""}]}'],
 ];
 const ask = (last: string, text: string) => `Last spoken to: ${last}\nLeader: ${text}`;
 

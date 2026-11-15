@@ -35,11 +35,12 @@ log('\n## Order reading');
 const tests: [string, string][] = [
   ['Ken cover the door while team B goes in with a flash', 'ALL'], ['you two stay put', 'A'], ['Jack get in there', 'ALL'], ['everybody come back to me', 'B'], ['Maya watch my back and Zoe open that door', 'ALL'],
   ['team a take the left side and team b take the right', 'ALL'], ['nobody shoots unless they shoot first', 'ALL'], ['put the cuffs on them', 'Ken'], ['toss a flashbang in there Ken', 'ALL'], ['I wonder what is for lunch', 'ALL'],
-  ['Ken du täcker oss', 'ALL'], ['du går in', 'Ken'], ['Ken släng flash', 'ALL'], ['lag B följ med mig', 'ALL'], ['alla stannar här', 'ALL'], ['Maya öppna dörren och Jack skydda mig', 'ALL'], ['lag A gå till vänster', 'ALL'], ['sätt handbojor på dem', 'B'],
+  ['hey what was that noise', 'A'], ['you go left', 'Jack'], ['both teams line up on that door', 'A'], ['Zoe hold your fire', 'ALL'],
+  ['Ken du täcker oss', 'ALL'], ['ni skyddar mig', 'B'], ['Zoe stäng dörren', 'ALL'], ['alla följ mig', 'A'], ['du går in', 'Ken'], ['Ken släng flash', 'ALL'], ['lag B följ med mig', 'ALL'], ['alla stannar här', 'ALL'], ['Maya öppna dörren och Jack skydda mig', 'ALL'], ['lag A gå till vänster', 'ALL'], ['sätt handbojor på dem', 'B'],
 ];
-for (const model of ['onnx-community/Qwen2.5-0.5B-Instruct', 'onnx-community/Qwen2.5-1.5B-Instruct']) {
+for (const model of ['onnx-community/Qwen2.5-1.5B-Instruct', 'onnx-community/Phi-3.5-mini-instruct-onnx-web']) {
   try {
-    const gen: any = await pipeline('text-generation', model, { dtype: 'q4' } as any);
+    const gen: any = await pipeline('text-generation', model, { dtype: model.includes('Phi') ? 'q4f16' : 'q4' } as any);
     for (const [text, last] of tests) {
       const t0 = Date.now(), r = await gen(orderMessages(text, last), { max_new_tokens: 140, do_sample: false }), ans = String(r[0].generated_text.at(-1).content);
       const lw = ['Ken', 'Maya', 'Jack', 'Zoe'].indexOf(last), cmds = toCommands(ans, lw >= 0 ? (lw < 2 ? 'A' : 'B') : last as any, lw >= 0 ? lw : null);
