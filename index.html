@@ -34,33 +34,114 @@
 
 <div id="menu" class="screen">
   <header class="mtop">
-    <div class="brand"><div class="logo">TEAM<span>AI</span></div><div class="tag">Voice-commanded entry team</div></div>
-    <div class="mstat"><span id="mRank" class="rank"></span><span id="mMic"></span><span id="mBest"></span><span class="ver">Version 0.2</span></div>
-  </header>
-  <nav class="mnav">
-    <button data-tab="tabPlay" class="on"><i>01</i>Missions</button>
-    <button data-tab="tabMp"><i>02</i>Play online</button>
-    <button id="btnHelp"><i>03</i>Controls &amp; voice orders</button>
-    <button id="btnSettings"><i>04</i>Settings</button>
-  </nav>
-  <section id="tabPlay" class="mtab">
-    <div class="mhead"><b>Choose mission</b><span>Solo with four AI officers who obey your voice</span></div>
-    <div id="missions"></div>
-  </section>
-  <section id="tabMp" class="mtab hidden">
-    <div class="mhead"><b>Play online</b><span>Up to four players · voice chat · everyone can give orders to Team A and B</span></div>
-    <div class="mp">
-      <div class="mpcol"><label for="mpName">Your name</label><input id="mpName" maxlength="12" placeholder="Player" /></div>
-      <div class="mpcol"><label>New room</label><button id="btnHost" class="primary">Create room</button></div>
-      <div class="mpsep"></div>
-      <div class="mpcol"><label for="mpCode">Room code from a friend</label><input id="mpCode" maxlength="5" placeholder="ABCDE" /></div>
-      <div class="mpcol"><label>&nbsp;</label><button id="btnJoin">Join</button></div>
+    <div class="brand">
+      <div class="logo">TEAM<span>AI</span></div>
+      <div class="tag">Tactical Response Unit</div>
     </div>
-    <div id="mpErr" class="note warn"></div>
-  </section>
-  <footer class="mfoot">
     <div id="micwarn" class="note"></div>
-    <div class="hints"><span><kbd>V</kbd> hold and talk to your team</span><span><kbd>Q</kbd> shout «Police!»</span><span><kbd>F</kbd> handcuff</span><span><kbd>Esc</kbd> pause</span></div>
+  </header>
+
+  <aside id="armoryCard" class="acard">
+    <section id="tabPlay" class="atab">
+      <div class="ckicker">// MISSION BRIEFING</div>
+      <div id="mPills" class="mpills"></div>
+      <h2 id="mTitle">THE OFFICE COMPLEX</h2>
+      <div class="clabel">OBJECTIVE &amp; INTEL</div>
+      <p id="mBrief" class="cbrief"></p>
+      <div class="cplan">
+        <canvas id="mPlan"></canvas>
+        <div class="cplanmeta"><span id="mFacts"></span><span id="mBestBadge"></span></div>
+      </div>
+      <div class="cdiff">
+        <span>DIFFICULTY</span>
+        <div id="mDiffPips" class="diffpips">
+          <button type="button" data-diff="0">Easy</button>
+          <button type="button" data-diff="1">Normal</button>
+          <button type="button" data-diff="2">Hard</button>
+        </div>
+      </div>
+      <button id="btnStartMission" class="deploybtn">START MISSION</button>
+    </section>
+
+    <section id="tabMp" class="atab hidden">
+      <div class="ckicker">// ONLINE CO-OP</div>
+      <h2>MULTIPLAYER LOBBY</h2>
+      <p class="cbrief">Up to 4 players · built-in voice chat · everyone can command Team A and B.</p>
+      <div class="mp">
+        <div class="mpcol"><label for="mpName">Your callsign</label><input id="mpName" maxlength="12" placeholder="Player" /></div>
+        <div class="mpcol"><label>Host a new operation</label><button id="btnHost" class="deploybtn">Create room</button></div>
+        <div class="mpsep"></div>
+        <div class="mpcol"><label for="mpCode">Room code from a friend</label><input id="mpCode" maxlength="5" placeholder="ABCDE" /></div>
+        <div class="mpcol"><label>&nbsp;</label><button id="btnJoin">Join room</button></div>
+      </div>
+      <div id="mpErr" class="note warn"></div>
+    </section>
+
+    <section id="tabLoadout" class="atab hidden">
+      <div class="ckicker">// ARMORY &amp; SQUAD</div>
+      <h2>TACTICAL LOADOUT</h2>
+      <div class="loadout armory-lo">
+        <label>Primary Gear
+          <select id="lPrimary">
+            <option value="carbine">M4 Carbine (Lethal · Full-Auto)</option>
+            <option value="shotgun">M870 Tactical Shotgun (Lethal · Buckshot)</option>
+            <option value="beanbag">Beanbag Shotgun (Non-Lethal · High Arrest)</option>
+            <option value="shield">Ballistic Shield (Blocks Frontal Fire)</option>
+          </select>
+        </label>
+        <label>Secondary Gear
+          <select id="lSecondary">
+            <option value="pistol">Glock 17 (9mm Sidearm)</option>
+            <option value="taser">X26 Taser (Non-Lethal · Instant Stun)</option>
+          </select>
+        </label>
+      </div>
+      <div class="clabel" style="margin-top:14px">ENTRY TEAM SPECIALISTS</div>
+      <div class="squadroles armory-roles">
+        <div><b>Ken · Pointman</b>Faster movement</div>
+        <div><b>Maya · Breacher</b>Extra flash &amp; C2</div>
+        <div><b>Jack · Marksman</b>Sharper rifle aim</div>
+        <div><b>Zoe · Negotiator</b>Better surrender &amp; cuffs</div>
+      </div>
+    </section>
+  </aside>
+
+  <footer class="mdock">
+    <nav class="docknav">
+      <button data-tab="tabPlay" class="on">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg>
+        <span>Missions</span>
+      </button>
+      <button data-tab="tabMp">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87m-4-12a4 4 0 0 1 0 7.75"/></svg>
+        <span>Co-op</span>
+      </button>
+      <button data-tab="tabLoadout">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h14l4 2-4 2H3zM7 14v4m5-4v3"/></svg>
+        <span>Loadout</span>
+      </button>
+      <button id="btnHelp">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M6 12h4m-2-2v4m7-3h.01M17 13h.01"/></svg>
+        <span>Controls</span>
+      </button>
+      <button id="btnSettings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1.02 1.4 1.09H21a2 2 0 1 1 0 4h-.09c-.63.07-1.14.49-1.51 1z"/></svg>
+        <span>Settings</span>
+      </button>
+    </nav>
+    <div class="dockstatus">
+      <div class="rankbadge">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l7 4v6c0 5-3.5 9-7 10-3.5-1-7-5-7-10V6l7-4z"/></svg>
+        <div class="ranktext">
+          <div class="ranktop">TEAMAI <span id="mRank">ROOKIE OFFICER</span></div>
+          <div class="xpbar"><i id="mXpFill"></i></div>
+        </div>
+      </div>
+      <div class="dockmeta">
+        <span id="mMic"></span>
+        <span id="mBest"></span>
+      </div>
+    </div>
   </footer>
 </div>
 
@@ -82,28 +163,6 @@
   <div>
     <p id="briefText"></p>
     <div id="briefFacts" class="facts"></div>
-    <div class="loadout">
-      <label>Primary Gear
-        <select id="lPrimary">
-          <option value="carbine">M4 Carbine (Lethal · Full-Auto)</option>
-          <option value="shotgun">M870 Tactical Shotgun (Lethal · Buckshot)</option>
-          <option value="beanbag">Beanbag Shotgun (Non-Lethal · High Arrest)</option>
-          <option value="shield">Ballistic Shield (Blocks Frontal Fire)</option>
-        </select>
-      </label>
-      <label>Secondary Gear
-        <select id="lSecondary">
-          <option value="pistol">Glock 17 (9mm Sidearm)</option>
-          <option value="taser">X26 Taser (Non-Lethal · Instant Stun)</option>
-        </select>
-      </label>
-    </div>
-    <div class="squadroles">
-      <div><b>Ken · Pointman</b>Faster movement</div>
-      <div><b>Maya · Breacher</b>Extra flash &amp; C2</div>
-      <div><b>Jack · Marksman</b>Sharper rifle aim</div>
-      <div><b>Zoe · Negotiator</b>Better surrender &amp; cuffs</div>
-    </div>
   </div></div>
   <div class="tips"><b>Say for example:</b> «Team A go left» · «Team B cover me» · «Everyone stack up on the door» · «Bravo bang and clear» · «Ken, you cover us» · «Jack, throw flash» · «Police! Drop the weapon!» · «Team A cuff them»</div>
   <div class="row"><button id="btnBack">Back</button><button id="btnGo" class="primary">Begin operation</button></div>
