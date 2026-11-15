@@ -38,7 +38,7 @@ const tests: [string, string][] = [
   ['hey what was that noise', 'A'], ['you go left', 'Jack'], ['both teams line up on that door', 'A'], ['Zoe hold your fire', 'ALL'],
   ['Ken du täcker oss', 'ALL'], ['ni skyddar mig', 'B'], ['Zoe stäng dörren', 'ALL'], ['alla följ mig', 'A'], ['du går in', 'Ken'], ['Ken släng flash', 'ALL'], ['lag B följ med mig', 'ALL'], ['alla stannar här', 'ALL'], ['Maya öppna dörren och Jack skydda mig', 'ALL'], ['lag A gå till vänster', 'ALL'], ['sätt handbojor på dem', 'B'],
 ];
-for (const model of ['onnx-community/Qwen2.5-1.5B-Instruct', 'onnx-community/Phi-3.5-mini-instruct-onnx-web']) {
+for (const model of ['onnx-community/Qwen2.5-1.5B-Instruct']) {
   try {
     const gen: any = await pipeline('text-generation', model, { dtype: model.includes('Phi') ? 'q4f16' : 'q4' } as any);
     for (const [text, last] of tests) {
