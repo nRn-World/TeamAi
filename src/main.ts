@@ -87,7 +87,7 @@ class Game {
       const b = document.createElement('button'); b.className = 'mission';
       const cv = document.createElement('canvas'); this.drawPlan(i, cv, 5); b.appendChild(cv);
       const d = document.createElement('div'); d.className = 'minfo';
-      d.innerHTML = `<em>${String(i + 1).padStart(2, '0')}</em><b>${m.name}</b><small>${m.suspects} suspects · ${m.civs} civilians</small>` + (best[i] != null ? `<span class="best">Best ${best[i]}/100</span>` : '<span class="best none">Ej klarat</span>');
+      d.innerHTML = `<em>${String(i + 1).padStart(2, '0')}</em><b>${m.name}</b><small>${m.suspects} suspects · ${m.civs} civilians</small>` + (best[i] != null ? `<span class="best">Best ${best[i]}/100</span>` : '<span class="best none">Not completed</span>');
       b.appendChild(d);
       b.onclick = () => { this.audio.init(); this.audio.ui(); this.mission = i; $('briefTitle').textContent = m.name; $('briefText').textContent = m.brief; this.drawPlan(i, $<HTMLCanvasElement>('briefMap'), 9);
         $('briefFacts').innerHTML = `<div><b>${m.suspects}</b>suspects</div><div><b>${m.civs}</b>civilians</div><div><b>4</b>officers on your team</div>`; show('menu', false); show('brief', true); };
@@ -177,7 +177,7 @@ class Game {
       this.net.broadcast({ t: 'lobby', names: this.lobbyNames, ids: [this.net.id, ...this.net.conns.map(c => c.peer)], mission: this.lobbyMission });
     }
     $('lobbyCode').textContent = this.net.code;
-    $('lobbyPlayers').innerHTML = (this.lobbyNames.length ? this.lobbyNames : ['Ansluter…']).map((n, i) => `<li>${n.replace(/[<>&]/g, '')}${i === 0 ? ' <em>host</em>' : ''}${i === (host ? 0 : this.lobbyMe) ? ' <em class="you">you</em>' : ''}</li>`).join('');
+    $('lobbyPlayers').innerHTML = (this.lobbyNames.length ? this.lobbyNames : ['Connecting…']).map((n, i) => `<li>${n.replace(/[<>&]/g, '')}${i === 0 ? ' <em>host</em>' : ''}${i === (host ? 0 : this.lobbyMe) ? ' <em class="you">you</em>' : ''}</li>`).join('');
     const hostName = (this.lobbyNames[0] || 'the host').replace(/[<>&]/g, '');
     $('lobbyTitle').textContent = host ? 'Your room – you are the host' : 'You have joined ' + hostName + '’s room';
     $('btnCopy').classList.toggle('hidden', !host);
@@ -232,7 +232,7 @@ class Game {
     this.buildMap(); show('menu', false); show('hud', true); this.updateHud(true);
     if (S.mic && !AUTO) this.voice.start();
     if (mp && !document.pointerLockElement) this.log('Click in the game to take control of the mouse.', 'warn');
-    this.log('Insatsledning: ' + MISSIONS[mission].name + '. Give orders with your voice – good luck.', 'me');
+    this.log('Command: ' + MISSIONS[mission].name + '. Give orders with your voice – good luck.', 'me');
   }
 
   // ---------------- input ----------------
@@ -427,7 +427,7 @@ class Game {
       starting: ptt && held ? ['STARTING MICROPHONE – wait a second and say it again', 'Starting the microphone…'] : ptt ? ['HOLD V TO TALK', 'Hold V while you give an order and release it when you are done.'] : ['STARTING MICROPHONE…', 'Starting the microphone…'],
       off: ['MICROPHONE OFF – press Enter to type an order', 'The microphone is off.'], unsupported: ['VOICE CONTROL NOT SUPPORTED HERE – use Chrome', 'This browser has no speech recognition. Use Google Chrome.'],
     };
-    const m = (detail && why[detail]) || base[s] || ['MIKROFONFEL' + (detail ? ' (' + detail + ')' : ''), 'Unknown microphone error' + (detail ? ': ' + detail : '') + '.'];
+    const m = (detail && why[detail]) || base[s] || ['MICROPHONE ERROR' + (detail ? ' (' + detail + ')' : ''), 'Unknown microphone error' + (detail ? ': ' + detail : '') + '.'];
     txt.textContent = m[0]; $('micHelp').textContent = m[1] + (this.voice.lastHeard ? ` Last words heard by the microphone: «${this.voice.lastHeard}».` : ' The microphone has not picked up any words yet.') + (this.voice.lastError ? ` Last error from the speech service: ${this.voice.lastError}.` : ''); $('micHelp').className = 'note' + (dot.className === 'err' ? ' warn' : '');
   }
   buildMap() {
@@ -450,7 +450,7 @@ class Game {
     const p = sim.player, r = sim.remaining();
     ($('hpbar').firstElementChild as HTMLElement).style.width = Math.max(0, p.hp) + '%'; $('hptxt').textContent = String(Math.ceil(Math.max(0, p.hp)));
     $('wname').textContent = WEAPONS[this.weapon].name + (this.reloadT > 0 ? ' – RELOADING' : ''); const ac = $('acount'); ac.innerHTML = `<b>${this.ammo[this.weapon]}</b> / ${this.reserve[this.weapon]}`; ac.className = this.ammo[this.weapon] <= 5 ? 'low' : '';
-    $('bangs').textContent = 'CHOCKGRANAT ' + '◉'.repeat(p.bangs) + '○'.repeat(Math.max(0, 3 - p.bangs));
+    $('bangs').textContent = 'FLASHBANG ' + '◉'.repeat(p.bangs) + '○'.repeat(Math.max(0, 3 - p.bangs));
     $('objective').innerHTML = `SUSPECTS LEFT <b>${r.suspects}</b> &nbsp;·&nbsp; CIVILIANS TO SECURE <b>${r.civs}</b>`;
     let html = '';
     for (const t of ['A', 'B'] as Team[]) {
