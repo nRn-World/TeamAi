@@ -1,0 +1,28 @@
+Prop, Plant, Flower & Furniture 3D Models — Licenses & Attributions
+====================================================================
+
+1. Poly Haven (CC0 1.0 Universal — Public Domain)
+   Source: https://polyhaven.com/ (via iandamai720-cmyk/interior-models-extra)
+   - plant_urn.glb         (Potted Plant 01)
+   - plant_leafy.glb       (Potted Plant 02)
+   - plant_succulent.glb   (Potted Plant 04)
+   - planter_box.glb       (Planter Box 01)
+   - armchair.glb          (Arm Chair 01)
+   - greenchair.glb        (Green Chair 01)
+   - sofa.glb              (Sofa 02)
+   - desk.glb              (Metal Office Desk)
+   - shelf.glb             (Shelf 01)
+   - crate.glb             (Wooden Crate 02)
+
+2. Khronos Group glTF Sample Assets
+   Source: https://github.com/KhronosGroup/glTF-Sample-Assets
+   - flowers.glb           (GlassVaseFlowers — CC0 1.0 / Khronos)
+
+3. Sketchfab / Objaverse 1.0 Models (CC BY 4.0)
+   License: https://creativecommons.org/licenses/by/4.0/
+   - rose_bush.glb         "Rose bush" by RosticOstafi
+   - geranium.glb          "Geranium Game Asset" by wilsonghm99
+   - desk_pc.glb           "Computer Desk" by Glowbox 3D
+   - bed.glb               "Wooden Bed" by toAflame
+   - locker.glb            "Locker" by andree
+   - bar.glb               "Cabinet – Bar counter" by Adam

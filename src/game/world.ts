@@ -6,6 +6,7 @@ import * as T from './textures';
 import { modelsReady, Rig, droppedPistol } from './models';
 import { weaponModel } from './weapons';
 import { OperatorBody, operatorReady } from './operator';
+import { propsReady, onPropsReady, propModel, exteriorPlanterModel, exteriorTreeModel } from './props';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
@@ -40,6 +41,9 @@ export class LevelView {
   private strobeLens: THREE.MeshStandardMaterial[] = [];
   private discoBall?: THREE.Group;
   private lasers: THREE.Mesh[] = [];
+  private propSlots: (() => void)[] = [];
+  private disposed = false;
+  dispose() { this.disposed = true; this.propSlots.length = 0; }
   constructor(public sim: Sim, quality: number) {
     const l = sim.level, th = THEME[l.theme], g = this.group;
     // exterior ground: wet stone plaza for architectural themes, dark wet asphalt elsewhere
@@ -162,22 +166,59 @@ export class LevelView {
     const sofaCols = ['#7a2f2f', '#2f4a6a', '#4a4a4a', '#6a5a2f'];
     for (const p of l.props) {
       const o = new THREE.Group(); o.position.set(p.cx + 0.5, 0, p.cz + 0.5); const rj = ((p.cx * 13 + p.cz * 7) % 10) / 10;
-      switch (p.kind) {
-        case 'crate': { const high = sim.cell(p.cx, p.cz) === 5; const a = box(0.94, 0.94, 0.94, crate, 0, 0.47, 0); a.rotation.y = (rj - 0.5) * 0.2; o.add(a); if (high) { const b = box(0.86, 0.86, 0.86, crate, (rj - 0.5) * 0.08, 0.94 + 0.43, 0); b.rotation.y = (rj - 0.5) * 0.5; o.add(b); if (rj > 0.5) o.add(box(0.7, 0.5, 0.7, crate, 0, 2.05, 0)); } break; }
-        case 'desk': o.add(box(0.98, 0.05, 0.86, wood, 0, 0.76, 0), box(0.05, 0.74, 0.8, wood, -0.44, 0.37, 0), box(0.05, 0.74, 0.8, wood, 0.44, 0.37, 0), box(0.86, 0.4, 0.03, wood, 0, 0.5, -0.38));
-          if (rj > 0.3) { o.add(box(0.42, 0.28, 0.03, dark, 0, 1.0, -0.15), box(0.06, 0.1, 0.06, dark, 0, 0.83, -0.15)); const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.38, 0.24), new THREE.MeshBasicMaterial({ color: rj > 0.6 ? 0x2a4f7a : 0x0c1016 })); scr.position.set(0, 1.0, -0.133); o.add(scr); }
-          o.rotation.y = (p.rot * Math.PI) / 2; break;
-        case 'bar': o.add(box(0.98, 1.05, 0.6, dark, 0, 0.525, 0), box(1.0, 0.08, 0.68, std({ color: 0x722f8a, emissive: 0x3b124d, emissiveIntensity: 0.4 }), 0, 1.06, 0)); o.rotation.y = (p.rot * Math.PI) / 2; break;
-        case 'server': o.add(box(0.88, 2.15, 0.75, dark, 0, 1.075, 0), box(0.68, 0.08, 0.77, new THREE.MeshBasicMaterial({ color: 0x2de080 }), 0, 1.6, 0), box(0.68, 0.08, 0.77, new THREE.MeshBasicMaterial({ color: 0x3ea8ff }), 0, 1.2, 0)); o.rotation.y = (p.rot * Math.PI) / 2; break;
-        case 'shelf': o.add(box(0.96, 2.1, 0.5, shelf, 0, 1.05, 0)); o.rotation.y = (p.rot % 2 ? Math.PI / 2 : 0); break;
-        case 'locker': o.add(box(0.92, 2.0, 0.6, locker, 0, 1.0, 0)); o.rotation.y = (p.rot * Math.PI) / 2; break;
-        case 'bed': o.add(box(0.96, 0.3, 0.96, wood, 0, 0.15, 0), box(0.9, 0.2, 0.9, white, 0, 0.4, 0), box(0.6, 0.1, 0.3, white, 0, 0.55, -0.26)); o.rotation.y = (p.rot * Math.PI) / 2; break;
-        case 'sofa': { const fm = std({ map: T.fabricTex('s' + (p.rot % 4), sofaCols[p.rot % 4]) }); o.add(box(0.96, 0.42, 0.9, fm, 0, 0.21, 0), box(0.96, 0.4, 0.2, fm, 0, 0.62, -0.36), box(0.14, 0.24, 0.9, fm, -0.41, 0.54, 0), box(0.14, 0.24, 0.9, fm, 0.41, 0.54, 0)); o.rotation.y = (p.rot * Math.PI) / 2; break; }
-        case 'plant': { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.16, 0.4, 10), pot); c.position.y = 0.2; o.add(c); for (let i = 0; i < 3; i++) { const s = new THREE.Mesh(new THREE.IcosahedronGeometry(0.26 - i * 0.05, 0), leaf); s.position.set((i - 1) * 0.08, 0.6 + i * 0.22, (rj - 0.5) * 0.1); s.rotation.set(i, rj * 6, i * 2); o.add(s); } break; }
+      const seed = p.cx * 31 + p.cz * 17 + p.rot;
+      const high = sim.cell(p.cx, p.cz) === 5;
+      if (p.kind === 'server') {
+        const rackFrame = std({ color: 0x16191f, metalness: 0.55, roughness: 0.42 });
+        const grille = std({ color: 0x222832, metalness: 0.65, roughness: 0.38 });
+        o.add(
+          box(0.86, 2.15, 0.74, rackFrame, 0, 1.075, 0),
+          box(0.76, 1.98, 0.76, grille, 0, 1.075, 0),
+          box(0.66, 0.05, 0.77, new THREE.MeshBasicMaterial({ color: 0x2de080 }), 0, 1.72, 0),
+          box(0.66, 0.05, 0.77, new THREE.MeshBasicMaterial({ color: 0x3ea8ff }), 0, 1.38, 0),
+          box(0.66, 0.05, 0.77, new THREE.MeshBasicMaterial({ color: 0x2de080 }), 0, 1.04, 0),
+        );
+        o.rotation.y = (p.rot * Math.PI) / 2;
+      } else {
+        const buildFallback = () => {
+          switch (p.kind) {
+            case 'crate': { const a = box(0.94, 0.94, 0.94, crate, 0, 0.47, 0); a.rotation.y = (rj - 0.5) * 0.2; o.add(a); if (high) { const b = box(0.86, 0.86, 0.86, crate, (rj - 0.5) * 0.08, 0.94 + 0.43, 0); b.rotation.y = (rj - 0.5) * 0.5; o.add(b); if (rj > 0.5) o.add(box(0.7, 0.5, 0.7, crate, 0, 2.05, 0)); } break; }
+            case 'desk': o.add(box(0.98, 0.05, 0.86, wood, 0, 0.76, 0), box(0.05, 0.74, 0.8, wood, -0.44, 0.37, 0), box(0.05, 0.74, 0.8, wood, 0.44, 0.37, 0), box(0.86, 0.4, 0.03, wood, 0, 0.5, -0.38));
+              if (rj > 0.3) { o.add(box(0.42, 0.28, 0.03, dark, 0, 1.0, -0.15), box(0.06, 0.1, 0.06, dark, 0, 0.83, -0.15)); const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.38, 0.24), new THREE.MeshBasicMaterial({ color: rj > 0.6 ? 0x2a4f7a : 0x0c1016 })); scr.position.set(0, 1.0, -0.133); o.add(scr); }
+              break;
+            case 'bar': o.add(box(0.98, 1.05, 0.6, dark, 0, 0.525, 0), box(1.0, 0.08, 0.68, std({ color: 0x722f8a, emissive: 0x3b124d, emissiveIntensity: 0.4 }), 0, 1.06, 0)); break;
+            case 'shelf': o.add(box(0.96, 2.1, 0.5, shelf, 0, 1.05, 0)); break;
+            case 'locker': o.add(box(0.92, 2.0, 0.6, locker, 0, 1.0, 0)); break;
+            case 'bed': o.add(box(0.96, 0.3, 0.96, wood, 0, 0.15, 0), box(0.9, 0.2, 0.9, white, 0, 0.4, 0), box(0.6, 0.1, 0.3, white, 0, 0.55, -0.26)); break;
+            case 'sofa': { const fm = std({ map: T.fabricTex('s' + (p.rot % 4), sofaCols[p.rot % 4]) }); o.add(box(0.96, 0.42, 0.9, fm, 0, 0.21, 0), box(0.96, 0.4, 0.2, fm, 0, 0.62, -0.36), box(0.14, 0.24, 0.9, fm, -0.41, 0.54, 0), box(0.14, 0.24, 0.9, fm, 0.41, 0.54, 0)); break; }
+            case 'plant': { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.16, 0.4, 10), pot); c.position.y = 0.2; o.add(c); for (let i = 0; i < 3; i++) { const s = new THREE.Mesh(new THREE.IcosahedronGeometry(0.26 - i * 0.05, 0), leaf); s.position.set((i - 1) * 0.08, 0.6 + i * 0.22, (rj - 0.5) * 0.1); s.rotation.set(i, rj * 6, i * 2); o.add(s); } break; }
+          }
+        };
+        const fill = () => {
+          const real = propModel(p.kind, seed, high);
+          if (!real) return false;
+          o.clear();
+          o.add(real);
+          return true;
+        };
+        if (p.kind === 'shelf') o.rotation.y = (p.rot % 2 ? Math.PI / 2 : 0);
+        else if (p.kind !== 'crate' && p.kind !== 'plant') o.rotation.y = (p.rot * Math.PI) / 2;
+        else if (p.kind === 'plant') o.rotation.y = rj * Math.PI * 2;
+        if (!fill()) {
+          buildFallback();
+          this.propSlots.push(() => { fill(); });
+        }
       }
       g.add(o);
     }
     this.buildExterior(quality);
+    if (!propsReady && this.propSlots.length) {
+      onPropsReady(() => {
+        if (this.disposed) return;
+        for (const populate of this.propSlots) populate();
+        this.propSlots.length = 0;
+      });
+    }
   }
   private buildExterior(quality: number) {
     const l = this.sim.level, g = this.group;
@@ -196,12 +237,39 @@ export class LevelView {
       const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.142, 0.142, 0.04, 12), new THREE.MeshBasicMaterial({ color: 0xd0d6de }));
       cap.position.set(x, 0.75, z); g.add(cap);
     };
-    const addShrub = (x: number, z: number) => {
-      g.add(box(0.75, 0.48, 0.75, potMat, x, 0.24, z));
-      for (let i = 0; i < 3; i++) {
-        const s = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28 - i * 0.04, 1), shrubMat);
-        s.position.set(x + (i - 1) * 0.11, 0.62 + i * 0.12, z + ((i % 2) - 0.5) * 0.1);
-        g.add(s);
+    const addShrub = (x: number, z: number, ry = 0) => {
+      const grp = new THREE.Group(); grp.position.set(x, 0, z); grp.rotation.y = ry; g.add(grp);
+      const seed = Math.abs(Math.round(x * 7 + z * 13));
+      const fill = () => {
+        const real = exteriorPlanterModel(seed);
+        if (!real) return false;
+        grp.clear(); grp.add(real); return true;
+      };
+      if (!fill()) {
+        grp.add(box(0.75, 0.48, 0.75, potMat, 0, 0.24, 0));
+        for (let i = 0; i < 3; i++) {
+          const s = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28 - i * 0.04, 1), shrubMat);
+          s.position.set((i - 1) * 0.11, 0.62 + i * 0.12, ((i % 2) - 0.5) * 0.1);
+          grp.add(s);
+        }
+        this.propSlots.push(() => { fill(); });
+      }
+    };
+    const addTree = (x: number, z: number, scale = 1.55) => {
+      const grp = new THREE.Group(); grp.position.set(x, 0, z); g.add(grp);
+      const seed = Math.abs(Math.round(x * 11 + z * 19));
+      const fill = () => {
+        const real = exteriorTreeModel(seed, scale);
+        if (!real) return false;
+        grp.clear(); grp.add(real); return true;
+      };
+      if (!fill()) {
+        grp.add(box(0.72, 0.34, 0.72, potMat, 0, 0.17, 0));
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 1.3, 8), std({ color: 0x4d3a2c }));
+        trunk.position.y = 0.9; grp.add(trunk);
+        const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 1), shrubMat);
+        crown.position.y = 1.75; grp.add(crown);
+        this.propSlots.push(() => { fill(); });
       }
     };
     const addSign = (text: string, bg: string, fg: string, glow: string, w: number, h: number, x: number, y: number, z: number, ry = 0) => {
@@ -232,9 +300,10 @@ export class LevelView {
         }
       }
       addSign('EXIT', '#093818', '#52ff88', '#34e86a', 0.9, 0.3, 14.5, 2.52, 20.02);
-      // Bollards + entrance planters
+      // Bollards + entrance planters & courtyard trees
       for (const bx of [10.4, 11.7, 12.8, 16.2]) addBollard(bx, 22.85);
-      addShrub(10.5, 21.3); addShrub(18.5, 21.3);
+      addShrub(10.5, 21.3); addShrub(17.4, 21.3);
+      addTree(8.5, 22.0, 1.55); addTree(23.8, 22.2, 1.55);
 
       // 2nd Floor Warm-Lit Glass Curtain-Wall Offices (y=3.2..6.5) matching image-3.png
       g.add(box(24.4, 0.35, 18.2, darkSteel, 16.0, 3.28, 11.9));
@@ -306,6 +375,7 @@ export class LevelView {
         for (const lx of [20.5, 22.5, 24.5]) { const pl = new THREE.PointLight(0xffcf88, 18, 12, 1.5); pl.position.set(lx, 3.1, 25.6); g.add(pl); }
       }
       addShrub(18.6, 25.5); addShrub(26.4, 25.5);
+      addTree(16.2, 25.8, 1.65); addTree(33.2, 25.8, 1.65);
       // 5-Story Limestone & Lit Guest-Window Hotel Tower
       g.add(box(38.2, 14.2, 21.2, stone, 23.0, 10.3, 14.4));
       for (let fy = 5.0; fy <= 14.5; fy += 3.1) {
@@ -332,6 +402,8 @@ export class LevelView {
       g.add(box(36.2, 4.4, 21.2, granite, 22.0, 5.4, 14.4));
       for (let wx = 7.5; wx <= 37.5; wx += 4.2) g.add(box(1.5, 2.1, 0.12, warmGlass, wx, 5.2, 25.02));
       for (const bx of [9.6, 11.2, 12.8, 18.2, 19.8]) addBollard(bx, 27.1);
+      addShrub(12.3, 25.7); addShrub(18.7, 25.7);
+      addTree(7.8, 26.2, 1.6); addTree(26.6, 26.2, 1.6);
       if (quality > 0) {
         for (const lx of [12.5, 15.5, 18.5]) { const pl = new THREE.PointLight(0xffdfb8, 18, 12, 1.5); pl.position.set(lx, 5.8, 25.8); g.add(pl); }
         void this.spawnPoliceUnit(22.4, 26.2, -0.54, quality);
@@ -342,6 +414,7 @@ export class LevelView {
       g.add(box(32.2, 4.4, 21.2, brick, 20.0, 5.4, 13.4));
       g.add(box(1.2, 6.5, 8.0, brick, 5.5, 3.25, 26.8), box(1.2, 6.5, 8.0, brick, 21.5, 3.25, 26.8));
       addSign('ECLIPSE', '#12061c', '#ff52e0', '#d438ff', 3.4, 0.72, 13.5, 3.25, 24.06);
+      addShrub(7.6, 24.6); addShrub(15.8, 24.6);
       // Magenta & cyan alley sconces
       for (const [sx, sz, col] of [[6.15, 25.5, 0xd438ff], [6.15, 28.0, 0x38c8ff], [20.85, 25.5, 0x38c8ff], [20.85, 28.0, 0xd438ff]] as const) {
         g.add(box(0.14, 0.45, 0.2, new THREE.MeshBasicMaterial({ color: col }), sx, 2.3, sz));
@@ -379,6 +452,7 @@ export class LevelView {
         g.add(box(0.9, 0.3, 0.2, soffitMat, tx, 7.4, fz + 0.3));
         if (quality > 0) { const pl = new THREE.PointLight(0xdfe8ff, 26, 22, 1.4); pl.position.set(tx, 7.1, fz + 0.6); g.add(pl); }
       }
+      addTree(4.5, fz + 1.4, 1.5); addTree(35.8, fz + 1.4, 1.5);
       if (quality > 0) void this.spawnPoliceUnit(Math.min(35.5, sx + 5.0), fz + 1.6, -0.58, quality);
     }
   }
