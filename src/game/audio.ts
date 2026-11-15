@@ -256,6 +256,17 @@ export class GameAudio {
   wedge() { if (!this.ctx) return; const o = this.out(0, 0.35, false); this.tone(o, 'triangle', 260, 140, 0.08, 0.6); }
   c2(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 2.2 / (1 + dist * 0.1)); this.burst(o, 0.45, 'lowpass', 2400, 90, 0.6, 1.6); this.tone(o, 'sine', 110, 28, 0.42, 1.3); }
   defuse() { if (!this.ctx) return; const o = this.out(0, 0.35, false); this.tone(o, 'sine', 520, 520, 0.08, 0.6); this.tone(o, 'sine', 880, 1040, 0.14, 0.6, 0.1); }
+  ping(hostile = false) {
+    if (!this.ctx) return;
+    const o = this.out(0, 0.25, false);
+    this.tone(o, 'sine', hostile ? 980 : 1240, hostile ? 760 : 1560, 0.09, 0.55);
+  }
+  squelch(start: boolean) {
+    if (!this.ctx) return;
+    const o = this.out(0, 0.14, false);
+    this.burst(o, 0.035, 'bandpass', start ? 2600 : 1900, 1600, 1.8, 0.5);
+    this.tone(o, 'sine', start ? 1420 : 1080, start ? 1580 : 860, 0.025, 0.3);
+  }
 }
 
 /** Radio chatter through the browser's built-in speech synthesis (free, offline on most systems). */

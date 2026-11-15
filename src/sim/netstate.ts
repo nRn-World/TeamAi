@@ -1,6 +1,6 @@
 // Host-authoritative co-op: the host runs the Sim, clients keep a mirror Sim built from the same
 // mission+seed (identical level and actor ids) and apply compact snapshots + forwarded events.
-import { Sim, Actor, Ev, Team, Order } from './sim';
+import { Sim, Actor, Ev, Team, Order, ReplayFrame, ReplayEvent } from './sim';
 import type { Door } from './level';
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -8,35 +8,64 @@ export interface Snap {
   a: number[][]; d: number[]; o: [string, string, number][]; so?: string[];
   g: number[][]; p: number[][];
   pw?: number; bm?: [number, number] | null; bw?: number[]; bp?: number[]; bd?: number[];
+  bs?: number;
   over: number; time: number; st?: unknown;
+  mvp?: { name: string; arrests: number; kills: number; shots: number; hits: number; dmgTaken: number }[];
+  rf?: ReplayFrame[]; re?: ReplayEvent[];
 }
+
+export interface NetTarget { x: number; z: number; yaw: number }
 
 export function encodeSnap(sim: Sim): Snap {
   return {
     a: sim.actors.map(a => [r2(a.x), r2(a.z), r2(a.yaw), Math.round(a.hp),
-      (a.alive ? 1 : 0) | (a.surrendered ? 2 : 0) | (a.restrained ? 4 : 0) | (a.armed ? 8 : 0) | (a.moving ? 16 : 0) | (a.target ? 32 : 0) | (a.crouch ? 64 : 0) | (a.hostile ? 128 : 0) | (a.prone ? 256 : 0) | (a.team === 'B' ? 512 : 0),
-      r2(a.walk % (Math.PI * 2)), r2(a.stun)]),
+      (a.alive ? 1 : 0) | (a.surrendered ? 2 : 0) | (a.restrained ? 4 : 0) | (a.armed ? 8 : 0)
+      | (a.moving ? 16 : 0) | (a.target ? 32 : 0) | (a.crouch ? 64 : 0) | (a.hostile ? 128 : 0)
+      | (a.prone ? 256 : 0) | (a.team === 'B' ? 512 : 0)
+      | (a.downed ? 1024 : 0) | (a.torch ? 2048 : 0) | (a.ads ? 4096 : 0)
+      | (a.shield ? 8192 : 0) | (a.speaking ? 16384 : 0) | (a.readyBreach ? 32768 : 0),
+      r2(a.walk % (Math.PI * 2)), r2(a.stun),
+      ...(a.kind === 'player' ? [r2(a.pitch), a.weapon] : [])]),
     d: sim.level.doors.map(d => Math.round(d.open * 100) + d.target * 1000 + (d.locked ? 10000 : 0) + (d.wedged ? 20000 : 0)),
     o: (['A', 'B'] as Team[]).map(t => [sim.teams[t].order.type, sim.teams[t].fire, sim.teams[t].order.leader?.id ?? -1]),
     so: sim.officers.map(o => o.solo ? o.solo.order.type : ''),
     g: sim.grenades.map(g => [r2(g.x), r2(g.y), r2(g.z)]),
-    p: sim.players.map(p => [p.bangs, r2(p.flash), p.cuff ? p.cuff.id : -1, r2(p.cuffT), p.c2, p.wedges]),
+    p: sim.players.map(p => [p.bangs, r2(p.flash), p.cuff ? p.cuff.id : -1, r2(p.cuffT), p.c2, p.wedges, Math.round(p.bleedT), p.reviving ? p.reviving.id : -1, r2(p.reviveT)]),
     pw: sim.powerOn ? 1 : 0,
     bm: sim.bomb ? [r2(sim.bomb.time), sim.bomb.defused ? 1 : 0] : null,
     bw: sim.brokenWindows.size ? [...sim.brokenWindows] : undefined,
     bp: sim.brokenProps.size ? [...sim.brokenProps] : undefined,
     bd: sim.brokenDoorGlass.size ? [...sim.brokenDoorGlass] : undefined,
+    bs: sim.breachSyncT > 0 ? r2(sim.breachSyncT) : 0,
     over: sim.over ? (sim.over.win ? 2 : 1) : 0, time: r2(sim.time), st: sim.over ? sim.stats : undefined,
+    mvp: sim.over ? sim.players.map(pl => ({ name: pl.name, arrests: pl.arrests, kills: pl.kills, shots: pl.shots, hits: pl.hits, dmgTaken: pl.dmgTaken })) : undefined,
+    rf: sim.over ? sim.replayFrames : undefined,
+    re: sim.over ? sim.replayEvents : undefined,
   };
 }
 
-export function applySnap(sim: Sim, s: Snap, me: Actor) {
+export function applySnap(sim: Sim, s: Snap, me: Actor, targets?: Map<Actor, NetTarget>) {
   s.a.forEach((v, i) => {
     const a = sim.actors[i]; if (!a) return; const f = v[4];
-    if (a !== me) { a.x = v[0]; a.z = v[1]; a.yaw = v[2]; a.crouch = !!(f & 64); a.prone = !!(f & 256); a.moving = !!(f & 16); a.walk = v[5]; }
+    if (a !== me) {
+      if (targets) {
+        const cur = targets.get(a);
+        // Snap immediately on large teleports (reconnect/spawn), otherwise lerp smoothly
+        if (!cur || Math.hypot(v[0] - a.x, v[1] - a.z) > 3.5) {
+          a.x = v[0]; a.z = v[1]; a.yaw = v[2];
+        }
+        targets.set(a, { x: v[0], z: v[1], yaw: v[2] });
+      } else {
+        a.x = v[0]; a.z = v[1]; a.yaw = v[2];
+      }
+      a.crouch = !!(f & 64); a.prone = !!(f & 256); a.moving = !!(f & 16); a.walk = v[5];
+      a.torch = !!(f & 2048); a.ads = !!(f & 4096); a.shield = !!(f & 8192); a.speaking = !!(f & 16384);
+      if (v.length > 7) { a.pitch = v[7]; a.weapon = v[8]; }
+    }
     a.hp = v[3]; a.alive = !!(f & 1); a.surrendered = !!(f & 2); a.restrained = !!(f & 4); a.armed = !!(f & 8); a.target = f & 32 ? a : null; a.hostile = !!(f & 128); a.stun = v[6];
+    a.downed = !!(f & 1024); a.readyBreach = !!(f & 32768);
     if (a.kind === 'officer') a.team = f & 512 ? 'B' : 'A';
-    if (!a.alive) a.moving = false;
+    if (!a.alive || a.downed) a.moving = false;
   });
   sim.reindexTeams();
   s.d.forEach((v, i) => {
@@ -55,14 +84,22 @@ export function applySnap(sim: Sim, s: Snap, me: Actor) {
     const p = sim.players[i]; if (!p) return;
     p.bangs = v[0]; p.flash = v[1]; p.cuff = v[2] >= 0 ? sim.actors[v[2]] : null; p.cuffT = v[3];
     if (v.length > 4) { p.c2 = v[4]; p.wedges = v[5]; }
+    if (v.length > 6) { p.bleedT = v[6]; p.reviving = v[7] >= 0 ? sim.actors[v[7]] : null; p.reviveT = v[8]; }
   });
   if (s.pw !== undefined) sim.powerOn = !!s.pw;
   if (s.bm && sim.bomb) { sim.bomb.time = s.bm[0]; sim.bomb.defused = !!s.bm[1]; }
   if (s.bw) for (const k of s.bw) sim.brokenWindows.add(k);
   if (s.bp) for (const k of s.bp) sim.brokenProps.add(k);
   if (s.bd) for (const k of s.bd) sim.brokenDoorGlass.add(k);
+  if (s.bs !== undefined) sim.breachSyncT = s.bs;
   sim.time = s.time;
-  if (s.over && !sim.over) { if (s.st) Object.assign(sim.stats, s.st); sim.over = { win: s.over === 2 }; }
+  if (s.over && !sim.over) {
+    if (s.st) Object.assign(sim.stats, s.st);
+    if (s.mvp) s.mvp.forEach((m, idx) => { const pl = sim.players[idx]; if (pl) Object.assign(pl, m); });
+    if (s.rf) sim.replayFrames = s.rf;
+    if (s.re) sim.replayEvents = s.re;
+    sim.over = { win: s.over === 2 };
+  }
 }
 
 export function encodeEv(e: Ev): Record<string, unknown> {
