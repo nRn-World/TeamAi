@@ -147,6 +147,14 @@ td { border-bottom:1px solid rgba(255,255,255,.08); }
 .tag::before { content:""; position:absolute; left:0; top:50%; width:24px; height:2px; background:var(--tac); transform:translateY(-50%); }
 .mtop .note { margin:4px 0 0; max-width:440px; text-align:right; font-size:12px; color:#8fa0b2; opacity:1; }
 .mtop .note.warn { color:#ffcf7a; }
+.mtop-r { display:flex; flex-direction:column; align-items:flex-end; gap:8px; }
+.musicpill {
+  padding:7px 12px; font:600 11.5px/1 var(--hd); letter-spacing:.16em; text-transform:uppercase;
+  background:rgba(10,16,26,.78); border:1px solid rgba(79,150,255,.45); color:#d8e7fa;
+  backdrop-filter:blur(8px);
+}
+.musicpill:hover { background:var(--tacDark); border-color:#82b7ff; color:#fff; }
+.musicpill.off { border-color:rgba(255,255,255,.18); color:#7d8ea1; }
 
 /* Right floating armory briefing card */
 .acard {

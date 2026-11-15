@@ -1,0 +1,13 @@
+Menu Music & Outdoor Ambience — Licenses & Attributions
+=======================================================
+
+1. menu_theme.ogg — "Digital Blackout"
+   Attribution: Music by CO.AG
+   Author: CO.AG Music (coagmusic@gmail.com)
+   Source: https://github.com/Fris0uman/CDDA-Music-Packs (CO.AG_DigitalBlackout.ogg)
+   License: Royalty-free / CC BY 4.0 permission from CO.AG Music provided credit is given ("Music by CO.AG").
+
+2. rain_soft.ogg — "Rain (loopable)"
+   Author: Ylmir
+   Source: https://opengameart.org/content/rain-loopable (via Gamingmonster2/Cyber-Michelangelo)
+   License: CC0 1.0 Universal — Public Domain

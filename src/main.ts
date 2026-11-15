@@ -24,7 +24,7 @@ const params = new URLSearchParams(location.search);
 const AUTO = params.has('auto');
 
 // ---------------- settings & career ----------------
-const defaults = { sens: 1, vol: 0.8, mic: 1, ptt: 1, lang: 'en-US', asr: 'local', tts: 1, head: 0, qual: 1, diff: 1, name: '', ai: 0, aiModel: AI_MODELS[0].id as string, primary: 'carbine' as PrimaryLoadout, secondary: 'pistol' as SecondaryLoadout };
+const defaults = { sens: 1, vol: 0.8, music: 1, mic: 1, ptt: 1, lang: 'en-US', asr: 'local', tts: 1, head: 0, qual: 1, diff: 1, name: '', ai: 0, aiModel: AI_MODELS[0].id as string, primary: 'carbine' as PrimaryLoadout, secondary: 'pistol' as SecondaryLoadout };
 type Settings = typeof defaults;
 const S: Settings = { ...defaults, ...JSON.parse(localStorage.getItem('teamai.settings') || '{}') };
 if (!String(S.lang).startsWith('en')) S.lang = 'en-US'; // English only
@@ -94,8 +94,23 @@ class Game {
     this.ai.onState = (s, d) => this.aiState(s, d);
     setInterval(() => { if (!$('settings').classList.contains('hidden')) this.asrInfo(); }, 500);
     this.applySettings();
+    const unlockMenuAudio = () => {
+      if (this.state !== 'menu') return;
+      this.audio.init();
+      this.syncMenuMusic();
+    };
+    window.addEventListener('pointerdown', unlockMenuAudio, { once: true });
+    window.addEventListener('keydown', unlockMenuAudio, { once: true });
     requestAnimationFrame(() => this.frame());
     if (AUTO) this.start(+(params.get('auto') || 0), +(params.get('seed') || 1));
+  }
+  syncMenuMusic() {
+    void this.audio.setMenuMusic(this.state === 'menu' && !!S.music && !AUTO);
+    const btn = document.getElementById('btnMenuMusic');
+    if (btn) {
+      btn.textContent = S.music ? '♪ MUSIC ON' : '♪ MUSIC OFF';
+      btn.classList.toggle('off', !S.music);
+    }
   }
   resize() {
     const w = innerWidth, h = innerHeight; this.renderer.setPixelRatio(Math.min(devicePixelRatio, S.qual > 1 ? 2 : S.qual ? 1.5 : 1)); this.renderer.setSize(w, h, false);
@@ -109,7 +124,8 @@ class Game {
     if (local && S.mic && !AUTO) this.localVoice.preload();
     this.asrInfo();
     ($('sSens') as HTMLInputElement).value = String(S.sens); ($('sVol') as HTMLInputElement).value = String(S.vol);
-    for (const [id, k] of [['sMic', 'mic'], ['sPtt', 'ptt'], ['sLang', 'lang'], ['sAsr', 'asr'], ['sTts', 'tts'], ['sHead', 'head'], ['sQual', 'qual'], ['sDiff', 'diff'], ['sAi', 'ai'], ['sAiModel', 'aiModel']] as const) ($(id) as HTMLSelectElement).value = String(S[k]);
+    for (const [id, k] of [['sMusic', 'music'], ['sMic', 'mic'], ['sPtt', 'ptt'], ['sLang', 'lang'], ['sAsr', 'asr'], ['sTts', 'tts'], ['sHead', 'head'], ['sQual', 'qual'], ['sDiff', 'diff'], ['sAi', 'ai'], ['sAiModel', 'aiModel']] as const) ($(id) as HTMLSelectElement).value = String(S[k]);
+    this.syncMenuMusic();
     document.querySelectorAll<HTMLElement>('#mDiffPips [data-diff]').forEach(b => b.classList.toggle('on', +b.dataset.diff! === S.diff));
     if (!S.mic) this.voice.stop(); else if (this.state === 'play') this.voice.start();
     if (!S.ai && this.ai.state !== 'off') void this.ai.unload();
@@ -256,14 +272,15 @@ class Game {
     document.querySelectorAll<HTMLElement>('.close').forEach(b => b.onclick = () => { b.closest('.screen')!.classList.add('hidden'); this.audio.ui(); });
     const bind = (id: string, k: keyof Settings, num = true) => $(id).addEventListener('input', e => { (S as any)[k] = num ? +(e.target as HTMLInputElement).value : (e.target as HTMLInputElement).value; saveSettings(); this.applySettings(); });
     ($('sAiModel') as HTMLSelectElement).innerHTML = AI_MODELS.map(m => `<option value="${m.id}">${m.label}</option>`).join('');
-    bind('sSens', 'sens'); bind('sVol', 'vol'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sAsr', 'asr', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff'); bind('sAi', 'ai'); bind('sAiModel', 'aiModel', false);
+    bind('sSens', 'sens'); bind('sVol', 'vol'); bind('sMusic', 'music'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sAsr', 'asr', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff'); bind('sAi', 'ai'); bind('sAiModel', 'aiModel', false);
+    click('btnMenuMusic', () => { S.music = S.music ? 0 : 1; saveSettings(); this.applySettings(); });
     $('btnAiLoad').onclick = () => {
       this.audio.init(); this.audio.ui();
       if (!S.ai) { S.ai = 1; saveSettings(); ($('sAi') as HTMLSelectElement).value = '1'; }
       void this.ai.ensureLoaded(S.aiModel);
     };
   }
-  toMenu() { document.body.classList.remove('ingame'); this.net.close(); show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief']) show(id, false); this.buildMenu(); show('menu', true); if (document.pointerLockElement) document.exitPointerLock(); }
+  toMenu() { document.body.classList.remove('ingame'); this.net.close(); show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief']) show(id, false); this.buildMenu(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
   // ---------------- online co-op ----------------
   newRound(mission: number) {
     if (this.net.role === 'client') return;
@@ -375,7 +392,7 @@ class Game {
       setLoad(62, 'Building operation environment...');
       await nextFrame();
 
-      this.mission = mission; this.seed = seed; this.audio.init();
+      this.mission = mission; this.seed = seed; this.audio.init(); void this.audio.setMenuMusic(false);
       const sim = this.sim = new Sim(mission, seed, diff, n); if (me) sim.player = sim.players[me];
       sim.players.forEach((pl, i) => { if (names[i]) pl.name = names[i]; }); this.stepPh.clear();
       const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
