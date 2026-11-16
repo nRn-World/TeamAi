@@ -17,3 +17,6 @@ dist
 
 # generated bugfix screenshots
 .fix-preview/
+
+# generated screenshots
+.lens-preview/

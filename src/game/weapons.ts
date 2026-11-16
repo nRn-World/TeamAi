@@ -462,7 +462,10 @@ export class FpsArms {
     this.holoGroup.position.set(0.113, -0.036, -0.35);
     const housing = new THREE.MeshStandardMaterial({ color: 0x181b21, metalness: 0.72, roughness: 0.34 });
     const matte = new THREE.MeshStandardMaterial({ color: 0x101216, metalness: 0.3, roughness: 0.65 });
-    const lensMat = new THREE.MeshPhysicalMaterial({ color: 0x86c8ff, transparent: true, opacity: 0.16, roughness: 0.04, metalness: 0.1, depthWrite: false });
+    // colourless glass: only a faint specular sheen, no blue tint across the sight picture
+    const lensMat = new THREE.MeshPhysicalMaterial({ color: 0xb9c3c9, transparent: true, opacity: 0.06, roughness: 0.03, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.04, depthWrite: false });
+    // smoked rear glass in the flip-to-side magnifier (it used to be a bright blue disc)
+    const magGlassMat = new THREE.MeshPhysicalMaterial({ color: 0x1b222a, transparent: true, opacity: 0.22, roughness: 0.07, metalness: 0.25, clearcoat: 1, clearcoatRoughness: 0.03, depthWrite: false });
     // EOTech hood frame
     this.holoGroup.add(
       mkBox(0.038, 0.004, 0.056, housing, 0, -0.017, -0.04),  // base mount
@@ -489,13 +492,13 @@ export class FpsArms {
 
     // G33 3x Flip-to-Side Magnifier pivoted on the right side of the rail
     this.magPivot.position.set(0.016, -0.013, 0.022);
-    const magBody = new THREE.Mesh(new THREE.CylinderGeometry(0.0165, 0.0155, 0.058, 16), matte);
+    const magBody = new THREE.Mesh(new THREE.CylinderGeometry(0.0165, 0.0155, 0.058, 16, 1, true), matte); // open tube: you see through it
     magBody.rotation.x = Math.PI / 2;
     magBody.position.set(-0.016, 0.013, 0);
     const magFront = new THREE.Mesh(new THREE.CylinderGeometry(0.0175, 0.0175, 0.012, 16), housing);
     magFront.rotation.x = Math.PI / 2;
     magFront.position.set(-0.016, 0.013, -0.028);
-    const magGlass = new THREE.Mesh(new THREE.CircleGeometry(0.0135, 16), lensMat);
+    const magGlass = new THREE.Mesh(new THREE.CircleGeometry(0.0135, 24), magGlassMat);
     magGlass.position.set(-0.016, 0.013, 0.029);
     const magArm = mkBox(0.018, 0.014, 0.018, housing, -0.006, 0.004, 0);
     this.magPivot.add(magBody, magFront, magGlass, magArm);
