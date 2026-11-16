@@ -88,7 +88,7 @@ export class Actor {
   downed = false; bleedT = 0; revives = 0; reviving: Actor | null = null; reviveT = 0;
   torch = true; ads = false; weapon = 0; speaking = false; readyBreach = false;
   kills = 0; arrests = 0; shots = 0; hits = 0; dmgTaken = 0;
-  lastCallT = -99;
+  lastCallT = -99; lastSpotT = -99;
   constructor(public id: number, public kind: Kind, public name: string) { }
   get down() { return this.surrendered || this.restrained; }
   get active() { return this.alive && !this.restrained; }
@@ -148,6 +148,7 @@ export class Sim {
   replayEvents: ReplayEvent[] = [];
   private replayT = 0;
   private banterT = -20;
+  private lastTeamShoutT = -99;
   private soloWarnT = -30;
   private lowHpWarned = false;
   private arrestStreak = 0;
@@ -579,7 +580,7 @@ export class Sim {
         if (door.open < 0.7) {
           if (door.wedged || (door.locked && a.kind !== 'officer')) { a.moving = false; a.path = null; a.goal = null; return; }
           const opened = this.setDoor(door, true, a.kind === 'officer' && !!door.locked, false, true);
-          if (!opened && a.kind === 'officer' && door.locked && this.time - a.lastCallT > 5) {
+          if (!opened && a.kind === 'officer' && door.locked && this.time - a.lastCallT > 15) {
             a.lastCallT = this.time; this.say(a, 'Door is locked!');
           }
           a.moving = false; a.yaw = turn(a.yaw, yawTo(dx, dz), 8 * dt); return;
@@ -1162,7 +1163,10 @@ export class Sim {
       const want = yawTo(th.x - o.x, th.z - o.z); o.yaw = turn(o.yaw, want, 10 * dt); o.moving = false;
       if (this.time - th.challengeT > 2.5) {
         const bonus = (dist(o, th) < 8 ? 0.05 : 0) + (o.role === 'Negotiator' ? 0.18 : 0);
-        this.say(o, 'Police! Drop the weapon!', true);
+        if (this.time - o.lastCallT > 8 && this.time - this.lastTeamShoutT > 4.5) {
+          o.lastCallT = this.time; this.lastTeamShoutT = this.time;
+          this.say(o, 'Police! Drop the weapon!', true);
+        }
         this.challenge(th, bonus);
         if (th.down) return;
       }
@@ -1249,7 +1253,10 @@ export class Sim {
     if (e && e.alive) {
       s.lastSeen = { x: e.x, z: e.z }; s.alertT = 8; s.lostT = 0; s.moving = false; s.path = null;
       const want = yawTo(e.x - s.x, e.z - s.z); s.yaw = turn(s.yaw, want, 7 * dt);
-      if (s.react < 0) { s.react = (0.55 + this.rng() * 0.7) * [1.5, 1, 0.7][this.difficulty]; this.events.push({ t: 'bark', a: s, kind: 'spot' }); }
+      if (s.react < 0) {
+        s.react = (0.55 + this.rng() * 0.7) * [1.5, 1, 0.7][this.difficulty];
+        if (this.time - s.lastSpotT > 22) { s.lastSpotT = this.time; this.events.push({ t: 'bark', a: s, kind: 'spot' }); }
+      }
       s.react -= dt;
       if (s.react <= 0 && Math.abs(angDiff(s.yaw, want)) < 0.2) { s.hostile = true; this.aiFire(s, e, [0.085, 0.06, 0.045][this.difficulty] * (1 + dist(s, e) / 30), 30); }
       return;
