@@ -30,6 +30,8 @@ const RULES: [Action, RegExp, Dir?][] = ([
   ['wedge', /\b(wedge|block (the|that) door|jam (the|that) door|seal (the|that) door)\b/],
   ['peek', /\b(peek|fibercam|fiber cam|optiwand|mirror|check under|look under|scout (the|that) door|check (the|that) door)\b/],
   ['bang', /\b(flashbang|flash bang|flash and clear|bang and clear|bang|grenade|stun grenade|flash|flush|flesh)\b/],
+  // "secure" on its own still means handcuff someone (see the restrain rule below), so this needs an area word.
+  ['secure', /\b(search|sweep|sök\w*|sok\w*|secure the (room|area|floor)|secure this (room|area)|säkra (rummet|området|omradet|här|här omkring)|sakra (rummet|omradet|har))\b/],
   ['breach', /\b(breach|breaching|storm|clear|clear the room|move in|go in|get in|enter|take the room|kick it|kick the door)\b/],
   ['stack', /\b(stack up|stack|line up|on the door|at the door|to the door)\b/],
   ['close', /\b(close|shut)\b/],
@@ -179,5 +181,6 @@ export const ACTION_LABEL: Record<Action, string> = {
   follow: 'FOLLOW ME', hold: 'HOLD POSITION', move: 'MOVE', cover: 'COVER ME', stack: 'STACK UP ON DOOR', breach: 'BREACH THE ROOM', bang: 'BANG AND CLEAR',
   open: 'OPEN DOOR', close: 'CLOSE DOOR', restrain: 'SECURE / HANDCUFF', fireFree: 'WEAPONS FREE', fireHold: 'HOLD FIRE', report: 'REPORT', shout: 'POLICE! GIVE UP!', joinTeam: 'JOIN TEAM',
   peek: 'PEEK / FIBERCAM', c2: 'BREACH CHARGE', wedge: 'WEDGE DOOR', defuse: 'DEFUSE BOMB',
+  secure: 'SEARCH & SECURE AREA',
 };
 export const DIR_LABEL: Record<Dir, string> = { left: 'LEFT', right: 'RIGHT', forward: 'FORWARD', back: 'BACK', there: 'THERE' };

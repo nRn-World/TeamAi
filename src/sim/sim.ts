@@ -7,7 +7,9 @@ export type Team = 'A' | 'B';
 export type Action =
   | 'follow' | 'hold' | 'move' | 'cover' | 'stack' | 'breach' | 'bang'
   | 'open' | 'close' | 'restrain' | 'fireFree' | 'fireHold' | 'report'
-  | 'shout' | 'joinTeam' | 'peek' | 'c2' | 'wedge' | 'defuse';
+  | 'shout' | 'joinTeam' | 'peek' | 'c2' | 'wedge' | 'defuse'
+  /** Search and secure the room we are standing in. Nobody leaves it. */
+  | 'secure';
 export type Dir = 'left' | 'right' | 'forward' | 'back' | 'there';
 export type PrimaryLoadout = 'carbine' | 'shotgun' | 'beanbag' | 'shield';
 export type SecondaryLoadout = 'pistol' | 'taser';
@@ -23,9 +25,13 @@ type Grp = Team | Actor;
 export type Kind = 'player' | 'officer' | 'suspect' | 'civ';
 
 export interface Order {
-  type: 'follow' | 'hold' | 'move' | 'cover' | 'stack' | 'breach' | 'door' | 'restrain' | 'peek' | 'defuse';
+  type: 'follow' | 'hold' | 'move' | 'cover' | 'stack' | 'breach' | 'door' | 'restrain' | 'peek' | 'defuse' | 'secure';
   pts?: Pt[]; face?: number; door?: Door; bang?: boolean; c2?: boolean; open?: boolean;
   off?: number; leader?: Actor; phase: number; t: number; side?: number; prev?: Order;
+  /** Room the order belongs to (`secure`): the squad works inside it and nowhere else. */
+  room?: number | null;
+  /** Cache for the escort posts a following squad takes up when the leader holds still. */
+  ptAnchor?: Pt; ptRoom?: number;
 }
 
 export type GrenadeKind = 'bang' | 'smoke' | 'gas';
@@ -104,6 +110,7 @@ export class Actor {
   team: Team = 'A'; ti = 0; slot = 0; cuff: Actor | null = null; cuffT = 0; claimedBy: Actor | null = null;
   defusing = false; defuseT = 0;
   prone = false; jumpY = 0; /** footstep-noise bookkeeping */ nx = 0; nz = 0; nd = 0; nt = 0;
+  /** Last sampled position, used to tell whether a player is actually walking this frame. */ lastX = NaN; lastZ = NaN;
   percT = 0; deadT = 0; crouch = false; variant = 0; flash = 0; pitch = 0; lean = 0; trail: Pt[] = [];
   bangs = 3; smokes = 2; gases = 2; c2 = 2; wedges = 2; sensors = 2; shield = false; nvg = false; pi = 0;
   // Co-op tactical & revive state
@@ -698,6 +705,106 @@ export class Sim {
     }
     const f = fwd(p.yaw), q = { x: p.x - f.x * back, z: p.z - f.z * back };
     return walkLine(this.level, p, q) ? q : prev;
+  }
+  // ---------- room work: posts a squad takes up while it searches or guards an area ----------
+  /**
+   * Points inside the room the anchor stands in (or a disc around him outdoors) that a squad can
+   * work from. `guard` biases the picks towards the doors of that room, otherwise they spread as
+   * wide as possible so the room actually gets searched. Nothing outside the room is ever offered,
+   * which is what keeps a squad from wandering off into the next room.
+   */
+  private areaPosts(anchor: Pt, n: number, guard: boolean, radius = 0): Pt[] {
+    const l = this.level, room = roomAt(l, anchor.x, anchor.z), cand: Pt[] = [];
+    const x0 = room ? room.x + 1 : Math.floor(anchor.x) - 7, x1 = room ? room.x + room.w - 2 : Math.floor(anchor.x) + 7;
+    const z0 = room ? room.z + 1 : Math.floor(anchor.z) - 7, z1 = room ? room.z + room.h - 2 : Math.floor(anchor.z) + 7;
+    for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) {
+      if (this.solidCell(cx, cz)) continue;                  // walls and the furniture blocks
+      if (l.propAt.has(cz * l.w + cx)) continue;             // never post a man inside a desk
+      const pt = { x: cx + 0.5, z: cz + 0.5 };
+      if (room && roomAt(l, pt.x, pt.z)?.id !== room.id) continue;
+      if (radius && dist(pt, anchor) > radius) continue;
+      cand.push(pt);
+    }
+    if (!cand.length) { const w = nearestWalkable(l, anchor.x, anchor.z, 3); return w ? [w] : []; }
+    const doorBonus = (c: Pt) => {
+      if (!guard) return 0;
+      let best = 0;
+      for (const d of l.doors) {
+        const dd = Math.hypot(d.cx + 0.5 - c.x, d.cz + 0.5 - c.z);
+        if (dd < 7) best = Math.max(best, (7 - dd) / 7);
+      }
+      return best * 2.4;
+    };
+    // Greedy spread over the room (farthest from anchor and from each other), with a pull towards
+    // the doors when we are holding instead of searching. Reachability is checked on the winners
+    // only: an A* per candidate would be far too much work for something that runs on every order.
+    const chosen: Pt[] = [];
+    for (let i = 0; i < n; i++) {
+      const ranked = cand
+        .filter(c => !chosen.some(q => dist(q, c) < 1.0))
+        .map(c => {
+          let m = dist(c, anchor);
+          for (const q of chosen) m = Math.min(m, dist(c, q));
+          return { c, s: Math.min(m, 7) + doorBonus(c) };
+        })
+        .sort((a, b) => b.s - a.s);
+      const pick = ranked.find(r => findPath(l, anchor, r.c) !== null)?.c ?? ranked[0]?.c;
+      if (!pick) break;
+      chosen.push(pick);
+    }
+    if (!chosen.length) chosen.push(cand[0]);
+    // A cramped room can run out of real posts: ring the ones we have rather than stacking men.
+    for (let i = 0; chosen.length < n; i++) {
+      const base = chosen[i % Math.max(1, chosen.length)] ?? cand[0];
+      const ang = (i * 2.4) % (Math.PI * 2), r = 0.85 + 0.35 * Math.floor(i / 4);
+      const q = { x: base.x + Math.cos(ang) * r, z: base.z + Math.sin(ang) * r };
+      if (!this.solidCell(Math.floor(q.x), Math.floor(q.z)) && !l.propAt.has(Math.floor(q.z) * l.w + Math.floor(q.x))
+        && (!room || roomAt(l, q.x, q.z)?.id === room.id) && findPath(l, anchor, q)
+        && (!radius || dist(q, anchor) <= radius + 1)) chosen.push(q);
+      else if (i > 24) chosen.push(base);   // give up gracefully instead of looping
+    }
+    return chosen;
+  }
+  /** Where officer `o` is supposed to stand for this order. */
+  private postFor(o: Actor, ord: Order): Pt | null {
+    const pts = ord.pts;
+    if (!pts?.length) return null;
+    // `secure` posts are indexed by the squad-wide slot so two teams never pick the same spot
+    if (ord.type === 'secure') return pts[(o.solo ? 0 : o.slot) % pts.length] ?? pts[0];
+    return pts[this.idx(o)] ?? pts[0];
+  }
+  /**
+   * Watch direction from a post: the entrance of the room we are holding, otherwise outwards from
+   * the leader. Used for `secure`, `hold` and for the squad that escorts the player.
+   */
+  private watchYaw(o: Actor, anchor: Actor): number {
+    const room = roomAt(this.level, anchor.x, anchor.z);
+    if (room) {
+      const inside = (cx: number, cz: number) => cx >= room.x + 1 && cx <= room.x + room.w - 2 && cz >= room.z + 1 && cz <= room.z + room.h - 2;
+      let best: Door | null = null, bd = 1e9;
+      for (const d of this.level.doors) {
+        const touches = [[0, -1], [0, 1], [-1, 0], [1, 0]].some(([dx, dz]) => inside(d.cx + dx, d.cz + dz));
+        if (!touches) continue;
+        const dd = Math.hypot(d.cx + 0.5 - o.x, d.cz + 0.5 - o.z);
+        if (dd < bd) { bd = dd; best = d; }
+      }
+      if (best) return yawTo(best.cx + 0.5 - o.x, best.cz + 0.5 - o.z);
+      return yawTo(room.x + room.w / 2 - o.x, room.z + room.h / 2 - o.z);
+    }
+    return yawTo(o.x - anchor.x, o.z - anchor.z);
+  }
+  /**
+   * Post for a squad that is told to follow: on the move they stay on the leader's trail, but as
+   * soon as he stops the squad takes up guarding posts around him — inside his room — instead of
+   * piling up behind his back. Recomputed only when he changes room or walks off a few metres.
+   */
+  private escortPost(ord: Order, o: Actor, lead: Actor): Pt | null {
+    const room = roomAt(this.level, lead.x, lead.z), key = room ? room.id : -1;
+    if (!ord.pts || ord.ptRoom !== key || !ord.ptAnchor || dist(ord.ptAnchor, lead) > 3.5) {
+      ord.pts = this.areaPosts(lead, Math.max(2, this.officers.filter(x => x.alive).length), true, 4.5);
+      ord.ptAnchor = { x: lead.x, z: lead.z }; ord.ptRoom = key;
+    }
+    return ord.pts[(o.solo ? 0 : o.slot) % ord.pts.length] ?? null;
   }
   private goTo(a: Actor, x: number, z: number, dt: number, speedMul = 1, tol = 0.3): boolean {
     const d = Math.hypot(x - a.x, z - a.z);
@@ -1460,6 +1567,16 @@ export class Sim {
       switch (cmd.action) {
         case 'follow': set({ type: 'follow', phase: 0, t: 0, leader: by }); reply(lead, tag + 'Copy, following you.'); break;
         case 'cover': set({ type: 'cover', phase: 0, t: 0, leader: by }); reply(lead, tag + 'Covering you.'); break;
+        case 'secure': {
+          // Search + secure the room the leader is standing in. The posts are generated inside that
+          // room only, so the squad never wanders off into the rest of the building.
+          const anchor = by.alive ? by : lead, room = roomAt(this.level, anchor.x, anchor.z);
+          const squad = Math.max(1, this.officers.filter(x => x.alive).length);
+          // in a room the whole room is fair game; in a corridor keep the squad close by
+          set({ type: 'secure', phase: 0, t: 0, pts: this.areaPosts(anchor, squad, false, room ? 0 : 6), room: room?.id ?? null, leader: by });
+          reply(lead, tag + (room ? `Searching and securing ${room.name}.` : 'Searching and securing this area.'));
+          break;
+        }
         case 'hold': set({ type: 'hold', phase: 0, t: 0, pts: (typeof g === 'string' ? this.officers.filter(o => o.team === team) : [g]).map(o => ({ x: o.x, z: o.z })) }); reply(lead, tag + 'Holding position.'); break;
         case 'move': {
           const tg = this.dirTarget(cmd.dir ?? 'forward', aim, by);
@@ -1511,7 +1628,7 @@ export class Sim {
     }
     return any;
   }
-  private assignCuffs(g: Grp, range: number) {
+  private assignCuffs(g: Grp, range: number, room?: number | null) {
     let n = 0;
     for (const o of this.members(g)) {
       if (o.cuff && o.cuff.alive && !o.cuff.restrained) { n++; continue; }
@@ -1519,6 +1636,7 @@ export class Sim {
       let best: Actor | null = null, bd = range;
       for (const a of this.actors) {
         if (!a.alive || !a.surrendered || a.restrained || a.claimedBy || this.players.some(pl => pl.cuff === a)) continue;
+        if (room != null && roomAt(this.level, a.x, a.z)?.id !== room) continue;
         const d = dist(a, o); if (d < bd && (this.los(o.x, o.z, a.x, a.z) || this.players.some(pl => pl.alive && this.los(pl.x, pl.z, a.x, a.z)) || d < 6)) { bd = d; best = a; }
       }
       if (best) { o.cuff = best; best.claimedBy = o; o.cuffT = 0; o.path = null; n++; }
@@ -1529,8 +1647,11 @@ export class Sim {
   private updateGroup(g: Grp, dt: number) {
     const T = this.st(g), o = T.order, mem = this.members(g), tag = typeof g === 'string' ? `Team ${g}: ` : '', alone = typeof g !== 'string'; if (!mem.length) return;
     o.t += dt;
-    if ((o.type === 'follow' || o.type === 'hold' || o.type === 'cover' || o.type === 'move') && Math.floor(this.time * 2) !== Math.floor((this.time - dt) * 2) && !mem.some(m => m.target)) {
-      const had = mem.filter(m => m.cuff).length; if (this.assignCuffs(g, 7) > had && this.time - (T.cuffSay ?? -99) > 6) { T.cuffSay = this.time; this.say(mem[0], tag + 'Securing them.'); }
+    if ((o.type === 'follow' || o.type === 'hold' || o.type === 'cover' || o.type === 'move' || o.type === 'secure') && Math.floor(this.time * 2) !== Math.floor((this.time - dt) * 2) && !mem.some(m => m.target)) {
+      const had = mem.filter(m => m.cuff).length;
+      // In a secure order only people inside our room are cuffed — no leaving the area for a pair of cuffs.
+      const limit = o.type === 'secure' ? o.room ?? null : undefined;
+      if (this.assignCuffs(g, 7, limit) > had && this.time - (T.cuffSay ?? -99) > 6) { T.cuffSay = this.time; this.say(mem[0], tag + 'Securing them.'); }
     }
     const arrived = () => mem.every(m => dist(m, o.pts![this.idx(m)] ?? m) < 0.7);
     if (o.type === 'door') {
@@ -1587,6 +1708,16 @@ export class Sim {
         this.say(mem[0], tag + 'Room clear.' + (got ? ' Securing them.' : ''));
         const hold: Order = { type: 'hold', phase: 0, t: 0, pts: o.pts };
         T.order = got ? { type: 'restrain', phase: 0, t: 0, prev: hold } : hold;
+      }
+    } else if (o.type === 'secure') {
+      // Phase 0 sweeps the room, phase 1 holds the entrances. Both stay inside `o.room`.
+      const settled = mem.every(m => { const p = this.postFor(m, o); return !p || (dist(m, p) < 0.9 && !m.path); });
+      if (o.phase === 0 && ((settled && o.t > 2) || o.t > 16)) {
+        o.phase = 1; o.t = 0;
+        const anchor = this.leaderOf(o);
+        o.pts = this.areaPosts(anchor, Math.max(1, this.officers.filter(x => x.alive).length), true, o.room != null ? 0 : 6);
+        for (const m of mem) { m.path = null; m.goal = null; }
+        this.say(mem[0], tag + 'Area searched. Holding the entrances.');
       }
     } else if (o.type === 'restrain') {
       if (!mem.some(m => m.cuff) && !this.assignCuffs(g, 9)) { T.order = o.prev ?? { type: 'follow', phase: 0, t: 0, leader: o.leader }; T.order.t = 0; for (const m of mem) { m.path = null; m.goal = null; } }
@@ -1653,19 +1784,40 @@ export class Sim {
       o.lastCallT = this.time;
       this.say(o, `Eyes on the bomb! ${Math.ceil(this.bomb.time)} seconds left!`);
     }
-    let dest: Pt | null = null, face: number | null = null;
+    let dest: Pt | null = null, face: number | null = null, guard = false;
     const p = this.leaderOf(ord.type === 'restrain' && ord.prev ? ord.prev : ord);
-    if (ord.type === 'follow' || ord.type === 'restrain') { dest = this.trailPoint(1.4 + o.slot * 1.05, p); if (dist(o, p) < 1.3 + o.slot * 0.5 && !o.path) dest = null; }
-    else if (ord.type === 'cover') { const ang = [-0.9, 0.9, -1.5, 1.5][o.ti % 4] ?? 0; dest = this.trailPoint(1.1 + o.ti * 0.85, p); face = p.yaw + Math.PI + ang; if (dist(o, p) < 1.4 + o.ti * 0.55 && !o.path) dest = null; }
-    else if (ord.pts) { dest = ord.pts[this.idx(o)] ?? ord.pts[0]; face = ord.face ?? null; }
+    if (ord.type === 'follow' || ord.type === 'restrain') {
+      // Escort, not a conga line: on the move stay on the leader's trail, but the moment he stops
+      // the squad takes guarding posts around him — inside his room — and watches the entrances.
+      if (p.moving || dist(o, p) > 6.5) {
+        dest = this.trailPoint(1.5 + o.slot * 1.1, p);
+        if (dist(o, p) < 1.4 + o.slot * 0.5 && !o.path) dest = null;
+      } else {
+        const post = this.escortPost(ord, o, p);
+        if (post) { dest = dist(o, post) < 0.4 && !o.path ? null : post; face = this.watchYaw(o, p); guard = true; }
+      }
+    }
+    else if (ord.type === 'cover') { const ang = [-0.9, 0.9, -1.5, 1.5][o.ti % 4] ?? 0; dest = this.trailPoint(1.1 + o.ti * 0.85, p); face = p.yaw + Math.PI + ang; guard = true; if (dist(o, p) < 1.4 + o.ti * 0.55 && !o.path) dest = null; }
+    else if (ord.type === 'secure') {
+      const post = this.postFor(o, ord);
+      if (post) { dest = dist(o, post) < 0.4 && !o.path ? null : post; face = this.watchYaw(o, p); guard = true; }
+      else { o.moving = false; return; }
+    }
+    else if (ord.pts) { dest = ord.pts[this.idx(o)] ?? ord.pts[0]; face = ord.face ?? null; if (ord.type === 'hold') { face = this.watchYaw(o, p); guard = true; } }
     if (ord.type === 'breach' && ord.phase === 1) { dest = null; }
     if ((ord.type === 'stack' || ord.type === 'door' || ord.type === 'peek' || (ord.type === 'breach' && ord.phase < 2)) && ord.door) {
       const toDoor = yawTo(ord.door.cx + 0.5 - o.x, ord.door.cz + 0.5 - o.z);
       // Rear-guard officer in a stack holds rear security so squad isn't ambushed from behind
       face = ord.type === 'stack' && o.ti > 0 ? toDoor + Math.PI * 0.85 : toDoor;
     }
-    const arrived = dest ? this.goTo(o, dest.x, dest.z, dt, ord.type === 'breach' && ord.phase === 2 ? 1.15 : 1) : (o.moving = false, true);
-    if (arrived && face !== null) o.yaw = turn(o.yaw, face, 5 * dt);
+    // Searching and guarding is a slow walking pace, not a jog — and a wide arc when posted.
+    const pace = ord.type === 'secure' && ord.phase === 0 ? 0.85 : ord.type === 'breach' && ord.phase === 2 ? 1.15 : 1;
+    const arrived = dest ? this.goTo(o, dest.x, dest.z, dt, pace) : (o.moving = false, true);
+    if (arrived && guard && face !== null) {
+      // Standing guard must look alive: sweep the sector instead of freezing like a mannequin.
+      const want = face + Math.sin(this.time * 0.42 + o.slot * 1.7) * 0.4;
+      o.yaw = turn(o.yaw, want, 1.8 * dt);
+    } else if (arrived && face !== null) o.yaw = turn(o.yaw, face, 5 * dt);
     else if (arrived && (ord.type === 'follow') && dist(o, p) < 4) o.yaw = turn(o.yaw, p.yaw + (o.slot % 2 ? -0.5 : 0.5) * (o.slot > 1 ? 2.2 : 1), 3 * dt);
   }
   private restrain(c: Actor, by: Actor) {
@@ -2160,6 +2312,10 @@ export class Sim {
         }
       }
       if (p.alive && !p.downed) {
+        // The squad needs to know whether the lead is walking or holding (the local player never
+        // had `moving` set, which is why everyone glued themselves to his back).
+        if (Number.isFinite(p.lastX)) p.moving = Math.hypot(p.x - p.lastX, p.z - p.lastZ) > 0.004;
+        p.lastX = p.x; p.lastZ = p.z;
         p.nd += Math.hypot(p.x - p.nx, p.z - p.nz); p.nx = p.x; p.nz = p.z; p.nt += dt;
         if (p.nt >= 0.4) { const v = p.nd / p.nt; p.nd = 0; p.nt = 0; if (!p.prone && v < 9) { if (v > 4.4) this.noise(p.x, p.z, 12); else if (v > 2.4) this.noise(p.x, p.z, 6); } }
       }
@@ -2224,7 +2380,14 @@ export class Sim {
       const a = A[i], b = A[j]; if (!a.alive || !b.alive) continue;
       const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
       const min = a.r + b.r + (police(a) && police(b) ? PERSONAL_SPACE : 0);
-      if (d >= min || d < 1e-5) continue;
+      if (d >= min) continue;
+      if (d < 1e-5) {
+        // Perfectly stacked bodies have no separation direction at all — pick one deterministically.
+        const ang = (a.id * 2.399 + b.id * 1.117) % (Math.PI * 2), k = min * 0.5;
+        b.x += Math.cos(ang) * k; b.z += Math.sin(ang) * k; this.resolve(b);
+        a.x -= Math.cos(ang) * k; a.z -= Math.sin(ang) * k; this.resolve(a);
+        continue;
+      }
       if (a.down !== b.down) {
         const k = a.down ? a : b, o = a.down ? b : a;
         if (o.kind === 'player' || o.kind === 'officer') this.giveWay(k, o);

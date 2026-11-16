@@ -321,6 +321,7 @@ ul.credits em { position:absolute; right:0; top:11px; font:600 12px/1 var(--hd);
 .wcenter small { font:500 10px/1.2 "Barlow", sans-serif; color:#9aa6b0; margin-top:3px; text-transform:none; letter-spacing:0; }
 .wslice { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:94px; padding:7px 4px; text-align:center; background:rgba(24,33,44,.9); border:1px solid rgba(255,255,255,.16); color:#e6edf3; font:600 12px/1.1 var(--hd); letter-spacing:.08em; text-transform:uppercase; cursor:pointer; }
 .wslice:hover { background:var(--acc); color:#0b1015; border-color:#fff; }
+.wring.dense .wslice { width:84px; padding:6px 3px; font-size:11px; letter-spacing:.06em; }
 
 /* Debrief tactical notes */
 #debNotes { margin:12px 0 4px; padding:10px 12px; background:rgba(255,255,255,.04); border-left:2px solid var(--acc); font-size:13px; line-height:1.5; color:#c8d3dc; }

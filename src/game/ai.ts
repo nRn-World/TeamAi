@@ -26,7 +26,7 @@ export interface AiResult {
 }
 
 const VALID_ACTIONS = new Set<Action>([
-  'follow', 'hold', 'move', 'cover', 'stack', 'breach', 'bang', 'open', 'close', 'restrain', 'fireFree', 'fireHold', 'report', 'shout', 'joinTeam', 'peek', 'c2', 'wedge', 'defuse',
+  'follow', 'hold', 'move', 'cover', 'stack', 'breach', 'bang', 'open', 'close', 'restrain', 'fireFree', 'fireHold', 'report', 'shout', 'joinTeam', 'peek', 'c2', 'wedge', 'defuse', 'secure',
 ]);
 const VALID_DIRS = new Set<Dir>(['left', 'right', 'forward', 'back', 'there']);
 
