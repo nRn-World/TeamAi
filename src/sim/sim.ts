@@ -19,7 +19,7 @@ export interface Loadout { primary: PrimaryLoadout; secondary: SecondaryLoadout;
 export interface Command { team: Team | 'ALL'; action: Action; dir?: Dir; who?: number; }
 export const OFFICER_NAMES = ['Ken', 'Maya', 'Jack', 'Zoe']; // A1, A2, B1, B2
 export const OFFICER_ROLES = ['Pointman', 'Breacher', 'Marksman', 'Negotiator'] as const;
-export type OfficerRole = typeof OFFICER_ROLES[number];
+export type OfficerRole = typeof OFFICER_ROLES[number] | 'Rookie';
 /** A team, or one officer working on an order of their own. */
 type Grp = Team | Actor;
 export type Kind = 'player' | 'officer' | 'suspect' | 'civ';
@@ -85,6 +85,8 @@ export interface CoopMods {
   extraHostiles?: number;
   pistolOnly?: boolean;
   friendlyFire?: boolean;
+  /** Who is on the entry team tonight (career roster: injured officers are replaced). */
+  roster?: { name: string; role: string; speed: number; hp: number }[];
 }
 
 export interface ReplayActor {
@@ -213,11 +215,14 @@ export class Sim {
     let id = 0;
     this.player = new Actor(id++, 'player', 'You'); Object.assign(this.player, { x: sp.x, z: sp.z, yaw: sp.yaw, armed: true });
     this.actors.push(this.player); this.players.push(this.player); this.player.trail.push({ x: sp.x, z: sp.z });
+    const roster = mods.roster;
     OFFICER_NAMES.forEach((n, i) => {
-      const o = new Actor(id++, 'officer', n);
-      o.team = i < 2 ? 'A' : 'B'; o.ti = i % 2; o.slot = i; o.role = OFFICER_ROLES[i];
-      o.armed = true; o.speed = i === 0 ? 4.25 : 3.9;
-      if (i === 1) { o.bangs = 4; o.c2 = 3; } // Maya (Breacher) carries extra breach gear
+      const r = roster && roster[i];
+      const o = new Actor(id++, 'officer', r?.name ?? n);
+      o.team = i < 2 ? 'A' : 'B'; o.ti = i % 2; o.slot = i; o.role = (r?.role as OfficerRole) ?? OFFICER_ROLES[i];
+      o.armed = true; o.speed = r ? r.speed : i === 0 ? 4.25 : 3.9;
+      if (r && r.hp) o.hp = r.hp;
+      if (o.role === 'Breacher') { o.bangs = 4; o.c2 = 3; } // Maya (Breacher) carries extra breach gear
       const p = nearestWalkable(l, sp.x + (i % 2 ? 0.9 : -0.9), sp.z + 1.1 + Math.floor(i / 2) * 1.0) ?? sp;
       o.x = sp.x + (i % 2 ? 0.8 : -0.8); o.z = sp.z + 1.0 + Math.floor(i / 2) * 0.9; if (this.solidCell(Math.floor(o.x), Math.floor(o.z))) { o.x = p.x; o.z = p.z; }
       o.yaw = sp.yaw; this.officers.push(o); this.actors.push(o);

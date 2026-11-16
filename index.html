@@ -142,13 +142,13 @@
           </select>
         </label>
       </div>
+      <div id="gearLocks" class="gearlocks"></div>
+      <div class="clabel" style="margin-top:14px">CAMPAIGN</div>
+      <div id="cmpProgress" class="cmpprogress"></div>
+      <button id="btnIronman" type="button" class="ironman-toggle">IRONMAN · OFF</button>
+      <div class="note" id="ironmanInfo"></div>
       <div class="clabel" style="margin-top:14px">ENTRY TEAM SPECIALISTS</div>
-      <div class="squadroles armory-roles">
-        <div><b>Ken · Pointman</b>Faster movement</div>
-        <div><b>Maya · Breacher</b>Extra flash &amp; Breach Charge</div>
-        <div><b>Jack · Marksman</b>Sharper rifle aim</div>
-        <div><b>Zoe · Negotiator</b>Better surrender &amp; cuffs</div>
-      </div>
+      <div id="rosterList" class="squadroles armory-roles"></div>
     </section>
   </aside>
 
@@ -181,6 +181,7 @@
         <div class="ranktext">
           <div class="ranktop">TEAMAI <span id="mRank">ROOKIE OFFICER</span></div>
           <div class="xpbar"><i id="mXpFill"></i></div>
+          <div id="mNextRank" class="nextrank"></div>
         </div>
       </div>
       <div class="dockmeta">
@@ -287,6 +288,7 @@
 
 <div id="debrief" class="screen hidden"><div class="panel wide scroll">
   <h2 id="debTitle"></h2><div id="debRank"></div>
+  <div id="debCareer" class="debiecareer"></div>
   <div id="debAwards" class="awards"></div>
   <div id="debSquadMvp" class="deb-mvp hidden"></div>
   <div class="debgrid">
@@ -303,6 +305,24 @@
   </div>
   <div id="debReadyRow" class="deb-ready hidden"><button id="btnDebReady" type="button">Ready for Next Op</button><span id="debReadyTxt"></span></div>
   <div class="row"><button id="btnMenu">Main menu</button><button id="btnAgain">Play again</button><button id="btnNext" class="primary">Next mission</button></div>
+</div></div>
+
+<div id="firstrun" class="screen hidden"><div class="panel wide scroll">
+  <div class="ckicker">// FIRST DEPLOYMENT</div>
+  <h2>WELCOME TO THE ENTRY TEAM</h2>
+  <p class="thanks">Six operations, one career. You earn XP for clean work — arrests, secured civilians, a quiet entry — and ranks unlock new kit in the Armory. Your officers can be hurt; hurt officers sit out while a rookie stands in.</p>
+  <div class="frgrid">
+    <div><b>Move / sprint / crouch</b><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <kbd>Shift</kbd> <kbd>C</kbd></span></div>
+    <div><b>Look, aim, fire</b><span>Mouse · <kbd>RMB</kbd> · <kbd>LMB</kbd></span></div>
+    <div><b>Give the squad an order</b><span><kbd>Tab</kbd> wheel</span></div>
+    <div><b>Crack a door</b><span><kbd>Shift</kbd>+<kbd>F</kbd></span></div>
+    <div><b>FiberCam under the door</b><span><kbd>O</kbd></span></div>
+    <div><b>Flashbang / reload</b><span><kbd>G</kbd> · <kbd>R</kbd></span></div>
+    <div><b>Talk to the squad</b><span><kbd>V</kbd> hold</span></div>
+    <div><b>Lean / peek</b><span><kbd>Q</kbd><kbd>E</kbd></span></div>
+  </div>
+  <p class="note">Arrests score far higher than bodies. Announce yourself, give them a chance to surrender, and watch the corners.</p>
+  <div class="row"><button id="btnFirstRunOk" class="primary">UNDERSTOOD — DEPLOY</button></div>
 </div></div>
 
 <div id="help" class="screen hidden"><div class="panel wide scroll">

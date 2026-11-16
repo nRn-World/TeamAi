@@ -11,3 +11,6 @@ dist
 
 # generated furniture-placement screenshots
 .furn-preview/
+
+# generated career screenshots
+.career-preview/

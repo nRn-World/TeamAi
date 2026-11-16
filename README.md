@@ -21,6 +21,25 @@ npm run build    # production build in dist/
 
 Code dependencies: three.js (MIT), Vite (MIT), TypeScript (Apache-2.0), PeerJS (MIT). Third-party assets and their authors are listed in the game under Settings → Credits & licences; every CC BY asset ships with its `license.txt`.
 
+## Career, ranks and the roster
+
+`src/game/career.ts` holds the meta-game (pure logic, unit-tested in `tests/sim.test.ts`):
+
+- **Ranks unlock kit.** 0 XP Rookie Officer (TX-4 carbine + P-17), 200 Tactical Officer (ARC-2 stunner),
+  500 Senior Breacher (S-87 shotgun), 950 Entry Team Lead (LL-12 launcher), 1500 Tactical Commander
+  (ballistic shield), 2400 Master Operator (+20 % XP). Locked items show up in the Armory with the rank
+  that opens them, and the loadout select refuses anything the rank does not carry.
+- **Campaign order.** Operation N opens when N-1 has been completed; the mission strip marks locked
+  operations, the Armory shows the next operation and the cleared count, and the debrief offers
+  *Next mission · name* only when it is actually unlocked.
+- **Consequences.** Officers who end an operation down sit out 1–3 operations. While they recover a
+  rookie (lower speed, lower HP, no role perk) takes their slot, which is passed to the sim through
+  `CoopMods.roster`; the Armory lists who is fit, and the debrief reports who was hurt and who is back.
+- **Ironman.** A toggle in the Armory: no restarts (the pause menu hides *Restart mission*) and a failed
+  operation earns no XP — but the injuries still come home. The daily raid always runs under the same rule.
+- **Onboarding.** The first launch shows a *First deployment* card with the six controls that matter and
+  the scoring rule (arrests pay, bodies do not).
+
 ## Furniture placement
 
 `furnish()` in `src/sim/level.ts` no longer drops furniture on random floor cells. Each room is
