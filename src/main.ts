@@ -90,7 +90,10 @@ const ORDER_LABEL: Record<string, string> = {
   follow: 'FOLLOWING', hold: 'HOLDING', move: 'MOVING', cover: 'COVERING YOU',
   stack: 'AT DOOR', breach: 'BREACHING', door: 'DOOR', restrain: 'SECURING',
   peek: 'PEEKING', c2: 'BREACH CHARGE', wedge: 'WEDGING', defuse: 'DEFUSING',
+  secure: 'SEARCH & SECURE', search: 'SEARCH & SECURE', escort: 'ESCORTING',
+  regroup: 'REGROUPING', none: 'STANDBY',
 };
+const orderText = (type: string | undefined): string => (type && ORDER_LABEL[type]) || 'STANDBY';
 
 let assetsDone: Promise<unknown> = Promise.resolve();
 
@@ -1139,7 +1142,7 @@ class Game {
       $('loadTitle').textContent = 'Loading...';
       $('loadMission').textContent = MISSIONS[mission]?.name ?? 'Operation';
       setLoad(18, 'Loading 3D props, weapons & squad models...');
-      for (const id of ['lobby', 'debrief', 'pause', 'brief']) show(id, false);
+      for (const id of ['lobby', 'debrief', 'pause', 'brief', 'firstrun', 'help', 'settings', 'menu']) show(id, false);
       show('loading', true);
       await nextFrame();
       await nextFrame();
@@ -2205,8 +2208,8 @@ class Game {
     }
     let html = '';
     for (const t of ['A', 'B'] as Team[]) {
-      const T = sim.teams[t]; html += `<div class="tcard ${t} ${this.selTeam === t || this.selTeam === 'ALL' ? 'sel' : ''}"><h4>TEAM ${t}<span>${ORDER_LABEL[T.order.type]}${T.fire === 'hold' ? ' · HOLD FIRE' : ''}</span></h4>`;
-      for (const o of sim.officers.filter(o => o.team === t)) html += `<div class="mem ${o.alive ? '' : 'dead'}"><span>${o.name}${o.solo && o.alive ? `<em>${ORDER_LABEL[o.solo.order.type]}</em>` : ''}</span><i><u style="width:${o.hp}%;background:${o.hp > 60 ? '#5fe08a' : o.hp > 30 ? '#f2c14e' : '#e04848'}"></u></i></div>`;
+      const T = sim.teams[t]; html += `<div class="tcard ${t} ${this.selTeam === t || this.selTeam === 'ALL' ? 'sel' : ''}"><h4>TEAM ${t}<span>${orderText(T.order.type)}${T.fire === 'hold' ? ' · HOLD FIRE' : ''}</span></h4>`;
+      for (const o of sim.officers.filter(o => o.team === t)) html += `<div class="mem ${o.alive ? '' : 'dead'}"><span>${o.name}${o.solo && o.alive ? `<em>${orderText(o.solo.order.type)}</em>` : ''}</span><i><u style="width:${o.hp}%;background:${o.hp > 60 ? '#5fe08a' : o.hp > 30 ? '#f2c14e' : '#e04848'}"></u></i></div>`;
       html += '</div>';
     }
     $('team').innerHTML = html;
