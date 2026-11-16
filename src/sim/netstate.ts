@@ -5,8 +5,10 @@ import type { Door } from './level';
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
 export interface Snap {
-  a: number[][]; d: number[]; o: [string, string, number][]; so?: string[];
+  a: number[][]; d: number[]; dt?: number[]; o: [string, string, number][]; so?: string[];
   g: number[][]; cl?: [number, number, number, number, number][]; p: number[][];
+  ev?: [number, number, number, number, number, number][];
+  sp?: [number, number, number][];
   pw?: number; bm?: [number, number] | null; bw?: number[]; bp?: number[]; bd?: number[];
   bs?: number;
   over: number; time: number; st?: unknown;
@@ -27,11 +29,14 @@ export function encodeSnap(sim: Sim): Snap {
       r2(a.walk % (Math.PI * 2)), r2(a.stun),
       ...(a.kind === 'player' ? [r2(a.pitch), a.weapon] : [])]),
     d: sim.level.doors.map(d => Math.round(d.open * 100) + d.target * 1000 + (d.locked ? 10000 : 0) + (d.wedged ? 20000 : 0)),
+    dt: sim.level.doors.some(d => d.trapped || d.trapKnown) ? sim.level.doors.map(d => (d.trapped ? 1 : 0) | (d.trapKnown ? 2 : 0)) : undefined,
     o: (['A', 'B'] as Team[]).map(t => [sim.teams[t].order.type, sim.teams[t].fire, sim.teams[t].order.leader?.id ?? -1]),
     so: sim.officers.map(o => o.solo ? o.solo.order.type : ''),
     g: sim.grenades.map(g => [r2(g.x), r2(g.y), r2(g.z), g.kind === 'smoke' ? 1 : g.kind === 'gas' ? 2 : 0]),
     cl: sim.clouds.length ? sim.clouds.map(c => [c.kind === 'gas' ? 1 : 0, r2(c.x), r2(c.z), r2(c.r), r2(c.t)]) : undefined,
-    p: sim.players.map(p => [p.bangs, r2(p.flash), p.cuff ? p.cuff.id : -1, r2(p.cuffT), p.c2, p.wedges, Math.round(p.bleedT), p.reviving ? p.reviving.id : -1, r2(p.reviveT), p.smokes, p.gases]),
+    p: sim.players.map(p => [p.bangs, r2(p.flash), p.cuff ? p.cuff.id : -1, r2(p.cuffT), p.c2, p.wedges, Math.round(p.bleedT), p.reviving ? p.reviving.id : -1, r2(p.reviveT), p.smokes, p.gases, p.sensors]),
+    ev: sim.evidence.length ? sim.evidence.map(e => [e.id, r2(e.x), r2(e.z), r2(e.yaw), e.kind === 'shotgun' ? 2 : e.kind === 'rifle' ? 1 : 0, e.secured ? 1 : 0]) : undefined,
+    sp: sim.sensorPings.length ? sim.sensorPings.map(pg => [r2(pg.x), r2(pg.z), pg.kind === 'suspect' ? 1 : 0]) : undefined,
     pw: sim.powerOn ? 1 : 0,
     bm: sim.bomb ? [r2(sim.bomb.time), sim.bomb.defused ? 1 : 0] : null,
     bw: sim.brokenWindows.size ? [...sim.brokenWindows] : undefined,
@@ -77,17 +82,23 @@ export function applySnap(sim: Sim, s: Snap, me: Actor, targets?: Map<Actor, Net
     const rem2 = rem % 10000;
     d.target = rem2 >= 1000 ? 1 : 0;
     d.open = (rem2 % 1000) / 100;
+    const tf = s.dt?.[i] ?? 0;
+    d.trapped = !!(tf & 1);
+    d.trapKnown = !!(tf & 2);
   });
   s.o.forEach((v, i) => { const T = sim.teams[i ? 'B' : 'A']; T.order = { type: v[0] as Order['type'], phase: 0, t: 0, leader: sim.actors[v[2]] }; T.fire = v[1] as 'free' | 'hold'; });
   s.so?.forEach((v, i) => { const o = sim.officers[i]; if (o) o.solo = v ? { order: { type: v as Order['type'], phase: 0, t: 0 } } : null; });
   sim.grenades = s.g.map(g => ({ kind: (g[3] === 1 ? 'smoke' : g[3] === 2 ? 'gas' : 'bang') as GrenadeKind, x: g[0], y: g[1], z: g[2], vx: 0, vy: 0, vz: 0, t: 1 }));
   sim.clouds = s.cl ? s.cl.map(c => ({ kind: (c[0] === 1 ? 'gas' : 'smoke') as 'smoke' | 'gas', x: c[1], z: c[2], r: c[3], t: c[4], maxT: 18 })) : [];
+  sim.evidence = s.ev ? s.ev.map(e => ({ id: e[0], x: e[1], z: e[2], yaw: e[3], kind: e[4] === 2 ? 'shotgun' : e[4] === 1 ? 'rifle' : 'pistol', secured: !!e[5], ownerId: -1 })) : [];
+  sim.sensorPings = s.sp ? s.sp.map(pg => ({ x: pg[0], z: pg[1], kind: (pg[2] ? 'suspect' : 'civ') as 'suspect' | 'civ', t: 1.0 })) : [];
   s.p.forEach((v, i) => {
     const p = sim.players[i]; if (!p) return;
     p.bangs = v[0]; p.flash = v[1]; p.cuff = v[2] >= 0 ? sim.actors[v[2]] : null; p.cuffT = v[3];
     if (v.length > 4) { p.c2 = v[4]; p.wedges = v[5]; }
     if (v.length > 6) { p.bleedT = v[6]; p.reviving = v[7] >= 0 ? sim.actors[v[7]] : null; p.reviveT = v[8]; }
     if (v.length > 9) { p.smokes = v[9]; p.gases = v[10]; }
+    if (v.length > 11) p.sensors = v[11];
   });
   if (s.pw !== undefined) sim.powerOn = !!s.pw;
   if (s.bm && sim.bomb) { sim.bomb.time = s.bm[0]; sim.bomb.defused = !!s.bm[1]; }

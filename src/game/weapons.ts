@@ -206,10 +206,16 @@ export function buildBallisticShield(withLight = true): THREE.Group {
     mkBox(0.11, 0.032, 0.045, rimMat, 0.06, 0.02, 0.045),
   );
 
-  // Armored polycarbonate viewport glass
+  // Armored polycarbonate viewport glass + progressive bullet crack overlay
   const visor = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.19, 0.016), visorMat);
   visor.position.set(0, 0.18, 0);
   g.add(visor);
+  const crackMat = new THREE.MeshBasicMaterial({ map: shieldCrackTex(), transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+  const visorCrack = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 0.18), crackMat);
+  visorCrack.position.set(0, 0.18, 0.01);
+  visorCrack.visible = false;
+  g.add(visorCrack);
+  g.userData.visorCrack = visorCrack;
 
   // Rivets around viewport frame
   for (const rx of [-0.11, -0.04, 0.04, 0.11]) {
@@ -244,6 +250,39 @@ export function buildBallisticShield(withLight = true): THREE.Group {
 
   g.traverse(o => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
   return g;
+}
+
+function shieldCrackTex() {
+  return T.make('shield_cracks', 256, 192, (g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    const hubs = [[w * 0.34, h * 0.44], [w * 0.68, h * 0.52], [w * 0.5, h * 0.32]];
+    for (const [hx, hy] of hubs) {
+      g.strokeStyle = 'rgba(235, 245, 255, 0.85)';
+      g.lineWidth = 1.6;
+      for (let i = 0; i < 9; i++) {
+        const a = (i / 9) * Math.PI * 2 + hx * 0.03;
+        g.beginPath();
+        g.moveTo(hx, hy);
+        const len = 26 + ((i * 19) % 34);
+        g.lineTo(hx + Math.cos(a) * len * 0.55, hy + Math.sin(a) * len * 0.55);
+        g.lineTo(hx + Math.cos(a + 0.14) * len, hy + Math.sin(a + 0.14) * len);
+        g.stroke();
+      }
+      g.beginPath();
+      g.arc(hx, hy, 6, 0, Math.PI * 2);
+      g.strokeStyle = 'rgba(255, 255, 255, 0.92)';
+      g.stroke();
+    }
+  });
+}
+
+export function setShieldCracks(shield: THREE.Group, hits: number) {
+  const crack = shield.userData.visorCrack as THREE.Mesh | undefined;
+  if (!crack) return;
+  crack.visible = hits > 0;
+  if (hits > 0) {
+    (crack.material as THREE.MeshBasicMaterial).opacity = Math.min(0.95, 0.28 + hits * 0.2);
+  }
 }
 
 function eotechReticleTex() {

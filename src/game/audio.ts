@@ -1,7 +1,7 @@
 // Weapon and door sounds are real recordings (public/sfx, CC0 – see public/sfx/LICENSE.txt); everything else is synthesized with WebAudio.
 export type Gun = 'rifle' | 'pistol' | 'smg' | 'shotgun';
 const SFX = ['shot-m4a1-1', 'shot-m4a1-2', 'shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3', 'shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3', 'shot-m1014-1', 'shot-m1014-2', 'shot-m1014-3', 'far-rifle', 'far-pistol', 'far-smg', 'far-shotgun', 'far-sniper',
-  'foley-mag-out', 'foley-mag-in', 'foley-charge', 'foley-pistol-out', 'foley-pistol-in', 'foley-slide', 'foley-click', 'foley-bolt', 'foley-rack', 'foley-shell',
+  'foley-mag-out', 'foley-mag-in', 'foley-charge', 'foley-pistol-out', 'foley-pistol-in', 'foley-slide', 'foley-click', 'foley-bolt', 'foley-rack', 'foley-shell', 'foley-clack', 'foley-latch',
   'door-open-1', 'door-open-2', 'door-close-1', 'door-close-2', 'door-close-3', 'door-slam', 'door-creak-1', 'door-creak-2', 'door-latch'];
 const NEAR: Record<Gun, string[]> = { rifle: ['shot-m4a1-1', 'shot-m4a1-2'], pistol: ['shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3'], smg: ['shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3'], shotgun: ['shot-m1014-1', 'shot-m1014-2', 'shot-m1014-3'] };
 // Voice levels. Every clip is measured when it is loaded and scaled to LINE_LEVEL (RMS of its voiced parts, dBFS), so a shouted
@@ -15,20 +15,56 @@ function level(buf: AudioBuffer, target: number) {
   return rms > 1e-5 ? Math.min(4, Math.max(0.1, Math.pow(10, target / 20) / rms)) : 1;
 }
 export class GameAudio {
-  ctx: AudioContext | null = null; master!: GainNode; private noise!: AudioBuffer; private verb!: ConvolverNode; private wet!: GainNode; volume = 0.8;
+  ctx: AudioContext | null = null; master!: GainNode; private masterFilter!: BiquadFilterNode;
+  private noise!: AudioBuffer; private verb!: ConvolverNode; private wet!: GainNode;
+  private verbBuffers: Partial<Record<'tight' | 'hall' | 'exterior', AudioBuffer>> = {};
+  private roomKind: 'tight' | 'hall' | 'exterior' = 'tight';
+  volume = 0.8;
+  private makeImpulse(c: AudioContext, sec: number, decay: number, damp: number) {
+    const len = Math.max(1024, Math.floor(c.sampleRate * sec));
+    const ir = c.createBuffer(2, len, c.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const b = ir.getChannelData(ch);
+      let prev = 0;
+      for (let i = 0; i < len; i++) {
+        const w = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+        prev = prev * damp + w * (1 - damp);
+        b[i] = prev;
+      }
+    }
+    return ir;
+  }
   init() {
     if (this.ctx) { this.ctx.resume(); return; }
     const AC = window.AudioContext || (window as any).webkitAudioContext; if (!AC) return;
     let c: AudioContext; try { c = new AC({ latencyHint: 0 }); } catch { c = new AC(); } this.ctx = c; this.master = c.createGain(); this.master.gain.value = this.volume;
+    this.masterFilter = c.createBiquadFilter(); this.masterFilter.type = 'lowpass'; this.masterFilter.frequency.value = 22000; this.masterFilter.Q.value = 0.7;
     // soft limiter without look-ahead (a DynamicsCompressor delays everything by several milliseconds)
-    const lim = c.createWaveShaper(), cv = new Float32Array(1025); for (let i = 0; i < 1025; i++) { const x = (i / 512 - 1) * 2; cv[i] = Math.tanh(x * 0.9) / Math.tanh(0.9 * 2) * 0.98; } lim.curve = cv; const pre = c.createGain(); pre.gain.value = 0.5; this.master.connect(pre); pre.connect(lim); lim.connect(c.destination);
+    const lim = c.createWaveShaper(), cv = new Float32Array(1025); for (let i = 0; i < 1025; i++) { const x = (i / 512 - 1) * 2; cv[i] = Math.tanh(x * 0.9) / Math.tanh(0.9 * 2) * 0.98; } lim.curve = cv; const pre = c.createGain(); pre.gain.value = 0.5;
+    this.master.connect(this.masterFilter); this.masterFilter.connect(pre); pre.connect(lim); lim.connect(c.destination);
     this.noise = c.createBuffer(1, c.sampleRate, c.sampleRate); const d = this.noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    const ir = c.createBuffer(2, c.sampleRate * 1.1, c.sampleRate);
-    for (let ch = 0; ch < 2; ch++) { const b = ir.getChannelData(ch); for (let i = 0; i < b.length; i++) b[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / b.length, 3.2); }
-    this.verb = c.createConvolver(); this.verb.buffer = ir; this.wet = c.createGain(); this.wet.gain.value = 0.3; this.verb.connect(this.wet); this.wet.connect(this.master);
+    this.verbBuffers = {
+      tight: this.makeImpulse(c, 0.55, 4.4, 0.45),
+      hall: this.makeImpulse(c, 1.45, 2.5, 0.25),
+      exterior: this.makeImpulse(c, 0.85, 3.8, 0.65),
+    };
+    this.verb = c.createConvolver(); this.verb.buffer = this.verbBuffers.tight!; this.wet = c.createGain(); this.wet.gain.value = 0.26; this.verb.connect(this.wet); this.wet.connect(this.master);
     // room tone
     void this.loadLines(); void this.loadSfx();
     const hum = c.createBufferSource(); hum.buffer = this.noise; hum.loop = true; const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 140; const hg = c.createGain(); hg.gain.value = 0.05; hum.connect(lp); lp.connect(hg); hg.connect(this.master); hum.start();
+  }
+  setRoomAcoustic(kind: 'tight' | 'hall' | 'exterior') {
+    if (!this.ctx || !this.verb || this.roomKind === kind) return;
+    this.roomKind = kind;
+    const buf = this.verbBuffers[kind];
+    if (buf) this.verb.buffer = buf;
+    this.wet.gain.setTargetAtTime(kind === 'hall' ? 0.38 : kind === 'tight' ? 0.24 : 0.14, this.ctx.currentTime, 0.15);
+  }
+  setDeafness(k: number) {
+    if (!this.ctx || !this.masterFilter) return;
+    const clamped = Math.max(0, Math.min(1, k));
+    const cutoff = clamped > 0.04 ? 580 + Math.pow(1 - clamped, 2.4) * 20000 : 22000;
+    this.masterFilter.frequency.setTargetAtTime(cutoff, this.ctx.currentTime, 0.08);
   }
   // ---- menu music & outdoor rain ambience (public/music) ----
   private menuBufs: { music?: AudioBuffer; rain?: AudioBuffer } = {};
@@ -210,17 +246,56 @@ export class GameAudio {
   }
   dry() { if (!this.ctx) return; const o = this.out(0, 0.9, false); if (!this.sample('foley-click', o)) this.tone(o, 'square', 1800, 900, 0.03, 0.14); }
   /** Magazine out, magazine in, charging handle / slide – spread over the reload time (seconds). */
-  reload(gun: Gun = 'rifle', dur = 2) {
-    if (!this.ctx) return; const o = this.out(0.15, 0.9, false), r = gun === 'rifle';
+  reload(gun: Gun = 'rifle', dur = 2, speed = false) {
+    if (!this.ctx) return; const o = this.out(0.15, speed ? 1.05 : 0.9, false), r = gun === 'rifle';
     if (gun === 'shotgun') {
-      const ok = this.sample('foley-shell', o, 0.95, 1, dur * 0.14);
-      this.sample('foley-shell', o, 0.95, 1.04, dur * 0.44);
-      this.sample('foley-rack', o, 1.0, 1, dur * 0.78);
-      if (ok) return;
+      this.shotgunShell(0);
+      this.sample('foley-rack', o, 1.0, 1, Math.max(0.15, dur * 0.72));
+      return;
     }
-    const ok = this.sample(r ? 'foley-mag-out' : 'foley-pistol-out', o, 1, 1, dur * 0.06);
-    this.sample(r ? 'foley-mag-in' : 'foley-pistol-in', o, 1, 1, dur * 0.52); this.sample(r ? 'foley-charge' : 'foley-slide', o, 1, 1, dur * 0.8);
+    const ok = this.sample(r ? 'foley-mag-out' : 'foley-pistol-out', o, 1, speed ? 1.2 : 1, dur * 0.05);
+    if (speed) this.sample('foley-clack', o, 0.55, 1.05, dur * 0.28);
+    this.sample(r ? 'foley-mag-in' : 'foley-pistol-in', o, 1, speed ? 1.15 : 1, dur * 0.5);
+    this.sample(r ? 'foley-charge' : 'foley-slide', o, 1, speed ? 1.15 : 1, dur * 0.8);
     if (!ok) { this.burst(o, 0.05, 'bandpass', 2400, 1800, 4, 0.4); this.burst(o, 0.06, 'bandpass', 1500, 1100, 4, 0.45, 0.55); this.burst(o, 0.05, 'bandpass', 3000, 2000, 3, 0.5, 1.12); }
+  }
+  shotgunShell(delay = 0) {
+    if (!this.ctx) return;
+    const o = this.out(0.18, 0.92, false);
+    if (!this.sample('foley-shell', o, 0.95, 0.96 + Math.random() * 0.08, delay)) {
+      this.tone(o, 'triangle', 1250, 720, 0.05, 0.5, delay);
+    }
+  }
+  shieldClang(dist = 0, pan = 0) {
+    if (!this.ctx) return;
+    const o = this.out(pan, Math.max(0.2, 1.15 / (1 + dist * 0.12)), true);
+    this.tone(o, 'triangle', 1650 + Math.random() * 250, 780, 0.14, 0.9);
+    this.tone(o, 'sine', 2900, 1800, 0.19, 0.45);
+    this.burst(o, 0.04, 'highpass', 3600, 2000, 1.5, 0.65);
+  }
+  breath(intensity = 0.5) {
+    if (!this.ctx) return;
+    const o = this.out(0, Math.min(0.32, 0.1 + intensity * 0.22), false);
+    this.burst(o, 0.28, 'bandpass', 950, 650, 1.4, 0.75, 0);
+    this.burst(o, 0.34, 'bandpass', 720, 420, 1.2, 0.6, 0.36);
+  }
+  sensor(ping = false) {
+    if (!this.ctx) return;
+    const o = this.out(0, ping ? 0.26 : 0.42, false);
+    if (ping) { this.tone(o, 'sine', 1920, 1480, 0.08, 0.55); }
+    else { this.sample('foley-latch', o, 0.75, 1.1); this.tone(o, 'sine', 960, 1340, 0.1, 0.4, 0.06); }
+  }
+  trapDisarm() {
+    if (!this.ctx) return;
+    const o = this.out(0, 0.55, false);
+    this.sample('foley-clack', o, 0.85, 1.15);
+    this.tone(o, 'triangle', 1180, 1620, 0.07, 0.4, 0.08);
+  }
+  bagEvidence() {
+    if (!this.ctx) return;
+    const o = this.out(0.1, 0.6, false);
+    this.sample('foley-latch', o, 0.85, 1.05);
+    this.burst(o, 0.08, 'bandpass', 2800, 1900, 2, 0.35, 0.05);
   }
   smokeHiss(dist: number, pan: number) {
     if (!this.ctx) return;
@@ -238,7 +313,7 @@ export class GameAudio {
     const lines = [
       'Dispatch to Team 1: Multiple 911 calls from The Office Complex, Kista Sector. Three to five armed intruders barricaded on the main floor, civilians pinned in cubicles. Proceed with caution.',
       'Dispatch to Team 1: Harbor patrol reports an armed weapons exchange inside The Warehouse. Dock workers trapped near shipping crates. Expect crossfire and locked storage doors.',
-      'Dispatch to Team 1: Panic call from Hotel North Star front desk. Armed suspects holding guests across corridor rooms 101 through 108. Optiwand doors before breaching.',
+      'Dispatch to Team 1: Panic call from Hotel North Star front desk. Armed suspects holding guests across corridor rooms 101 through 108. FiberCam doors before breaching.',
       'Dispatch to Team 1: Silent alarm triggered at Nordia Bank. Armed crew has taken the Bank Director hostage near the vault. Prioritize VIP extraction and non-lethal compliance.',
       'Dispatch to Team 1: Urgent! Anonymous tip confirms an improvised explosive device inside Club Eclipse backstage. Low visibility, panicked civilians on the dancefloor. Move fast.',
       'Dispatch to Team 1: Tactical warrant active for an unmapped compound. Intel indicates armed lookouts and civilians inside. Watch your corners and clear room by room.',

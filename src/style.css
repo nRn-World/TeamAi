@@ -303,9 +303,10 @@ ul.credits em { position:absolute; right:0; top:11px; font:600 12px/1 var(--hd);
 /* bomb timer */
 #bombtimer { position:fixed; top:52px; left:50%; transform:translateX(-50%); padding:6px 16px; background:rgba(140,20,20,.88); border:1px solid #ff5a5a; color:#fff; font:700 18px/1 var(--hd); letter-spacing:.14em; text-transform:uppercase; z-index:8; box-shadow:0 0 18px rgba(255,60,60,.4); }
 
-/* NVG & Bodycam overlays */
-#nvg { position:fixed; inset:0; pointer-events:none; z-index:3; background:radial-gradient(circle, rgba(90,255,140,.18) 38%, rgba(8,28,16,.78) 92%); mix-blend-mode:screen; box-shadow:inset 0 0 90px rgba(0,255,110,.25); }
-#nvg::after { content:"NVG ACTIVE"; position:absolute; top:14px; left:50%; transform:translateX(-50%); font:700 12px/1 var(--hd); letter-spacing:.22em; color:#7affaa; opacity:.8; }
+/* NVG, Suppression & Bodycam overlays */
+#nvg { position:fixed; inset:0; pointer-events:none; z-index:3; background:radial-gradient(circle at 50% 50%, rgba(92,255,148,.16) 44%, rgba(6,24,14,.55) 78%, rgba(2,6,4,.94) 100%); mix-blend-mode:screen; box-shadow:inset 0 0 110px rgba(0,255,120,.26); filter:contrast(1.12); }
+#nvg::after { content:"NVG · IR LASER ACTIVE"; position:absolute; top:14px; left:50%; transform:translateX(-50%); font:700 12px/1 var(--hd); letter-spacing:.22em; color:#8affba; opacity:.86; }
+#suppress { position:fixed; inset:0; pointer-events:none; z-index:5; opacity:0; background:radial-gradient(circle at 50% 50%, transparent 45%, rgba(12,18,26,.72) 85%, rgba(0,0,0,.92) 100%); transition:opacity .08s linear; }
 #bodycam { position:fixed; inset:0; pointer-events:none; z-index:4; background:radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,.62) 100%), repeating-linear-gradient(0deg, rgba(255,255,255,.02) 0 1px, transparent 1px 3px); }
 #bodycam .bc-top { position:absolute; top:18px; right:26px; text-align:right; font:600 13px/1.35 monospace; color:#e6eef5; text-shadow:0 1px 3px #000; }
 #bodycam .bc-rec { color:#ff4747; font-weight:700; letter-spacing:.12em; }
@@ -398,6 +399,15 @@ body.stream-mode #log { bottom:105px; }
 .debreplay { width:260px; background:#090d12; border:1px solid rgba(255,255,255,.14); padding:10px; }
 .debreplay .dr-head { display:flex; justify-content:space-between; font:700 11.5px/1 var(--hd); letter-spacing:.16em; color:var(--acc); margin-bottom:6px; }
 #debMap { width:100%; height:auto; display:block; background:#06090e; border:1px solid rgba(255,255,255,.1); image-rendering:pixelated; }
+.deb-timeline { position:relative; height:18px; margin-top:6px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); cursor:pointer; }
+.deb-timeline-prog { position:absolute; left:0; top:0; bottom:0; width:0; background:rgba(79,150,255,.28); pointer-events:none; }
+.dt-ev { position:absolute; top:2px; width:7px; height:12px; transform:translateX(-50%); border:none; padding:0; cursor:pointer; background:#f59e0b; border-radius:1px; }
+.dt-ev.shot { background:#60a5fa; width:4px; height:8px; top:4px; opacity:.75; }
+.dt-ev.bang { background:#facc15; }
+.dt-ev.c2 { background:#fb923c; }
+.dt-ev.arrest { background:#4ade80; }
+.dt-ev.death { background:#ef4444; }
+.dt-ev.bomb { background:#f43f5e; }
 .debreplay .dr-ctrl { display:flex; gap:6px; margin-top:8px; }
 .debreplay .dr-ctrl button { flex:1; padding:6px 8px; font-size:11.5px; }
 @media (max-width:760px) { .debgrid { grid-template-columns:1fr; } .debreplay { width:100%; } }

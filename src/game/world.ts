@@ -54,8 +54,12 @@ const THEME = {
 
 export class LevelView {
   group = new THREE.Group();
-  doors: { door: Door; pivot: THREE.Group; base: number; wedge: THREE.Mesh; lock: THREE.Mesh; glass?: THREE.Mesh }[] = [];
+  doors: { door: Door; pivot: THREE.Group; base: number; wedge: THREE.Mesh; lock: THREE.Mesh; tripwire: THREE.Mesh; glass?: THREE.Mesh }[] = [];
   windows = new Map<number, THREE.Mesh>();
+  private evidenceViews = new Map<number, THREE.Group>();
+  private sensorViews = new Set<object>();
+  private sensorGroup = new THREE.Group();
+  private pingRings: { mesh: THREE.Mesh; t: number }[] = [];
   private propViews = new Map<number, { group: THREE.Group; prop: Prop; serverLeds?: THREE.Mesh[] }>();
   private appliedBrokenProps = new Set<number>();
   private lightSources: { x: number; y: number; z: number; color: number; intensity: number; distance: number; decay: number; isRoom?: boolean }[] = [];
@@ -129,6 +133,7 @@ export class LevelView {
     const wallGeo = new THREE.BoxGeometry(1, 3, 1);
     const mk = (cells: [number, number][], mat: THREE.Material, h = 3) => {
       const im = new THREE.InstancedMesh(wallGeo, mat, cells.length); const m = new THREE.Matrix4();
+      if (quality >= 2) { im.castShadow = true; im.receiveShadow = true; }
       cells.forEach(([x, z], i) => { m.makeScale(1, h / 3, 1); m.setPosition(x + 0.5, h / 2, z + 0.5); im.setMatrixAt(i, m); }); g.add(im);
     };
     const wallMat = std({ map: T.wallTex(th.wall, th.trim, l.theme) });
@@ -184,10 +189,23 @@ export class LevelView {
       }
       const lock = box(0.08, 0.06, 0.18, lockMat, 0.84, 1.15, 0); lock.visible = !!d.locked; pivot.add(lock);
       const wedge = box(0.22, 0.08, 0.2, wedgeMat, 0.72, 0.04, 0); wedge.visible = !!d.wedged; pivot.add(wedge);
-      if (d.horiz) { pivot.position.set(d.cx + 0.03, 0, d.cz + 0.5); g.add(box(0.06, 2.2, 1.02, frameMat, d.cx + 0.0, 1.1, d.cz + 0.5), box(0.06, 2.2, 1.02, frameMat, d.cx + 1.0, 1.1, d.cz + 0.5)); }
-      else { pivot.position.set(d.cx + 0.5, 0, d.cz + 0.03); g.add(box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 0.0), box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 1.0)); }
-      const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base, wedge, lock, glass });
+      const tripMat = new THREE.MeshBasicMaterial({ color: 0xff3c28 });
+      const tripwire = box(0.92, 0.012, 0.012, tripMat, 0.47, 0.24, 0);
+      tripwire.visible = !!(d.trapped && d.trapKnown);
+      if (d.horiz) {
+        pivot.position.set(d.cx + 0.03, 0, d.cz + 0.5);
+        tripwire.position.set(d.cx + 0.5, 0.24, d.cz + 0.5);
+        g.add(box(0.06, 2.2, 1.02, frameMat, d.cx + 0.0, 1.1, d.cz + 0.5), box(0.06, 2.2, 1.02, frameMat, d.cx + 1.0, 1.1, d.cz + 0.5), tripwire);
+      } else {
+        pivot.position.set(d.cx + 0.5, 0, d.cz + 0.03);
+        tripwire.rotation.y = Math.PI / 2;
+        tripwire.position.set(d.cx + 0.5, 0.24, d.cz + 0.5);
+        g.add(box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 0.0), box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 1.0), tripwire);
+      }
+      if (quality >= 2) pivot.traverse((o: any) => { if (o.isMesh && o !== glass) { o.castShadow = true; o.receiveShadow = true; } });
+      const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base, wedge, lock, tripwire, glass });
     }
+    g.add(this.sensorGroup);
     // breaker box (wall-mounted flush to an adjacent solid wall if available)
     if (l.breaker) {
       const bm = std({ color: 0x3b444d, metalness: 0.5, roughness: 0.4 });
@@ -606,8 +624,79 @@ export class LevelView {
       d.pivot.rotation.y = d.base + d.door.open * 1.62;
       d.lock.visible = !!d.door.locked;
       d.wedge.visible = !!d.door.wedged;
+      d.tripwire.visible = !!(d.door.trapped && d.door.trapKnown);
       if (d.glass && d.glass.visible && this.sim.brokenDoorGlass.has(d.door.id)) d.glass.visible = false;
     }
+    // Sync dropped evidence weapons on the floor
+    const activeEvIds = new Set<number>();
+    for (const ev of this.sim.evidence) {
+      if (ev.secured) continue;
+      activeEvIds.add(ev.id);
+      let g = this.evidenceViews.get(ev.id);
+      if (!g) {
+        g = new THREE.Group();
+        const gunMesh = droppedPistol();
+        gunMesh.scale.setScalar(ev.kind === 'pistol' ? 1.15 : 1.55);
+        const halo = new THREE.Mesh(
+          new THREE.RingGeometry(0.14, 0.2, 20),
+          new THREE.MeshBasicMaterial({ color: 0x52c8ff, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false }),
+        );
+        halo.rotation.x = -Math.PI / 2;
+        halo.position.y = 0.02;
+        halo.name = 'halo';
+        g.add(gunMesh, halo);
+        g.position.set(ev.x, 0.01, ev.z);
+        g.rotation.y = ev.yaw;
+        this.group.add(g);
+        this.evidenceViews.set(ev.id, g);
+      }
+      const halo = g.getObjectByName('halo') as THREE.Mesh | undefined;
+      if (halo) {
+        const pulse = 0.3 + 0.25 * Math.sin(time * 4.5 + ev.id);
+        (halo.material as THREE.MeshBasicMaterial).opacity = pulse;
+        halo.scale.setScalar(0.95 + 0.1 * Math.sin(time * 4.5 + ev.id));
+      }
+    }
+    for (const [id, g] of this.evidenceViews) {
+      if (!activeEvIds.has(id)) {
+        this.group.remove(g);
+        this.evidenceViews.delete(id);
+      }
+    }
+    // Sync planted acoustic wall sensors + through-wall sonar ping rings
+    for (const sn of this.sim.sensors) {
+      if (this.sensorViews.has(sn)) continue;
+      this.sensorViews.add(sn);
+      const puck = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.08, 0.04, 12),
+        new THREE.MeshStandardMaterial({ color: 0x20262e, emissive: 0x1ee6b8, emissiveIntensity: 0.8, roughness: 0.35 }),
+      );
+      puck.position.set(sn.x, 1.3, sn.z);
+      puck.rotation.x = Math.PI / 2;
+      this.sensorGroup.add(puck);
+    }
+    for (const pg of this.sim.sensorPings) {
+      if ((pg.t ?? 0) > 1.32) {
+        const col = pg.kind === 'suspect' ? 0xff4848 : 0x4fd07a;
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(0.22, 0.32, 24),
+          new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.85, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set(pg.x, 0.9, pg.z);
+        ring.renderOrder = 10;
+        this.group.add(ring);
+        this.pingRings.push({ mesh: ring, t: 1.1 });
+      }
+    }
+    for (const pr of this.pingRings) {
+      pr.t -= dt;
+      const k = 1 - pr.t / 1.1;
+      pr.mesh.scale.setScalar(1 + k * 2.4);
+      (pr.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, pr.t * 0.78);
+      if (pr.t <= 0) { this.group.remove(pr.mesh); pr.mesh.geometry.dispose(); }
+    }
+    this.pingRings = this.pingRings.filter(pr => pr.t > 0);
     for (const [k, m] of this.windows) {
       if (this.sim.brokenWindows.has(k) && m.visible) m.visible = false;
     }
@@ -937,6 +1026,7 @@ export class FX {
   private gunSmokeTex = softPuffTex('rgba(215,220,226,0.34)', 'rgba(160,168,176,0.12)');
   private shells: { m: THREE.Mesh; vx: number; vy: number; vz: number; rx: number; rz: number; life: number }[] = []; private shi = 0;
   private laserDot: THREE.Mesh;
+  private irBeam: THREE.Line;
   light = new THREE.PointLight(0xffc070, 0, 12, 1.6); private lightT = 0; private markers: { m: THREE.Mesh; t: number }[] = [];
   private pings: { g: THREE.Group; ring: THREE.Mesh; sp: THREE.Sprite; t: number }[] = [];
   nades: THREE.Mesh[] = [];
@@ -991,6 +1081,9 @@ export class FX {
       new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.92 }),
     );
     this.laserDot.visible = false; this.group.add(this.laserDot);
+    const beamGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    this.irBeam = new THREE.Line(beamGeo, new THREE.LineBasicMaterial({ color: 0x64ff88, transparent: true, opacity: 0.42 }));
+    this.irBeam.visible = false; this.irBeam.frustumCulled = false; this.group.add(this.irBeam);
     this.group.add(this.light);
     const ng = new THREE.CylinderGeometry(0.035, 0.035, 0.13, 8), nm = std({ color: 0x3a4a3a, metalness: 0.5, roughness: 0.4 });
     for (let i = 0; i < 4; i++) { const n = new THREE.Mesh(ng, nm); n.visible = false; this.group.add(n); this.nades.push(n); }
@@ -1063,9 +1156,23 @@ export class FX {
     s.rx = (Math.random() - 0.5) * 28; s.rz = (Math.random() - 0.5) * 28;
     s.life = 5.5;
   }
-  setLaser(on: boolean, x = 0, y = 0, z = 0) {
+  setLaser(on: boolean, x = 0, y = 0, z = 0, ox = 0, oy = 0, oz = 0, irBeam = false) {
     this.laserDot.visible = on;
-    if (on) this.laserDot.position.set(x, y, z);
+    if (on) {
+      this.laserDot.position.set(x, y, z);
+      (this.laserDot.material as THREE.MeshBasicMaterial).color.setHex(irBeam ? 0x80ff98 : 0xff2222);
+    }
+    this.irBeam.visible = on && irBeam;
+    if (this.irBeam.visible) {
+      const p = this.irBeam.geometry.attributes.position as THREE.BufferAttribute;
+      p.setXYZ(0, ox, oy, oz);
+      p.setXYZ(1, x, y, z);
+      p.needsUpdate = true;
+    }
+  }
+  shieldHit(x: number, y: number, z: number) {
+    this.burst(x, y, z, 14, 0xffd27a, 4.2, 6, 0.28);
+    this.flashAt(x, y, z, 18, 0.05, 0xffd27a);
   }
   tracer(a: THREE.Vector3, b: THREE.Vector3, color = 0xffe2a0) {
     const t = this.tracers[this.ti = (this.ti + 1) % this.tracers.length];

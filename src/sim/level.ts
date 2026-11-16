@@ -5,6 +5,7 @@ export interface Door {
   id: number; cx: number; cz: number; horiz: boolean;
   open: number; target: number;
   locked?: boolean; wedged?: boolean;
+  trapped?: boolean; trapKnown?: boolean;
 }
 export type FloorKind = 'carpet' | 'tile' | 'concrete' | 'wood';
 export type RoomKind = 'office' | 'corridor' | 'lobby' | 'warehouse' | 'bedroom' | 'storage' | 'vault' | 'club';
@@ -231,7 +232,7 @@ interface Spec {
 const SPECS: Spec[] = [
   {
     name: 'The Office Complex', theme: 'office', objective: 'clear', w: 32, h: 29, suspects: 5, civs: 3,
-    brief: 'Armed suspects have entered an accounting office in Kista. At least three employees are held inside. Glass partitions let you scout the meeting room — use your optiwand, breach or flashbangs to arrest everyone cleanly.',
+    brief: 'Armed suspects have entered an accounting office in Kista. At least three employees are held inside. Glass partitions let you scout the meeting room — use your FiberCam, breach or flashbangs to arrest everyone cleanly.',
     build(b) {
       b.room(4, 10, 24, 5, 'Corridor', 'corridor', 'tile', false);
       b.room(10, 14, 10, 7, 'Reception', 'lobby', 'tile', false);
@@ -290,7 +291,7 @@ const SPECS: Spec[] = [
   },
   {
     name: 'Hotel North Star', theme: 'hotel', objective: 'clear', w: 46, h: 32, suspects: 10, civs: 6,
-    brief: 'An armed group has barricaded itself inside Hotel North Star with guests held across multiple rooms. Stack up on doors, peek with the optiwand and clear room by room.',
+    brief: 'An armed group has barricaded itself inside Hotel North Star with guests held across multiple rooms. Stack up on doors, peek with the FiberCam and clear room by room.',
     build(b) {
       b.room(4, 12, 38, 5, 'Corridor', 'corridor', 'carpet', false);
       b.room(16, 16, 13, 9, 'Lobby', 'lobby', 'tile', false);

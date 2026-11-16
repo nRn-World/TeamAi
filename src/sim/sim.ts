@@ -46,8 +46,13 @@ export interface BombState {
 export type Ev =
   | { t: 'shot'; by: Actor; x: number; y: number; z: number; x2: number; y2: number; z2: number; hit: 'wall' | 'actor' | 'none'; head?: boolean; kill?: boolean; nx?: number; ny?: number; nz?: number; mat?: HitMaterial }
   | { t: 'pen'; x: number; y: number; z: number; nx: number; ny: number; nz: number }
+  | { t: 'shield'; a: Actor; x: number; y: number; z: number; nx: number; ny: number; nz: number }
+  | { t: 'suppress'; strength: number }
   | { t: 'hurt'; a: Actor; head: boolean } | { t: 'death'; a: Actor }
   | { t: 'door'; door: Door; open: boolean; kick?: boolean } | { t: 'say'; a: Actor; text: string; shout?: boolean }
+  | { t: 'trap'; door: Door; kind: 'found' | 'disarmed' | 'detonated' }
+  | { t: 'evidence'; id: number; x: number; z: number }
+  | { t: 'sensor'; x: number; z: number; kind?: 'plant' | 'ping' }
   | { t: 'shout'; a: Actor } | { t: 'bang'; x: number; z: number } | { t: 'throw'; x: number; z: number }
   | { t: 'smoke'; x: number; z: number } | { t: 'gas'; x: number; z: number }
   | { t: 'optiwand'; door: Door; side: number; msg: string }
@@ -64,6 +69,10 @@ export type Ev =
   | { t: 'share'; from: Actor; to: Actor; kind: 'bang' | 'ammo' }
   | { t: 'bark'; a: Actor; kind: 'spot' | 'surrender' | 'pain' | 'die' | 'panic' | 'unrest' }
   | { t: 'info'; text: string } | { t: 'end'; win: boolean };
+
+export interface EvidenceItem { id: number; x: number; z: number; yaw: number; secured: boolean; ownerId: number; kind?: 'rifle' | 'shotgun' | 'pistol'; }
+export interface SensorItem { x: number; z: number; t: number; maxT: number; pulseT: number; }
+export interface SensorPing { x: number; z: number; kind: 'suspect' | 'civ'; t?: number; }
 
 export interface CoopMods {
   blackout?: boolean;
@@ -96,7 +105,7 @@ export class Actor {
   defusing = false; defuseT = 0;
   prone = false; jumpY = 0; /** footstep-noise bookkeeping */ nx = 0; nz = 0; nd = 0; nt = 0;
   percT = 0; deadT = 0; crouch = false; variant = 0; flash = 0; pitch = 0; lean = 0; trail: Pt[] = [];
-  bangs = 3; smokes = 2; gases = 2; c2 = 2; wedges = 2; shield = false; nvg = false; pi = 0;
+  bangs = 3; smokes = 2; gases = 2; c2 = 2; wedges = 2; sensors = 2; shield = false; nvg = false; pi = 0;
   // Co-op tactical & revive state
   downed = false; bleedT = 0; revives = 0; reviving: Actor | null = null; reviveT = 0;
   torch = true; ads = false; weapon = 0; speaking = false; readyBreach = false;
@@ -143,6 +152,8 @@ export interface Stats {
   civsSecured: number; civsKilled: number; civsKilledByPolice: number;
   officersDown: number; unauthorized: number; c2Used: number; nonLethalHits: number;
   bangsUsed?: number;
+  evidenceSecured?: number;
+  negotiatedSurrenders?: number;
 }
 
 export class Sim {
@@ -151,12 +162,16 @@ export class Sim {
   teams: Record<Team, { order: Order; fire: 'free' | 'hold'; cuffSay?: number }>;
   grenades: { kind: GrenadeKind; x: number; y: number; z: number; vx: number; vy: number; vz: number; t: number }[] = [];
   clouds: { kind: 'smoke' | 'gas'; x: number; z: number; r: number; t: number; maxT: number }[] = [];
+  evidence: EvidenceItem[] = [];
+  sensors: SensorItem[] = [];
+  sensorPings: SensorPing[] = [];
+  private nextEvidenceId = 1;
   brokenWindows = new Set<number>();
   brokenProps = new Set<number>();
   brokenDoorGlass = new Set<number>();
   powerOn = true;
   bomb: BombState | null = null;
-  stats: Stats = { shotsFired: 0, suspectsKilled: 0, suspectsArrested: 0, civsSecured: 0, civsKilled: 0, civsKilledByPolice: 0, officersDown: 0, unauthorized: 0, c2Used: 0, nonLethalHits: 0, bangsUsed: 0 };
+  stats: Stats = { shotsFired: 0, suspectsKilled: 0, suspectsArrested: 0, civsSecured: 0, civsKilled: 0, civsKilledByPolice: 0, officersDown: 0, unauthorized: 0, c2Used: 0, nonLethalHits: 0, bangsUsed: 0, evidenceSecured: 0, negotiatedSurrenders: 0 };
   players: Actor[] = []; private checkT = 0;
   replayFrames: ReplayFrame[] = [];
   replayEvents: ReplayEvent[] = [];
@@ -228,6 +243,19 @@ export class Sim {
       this.players.push(a); this.actors.push(a);
     }
     this.trail = this.player.trail;
+    // Place 1-2 tripwire traps on interior doors on Normal/Hard difficulty (deterministic, post-spawn)
+    if (difficulty >= 1) {
+      const trapCand = l.doors.filter(d => !this.isGlassDoor(d) && Math.hypot(d.cx + 0.5 - sp.x, d.cz + 0.5 - sp.z) > 8);
+      const maxTraps = difficulty >= 2 ? 2 : 1;
+      let placed = 0;
+      for (const dr of trapCand) {
+        if (placed >= maxTraps) break;
+        if (dr.locked || (dr.id + seed) % 7 === 0) {
+          dr.trapped = true;
+          placed++;
+        }
+      }
+    }
   }
   /** Leader an order refers to; falls back to any living player. */
   private leaderOf(o: Order) { const l = o.leader; return l && l.alive ? l : (this.players.find(p => p.alive) ?? this.player); }
@@ -721,20 +749,81 @@ export class Sim {
     a.moving = true; a.walk += moved * 2.4;
     if (moved < mv * 0.3) a.stuckT += dt; else a.stuckT = Math.max(0, a.stuckT - dt * 0.5);
   }
-  setDoor(door: Door, open: boolean, kick = false, force = false, quiet = false): boolean {
+  setDoor(door: Door, open: boolean, kick = false, force = false, quiet = false, by?: Actor): boolean {
     const t = open ? 1 : 0;
     if (door.wedged && !force) {
-      if (open && !quiet) this.events.push({ t: 'info', text: 'Door is wedged shut! Remove the wedge or blow with C2.' });
+      if (open && !quiet) this.events.push({ t: 'info', text: 'Door is wedged shut! Remove the wedge or blow with Breach Charge.' });
       return false;
     }
     if (door.locked && open && !kick && !force) {
-      if (!quiet) this.events.push({ t: 'info', text: 'Door is locked — breach/kick it or deploy C2.' });
+      if (!quiet) this.events.push({ t: 'info', text: 'Door is locked — breach/kick it or deploy Breach Charge.' });
       return false;
+    }
+    if (door.trapped && open) {
+      if (force) {
+        door.trapped = false; door.trapKnown = false;
+      } else if (by?.kind === 'officer' && (door.trapKnown || by.role === 'Breacher')) {
+        door.trapped = false; door.trapKnown = false;
+        this.events.push({ t: 'trap', door, kind: 'disarmed' });
+        this.say(by, 'Tripwire neutralized.');
+      } else if (door.open < 0.35) {
+        door.trapped = false; door.trapKnown = false; door.locked = false;
+        const tx = door.cx + 0.5, tz = door.cz + 0.5;
+        this.events.push({ t: 'trap', door, kind: 'detonated' });
+        this.events.push({ t: 'c2', x: tx, z: tz });
+        this.events.push({ t: 'bang', x: tx, z: tz });
+        this.noise(tx, tz, 26);
+        for (const a of this.actors) {
+          if (!a.alive) continue;
+          const d = Math.hypot(a.x - tx, a.z - tz);
+          if (d < 3.4) {
+            const k = 1 - d / 3.6;
+            if (a.kind === 'player' || a.kind === 'officer') {
+              this.damage(a, 52 * k, this.suspects[0] ?? a, false);
+              if (a.kind === 'player') a.flash = Math.max(a.flash, 0.7 * k);
+            } else {
+              this.damage(a, 55 * k, this.player, false);
+            }
+          }
+        }
+        this.events.push({ t: 'info', text: 'DOOR TRAP DETONATED! Always FiberCam (O) or Crack (Shift+F) suspicious doors.' });
+      }
     }
     if (kick || force) { door.locked = false; door.wedged = false; }
     if (door.target === t) return true;
     if (!open && this.actors.some(a => a.alive && Math.floor(a.x) === door.cx && Math.floor(a.z) === door.cz)) return false;
     door.target = t; this.events.push({ t: 'door', door, open, kick });
+    return true;
+  }
+  /** Carefully crack a closed door slightly ajar (target=0.28) to peek or spot tripwires without tripping them. */
+  crackDoor(door: Door, by: Actor = this.player): boolean {
+    if (door.wedged) {
+      this.events.push({ t: 'info', text: 'Door is wedged shut! Remove the wedge first.' });
+      return false;
+    }
+    if (door.locked) {
+      this.events.push({ t: 'info', text: 'Door is locked — pick lock (F) or FiberCam (O) first.' });
+      return false;
+    }
+    if (door.target > 0.35) {
+      return this.setDoor(door, false, false, false, false, by);
+    }
+    door.target = door.target > 0.15 ? 0 : 0.28;
+    this.events.push({ t: 'door', door, open: door.target > 0, kick: false });
+    if (door.trapped && !door.trapKnown && door.target > 0.15) {
+      door.trapKnown = true;
+      this.events.push({ t: 'trap', door, kind: 'found' });
+      this.events.push({ t: 'info', text: 'TRIPWIRE SPOTTED in door gap! Press F to disarm before opening.' });
+    }
+    return true;
+  }
+  disarmTrap(door: Door, by: Actor = this.player): boolean {
+    if (!door.trapped) return false;
+    door.trapped = false; door.trapKnown = false;
+    this.events.push({ t: 'trap', door, kind: 'disarmed' });
+    const msg = 'Tripwire disarmed safely.';
+    if (by.kind === 'officer') this.say(by, msg);
+    else this.events.push({ t: 'info', text: msg });
     return true;
   }
 
@@ -768,10 +857,14 @@ export class Sim {
     const surr = this.suspects.filter(s => s.down && inTarget(s)).length;
     const civs = this.civs.filter(c0 => inTarget(c0)).length;
     const roomName = r?.name ?? 'beyond the door';
-    const lockNote = door.locked ? ' (LOCKED)' : door.wedged ? ' (WEDGED)' : '';
+    if (door.trapped && !door.trapKnown) {
+      door.trapKnown = true;
+      this.events.push({ t: 'trap', door, kind: 'found' });
+    }
+    const lockNote = (door.locked ? ' (LOCKED)' : door.wedged ? ' (WEDGED)' : '') + (door.trapped ? ' [TRIPWIRE!]' : '');
     const msg = armed || civs || surr
-      ? `Optiwand [${roomName}]${lockNote}: ${armed} armed suspect${armed === 1 ? '' : 's'}, ${civs} civilian${civs === 1 ? '' : 's'}${surr ? `, ${surr} surrendered` : ''}.`
-      : `Optiwand [${roomName}]${lockNote}: looks clear.`;
+      ? `FiberCam [${roomName}]${lockNote}: ${armed} armed suspect${armed === 1 ? '' : 's'}, ${civs} civilian${civs === 1 ? '' : 's'}${surr ? `, ${surr} surrendered` : ''}.`
+      : `FiberCam [${roomName}]${lockNote}: looks clear.`;
     if (by.kind === 'officer') this.say(by, msg);
     else this.events.push({ t: 'optiwand', door, side, msg });
     return msg;
@@ -857,10 +950,17 @@ export class Sim {
     if (by.kind === 'player') by.shots++;
     let headHit = false, killHit = false;
     if (h.actor) {
-      headHit = h.head && !nonLethal;
-      if (by.kind === 'player' && (h.actor.kind === 'suspect' || h.actor.kind === 'officer')) by.hits++;
-      this.damage(h.actor, dmg * h.dmgScale * (headHit ? 3 : 1), by, headHit, nonLethal);
-      killHit = !h.actor.alive;
+      // Ballistic shield blocks frontal incoming rounds cleanly with metallic sparks & clang
+      const tgt = h.actor;
+      const frontBlocked = tgt.shield && !tgt.downed && !taser && Math.abs(angDiff(tgt.yaw, yawTo(ox - tgt.x, oz - tgt.z))) < 1.15;
+      if (frontBlocked) {
+        this.events.push({ t: 'shield', a: tgt, x: h.x, y: h.y, z: h.z, nx: -dx, ny: 0, nz: -dz });
+      } else {
+        headHit = h.head && !nonLethal;
+        if (by.kind === 'player' && (tgt.kind === 'suspect' || tgt.kind === 'officer')) by.hits++;
+        this.damage(tgt, dmg * h.dmgScale * (headHit ? 3 : 1), by, headHit, nonLethal);
+        killHit = !tgt.alive;
+      }
     }
     for (const pe of h.penExits) {
       this.events.push({ t: 'pen', x: pe.x, y: pe.y, z: pe.z, nx: pe.nx, ny: pe.ny, nz: pe.nz });
@@ -886,6 +986,15 @@ export class Sim {
               s.morale = Math.max(0.08, s.morale - 0.04);
               s.react = Math.max(s.react, 0.2);
             }
+          }
+        }
+      } else if (this.player.alive && !this.player.downed && h.actor !== this.player) {
+        const len = Math.max(0.5, h.d), pl = this.player;
+        const proj = (pl.x - ox) * dx + (pl.z - oz) * dz;
+        if (proj > 0 && proj < len + 0.5) {
+          const perp = Math.hypot(ox + dx * proj - pl.x, oz + dz * proj - pl.z);
+          if (perp < 1.85) {
+            this.events.push({ t: 'suppress', strength: Math.max(0.25, 1 - perp / 1.85) });
           }
         }
       }
@@ -963,6 +1072,7 @@ export class Sim {
       this.replayEvents.push({ t: this.time, kind: 'death', x: a.x, z: a.z });
       if (a.kind === 'suspect') {
         this.stats.suspectsKilled++;
+        this.spawnEvidence(a);
         if (by.kind === 'player') by.kills++;
         if (a.wasFake && police) this.banter('Nice catch — he had a piece tucked!');
         if (police && (a.down || (!a.hostile && !a.hasFired && a.firstChallengeT === Infinity))) { this.stats.unauthorized++; this.events.push({ t: 'info', text: 'Unauthorized force: suspect shot without warning' }); }
@@ -986,12 +1096,27 @@ export class Sim {
     this.banterT = this.time;
     this.say(o, text);
   }
+  private spawnEvidence(a: Actor) {
+    if (a.kind !== 'suspect') return;
+    if (this.evidence.some(ev => ev.ownerId === a.id && !ev.secured)) return;
+    this.evidence.push({
+      id: this.nextEvidenceId++,
+      x: a.x + (this.rng() - 0.5) * 0.45,
+      z: a.z + (this.rng() - 0.5) * 0.45,
+      yaw: this.rng() * Math.PI * 2,
+      kind: a.variant === 2 ? 'shotgun' : a.variant === 1 ? 'rifle' : 'pistol',
+      secured: false,
+      ownerId: a.id,
+    });
+  }
   private surrender(a: Actor, allowFake = false) {
     if (a.surrendered) return;
+    const wasArmed = a.armed;
     a.surrendered = true; a.armed = false; a.path = null; a.moving = false; a.target = null; a.unwatchedT = 0;
     if (allowFake && a.kind === 'suspect' && a.morale > 0.56 && this.rng() < 0.26) {
       a.fakeSurrender = true; a.wasFake = true; a.fakeT = 3.0 + this.rng() * 2.4;
     }
+    if (wasArmed && a.kind === 'suspect') this.spawnEvidence(a);
     this.events.push({ t: 'surrender', a }); this.events.push({ t: 'bark', a, kind: 'surrender' });
   }
   /** Compliance check when police shout at someone. */
@@ -1009,15 +1134,82 @@ export class Sim {
   playerShout(p: Actor = this.player) {
     const f = fwd(p.yaw); this.events.push({ t: 'shout', a: p }); let n = 0;
     const zoeBonus = this.officers[3]?.alive && dist(this.officers[3], p) < 8 ? 0.12 : 0;
+    const negBonus = p.role === 'Negotiator' ? 0.14 : 0;
     for (const a of this.actors) {
       if ((a.kind !== 'suspect' && a.kind !== 'civ') || !a.active || a.surrendered) continue;
       const dx = a.x - p.x, dz = a.z - p.z, d = Math.hypot(dx, dz);
-      if (d > 14 || !this.los(p.x, p.z, a.x, a.z)) continue;
+      const hasLos = this.los(p.x, p.z, a.x, a.z);
+      // Real-time voice negotiation: shouting through closed doors / thin walls within 6.5m can persuade shaken/low-morale suspects
+      if (!hasLos) {
+        if (d < 6.5 && !a.hasFired && a.morale < 0.62 && this.time - a.lastRoll >= 1.5) {
+          a.lastRoll = this.time;
+          if (a.firstChallengeT === Infinity) a.firstChallengeT = this.time;
+          const pNeg = (a.kind === 'civ' ? 0.72 : Math.max(0.18, (0.68 - a.morale) * 1.1)) + zoeBonus + negBonus;
+          if (this.rng() < pNeg) {
+            this.surrender(a, false);
+            if (a.kind === 'suspect') {
+              this.stats.negotiatedSurrenders = (this.stats.negotiatedSurrenders ?? 0) + 1;
+              this.events.push({ t: 'info', text: 'Suspect talked down through cover — bloodless surrender!' });
+            }
+            n++;
+          } else if (a.kind === 'suspect') {
+            a.alertT = Math.max(a.alertT, 5);
+          }
+        }
+        continue;
+      }
+      if (d > 14) continue;
       if (d > 3 && (dx * f.x + dz * f.z) / d < 0.25) continue;
-      this.challenge(a, 0.05 + zoeBonus); n++;
+      const wasSurr = a.surrendered;
+      this.challenge(a, 0.05 + zoeBonus + negBonus);
+      if (!wasSurr && a.surrendered && a.kind === 'suspect' && !a.hasFired) {
+        this.stats.negotiatedSurrenders = (this.stats.negotiatedSurrenders ?? 0) + 1;
+      }
+      n++;
     }
     this.noise(p.x, p.z, 9);
     return n;
+  }
+  /** Deploy an acoustic wall sensor on the nearest wall/door surface in front of the player (detects movement within 9m through walls). */
+  deploySensor(by: Actor = this.player): boolean {
+    if (by.sensors <= 0) {
+      this.events.push({ t: 'info', text: 'No Acoustic Sensors remaining.' });
+      return false;
+    }
+    const f = fwd(by.yaw);
+    const h = this.ray(by.x, 1.35, by.z, f.x, 0, f.z, 2.3, by, false, 0);
+    if (h.kind !== 'wall') {
+      this.events.push({ t: 'info', text: 'Step within 2m facing a wall or closed door to plant an Acoustic Sensor.' });
+      return false;
+    }
+    by.sensors--;
+    const sx = h.x - f.x * 0.06, sz = h.z - f.z * 0.06;
+    const sensor: SensorItem = { x: sx, z: sz, t: 45, maxT: 45, pulseT: 0.1 };
+    this.sensors.push(sensor);
+    this.events.push({ t: 'sensor', x: sx, z: sz, kind: 'plant' });
+    this.events.push({ t: 'info', text: `Acoustic Sensor planted (${by.sensors} left) — sweeps 9m through walls.` });
+    return true;
+  }
+  private updateSensors(dt: number) {
+    if (!this.sensors.length && !this.sensorPings.length) return;
+    for (const sn of this.sensors) {
+      sn.t -= dt;
+      sn.pulseT -= dt;
+      if (sn.pulseT <= 0) {
+        sn.pulseT = 0.7;
+        for (const a of this.actors) {
+          if (!a.alive || a.restrained || (a.kind !== 'suspect' && a.kind !== 'civ')) continue;
+          const d = Math.hypot(a.x - sn.x, a.z - sn.z);
+          if (d < 9.0 && (a.moving || a.alertT > 0 || a.hostile)) {
+            this.sensorPings.push({ x: a.x, z: a.z, kind: a.kind === 'suspect' ? 'suspect' : 'civ', t: 1.4 });
+            this.events.push({ t: 'sensor', x: a.x, z: a.z, kind: 'ping' });
+          }
+        }
+      }
+    }
+    this.sensors = this.sensors.filter(s => s.t > 0);
+    for (const pg of this.sensorPings) pg.t = (pg.t ?? 1.0) - dt;
+    this.sensorPings = this.sensorPings.filter(pg => (pg.t ?? 0) > 0);
   }
   throwBang(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, speed = 11) {
     this.throwGrenade(ox, oy, oz, dx, dy, dz, 'bang', speed);
@@ -1147,13 +1339,25 @@ export class Sim {
     const room: Room | null = roomAt(this.level, beyond.x, beyond.z);
     let pts: Pt[] = [];
     if (room) {
-      const x0 = room.x + 1.5, x1 = room.x + room.w - 1.5, z0 = room.z + 1.5, z1 = room.z + room.h - 1.5;
+      const x0 = room.x + 1.4, x1 = room.x + room.w - 1.4, z0 = room.z + 1.4, z1 = room.z + room.h - 1.4;
       const ix = Math.min(1.5, (x1 - x0) / 3), iz = Math.min(1.5, (z1 - z0) / 3);
-      for (const [x, z] of [[x0 + ix, z0 + iz], [x1 - ix, z0 + iz], [x0 + ix, z1 - iz], [x1 - ix, z1 - iz]]) {
-        let q = { x, z }; const dd = dist(q, beyond); if (dd > 9) q = { x: beyond.x + ((x - beyond.x) * 9) / dd, z: beyond.z + ((z - beyond.z) * 9) / dd };
+      // Buttonhook & cross-entry corner spread (left/right flanks first, then deep corners)
+      const corners: Pt[] = [
+        { x: x0 + ix, z: z0 + iz }, { x: x1 - ix, z: z0 + iz },
+        { x: x0 + ix, z: z1 - iz }, { x: x1 - ix, z: z1 - iz },
+      ];
+      for (const cr of corners) {
+        let q = { x: cr.x, z: cr.z }; const dd = dist(q, beyond);
+        if (dd > 8.5) q = { x: beyond.x + ((cr.x - beyond.x) * 8.5) / dd, z: beyond.z + ((cr.z - beyond.z) * 8.5) / dd };
         const n = nearestWalkable(this.level, q.x, q.z, 3); if (n) pts.push(n);
       }
+      // Buttonhook & cross-entry corner spread: pick left & right flanks nearest the doorway first
       pts.sort((a, b) => dist(a, beyond) - dist(b, beyond));
+      if (pts.length >= 3) {
+        const s0 = door.horiz ? pts[0].x - c.x : pts[0].z - c.z;
+        const opp = pts.findIndex((p, i) => i > 0 && ((door.horiz ? p.x - c.x : p.z - c.z) * s0) < 0);
+        if (opp > 1) { const tmp = pts[1]; pts[1] = pts[opp]; pts[opp] = tmp; }
+      }
     } else {
       const mk = (lat: number, row: number) => door.horiz ? { x: c.x + lat, z: c.z - side * row } : { x: c.x - side * row, z: c.z + lat };
       for (const [lat, row] of [[-1.5, 2], [1.5, 2], [-1.5, 4], [1.5, 4]]) { const n = nearestWalkable(this.level, mk(lat, row).x, mk(lat, row).z, 2); if (n) pts.push(n); }
@@ -1305,11 +1509,14 @@ export class Sim {
       const prepDelay = o.c2 ? (breacher ? 0.55 : 0.8) : o.bang ? 1.45 : 0.45;
       if (o.phase === 0 && (arrived() || o.t > 6)) {
         o.phase = 1; o.t = 0;
+        if (door.trapped && (door.trapKnown || breacher)) {
+          this.disarmTrap(door, breacher ?? mem[0]);
+        }
         if (o.c2) {
           const ok = this.c2Door(door, breacher ?? mem[0]);
-          if (!ok) this.setDoor(door, true, true);
+          if (!ok) this.setDoor(door, true, true, false, false, mem[0]);
         } else {
-          this.setDoor(door, true, true);
+          this.setDoor(door, true, true, false, false, mem[0]);
           if (o.bang) { const d = door.horiz ? { x: 0, z: -side } : { x: -side, z: 0 }; this.grenades.push({ kind: 'bang', x: c.x + d.x * 0.7, y: 1.0, z: c.z + d.z * 0.7, vx: d.x * 5.5, vy: 1, vz: d.z * 5.5, t: 1.3 }); this.events.push({ t: 'throw', x: c.x, z: c.z }); this.say(mem[0], 'Flashbang out!'); }
         }
       } else if (o.phase === 1 && alone && o.bang && o.t > prepDelay) {
@@ -1395,7 +1602,11 @@ export class Sim {
     else if (ord.type === 'cover') { const ang = [-0.9, 0.9, -1.5, 1.5][o.ti % 4] ?? 0; dest = this.trailPoint(1.1 + o.ti * 0.85, p); face = p.yaw + Math.PI + ang; if (dist(o, p) < 1.4 + o.ti * 0.55 && !o.path) dest = null; }
     else if (ord.pts) { dest = ord.pts[this.idx(o)] ?? ord.pts[0]; face = ord.face ?? null; }
     if (ord.type === 'breach' && ord.phase === 1) { dest = null; }
-    if ((ord.type === 'stack' || ord.type === 'door' || ord.type === 'peek' || (ord.type === 'breach' && ord.phase < 2)) && ord.door) face = yawTo(ord.door.cx + 0.5 - o.x, ord.door.cz + 0.5 - o.z);
+    if ((ord.type === 'stack' || ord.type === 'door' || ord.type === 'peek' || (ord.type === 'breach' && ord.phase < 2)) && ord.door) {
+      const toDoor = yawTo(ord.door.cx + 0.5 - o.x, ord.door.cz + 0.5 - o.z);
+      // Rear-guard officer in a stack holds rear security so squad isn't ambushed from behind
+      face = ord.type === 'stack' && o.ti > 0 ? toDoor + Math.PI * 0.85 : toDoor;
+    }
     const arrived = dest ? this.goTo(o, dest.x, dest.z, dt, ord.type === 'breach' && ord.phase === 2 ? 1.15 : 1) : (o.moving = false, true);
     if (arrived && face !== null) o.yaw = turn(o.yaw, face, 5 * dt);
     else if (arrived && (ord.type === 'follow') && dist(o, p) < 4) o.yaw = turn(o.yaw, p.yaw + (o.slot % 2 ? -0.5 : 0.5) * (o.slot > 1 ? 2.2 : 1), 3 * dt);
@@ -1434,6 +1645,8 @@ export class Sim {
         const nearPolice = this.actors.find(o => (o.kind === 'player' || o.kind === 'officer') && o.alive && dist(o, s) < 7 && this.los(o.x, o.z, s.x, s.z));
         if (s.fakeT <= 0 && nearPolice) {
           s.fakeSurrender = false; s.surrendered = false; s.armed = true; s.hostile = true; s.alertT = 8; s.rolls = 2; s.react = 0.25;
+          const evIdx = this.evidence.findIndex(ev => ev.ownerId === s.id && !ev.secured);
+          if (evIdx >= 0) this.evidence.splice(evIdx, 1);
           this.events.push({ t: 'bark', a: s, kind: 'unrest' });
           this.events.push({ t: 'info', text: 'Watch out — suspect faked surrender and pulled a concealed pistol!' });
           return;
@@ -1441,7 +1654,14 @@ export class Sim {
       }
       const watched = this.actors.some(o => (o.kind === 'player' || o.kind === 'officer') && o.alive && dist(o, s) < 14 && this.los(o.x, o.z, s.x, s.z));
       s.unwatchedT = watched ? 0 : s.unwatchedT + dt;
-      if (s.unwatchedT > 10 && s.morale > 0.65 && !s.claimedBy) { s.surrendered = false; s.fakeSurrender = false; s.armed = true; s.unwatchedT = 0; s.alertT = 8; s.rolls = 2; this.events.push({ t: 'bark', a: s, kind: 'unrest' }); }
+      // Only reclaim weapon if their dropped weapon has NOT been secured as evidence
+      const canReclaim = !this.evidence.some(ev => ev.ownerId === s.id && ev.secured);
+      if (s.unwatchedT > 10 && s.morale > 0.65 && !s.claimedBy && canReclaim) {
+        s.surrendered = false; s.fakeSurrender = false; s.armed = true; s.unwatchedT = 0; s.alertT = 8; s.rolls = 2;
+        const evIdx = this.evidence.findIndex(ev => ev.ownerId === s.id && !ev.secured);
+        if (evIdx >= 0) this.evidence.splice(evIdx, 1);
+        this.events.push({ t: 'bark', a: s, kind: 'unrest' });
+      }
       return;
     }
     s.percT -= dt; if (s.percT <= 0) { s.percT = 0.15; s.target = this.nearestPolice(s, 32, s.alertT > 0 ? 4.2 : 2.6); }
@@ -1494,7 +1714,7 @@ export class Sim {
   }
 
   // ---------- player interaction ----------
-  interactTarget(p: Actor = this.player): { revive?: Actor; actor?: Actor; door?: Door; breaker?: Pt; bomb?: BombState } | null {
+  interactTarget(p: Actor = this.player): { revive?: Actor; actor?: Actor; door?: Door; breaker?: Pt; bomb?: BombState; trapDoor?: Door; evidence?: EvidenceItem } | null {
     if (!p.alive || p.downed) return null;
     const f = fwd(p.yaw);
     // Revive downed co-op teammate has top priority
@@ -1520,6 +1740,20 @@ export class Sim {
       if (d < bd && (d < 0.6 || (dx * f.x + dz * f.z) / d > 0.6)) { bd = d; best = a; }
     }
     if (best) return { actor: best };
+    // Known tripwire on a nearby door can be disarmed directly before opening
+    for (const dr of this.level.doors) {
+      if (!dr.trapped || !dr.trapKnown) continue;
+      const dx = dr.cx + 0.5 - p.x, dz = dr.cz + 0.5 - p.z, d = Math.hypot(dx, dz);
+      if (d < 2.4 && (d < 0.8 || (dx * f.x + dz * f.z) / d > 0.5)) return { trapDoor: dr };
+    }
+    // Dropped suspect weapons can be bagged as evidence
+    let bestEv: EvidenceItem | null = null, evD = 2.0;
+    for (const ev of this.evidence) {
+      if (ev.secured) continue;
+      const dx = ev.x - p.x, dz = ev.z - p.z, d = Math.hypot(dx, dz);
+      if (d < evD && (d < 0.85 || (dx * f.x + dz * f.z) / d > 0.5)) { evD = d; bestEv = ev; }
+    }
+    if (bestEv) return { evidence: bestEv };
     let bdoor: Door | null = null; bd = 2.4;
     for (const dr of this.level.doors) {
       const dx = dr.cx + 0.5 - p.x, dz = dr.cz + 0.5 - p.z, d = Math.hypot(dx, dz);
@@ -1527,13 +1761,23 @@ export class Sim {
     }
     return bdoor ? { door: bdoor } : null;
   }
-  playerUse(p: Actor = this.player) {
+  playerUse(p: Actor = this.player, opts: { crack?: boolean } = {}) {
     if (!p.alive || p.downed || this.over) return;
     const t = this.interactTarget(p); if (!t) return;
     if (t.revive) { p.reviving = t.revive; p.reviveT = 0; }
     else if (t.bomb) { p.defusing = true; p.defuseT = 0; }
     else if (t.breaker) this.togglePower(p);
-    else if (t.door) this.setDoor(t.door, t.door.target === 0);
+    else if (t.trapDoor) this.disarmTrap(t.trapDoor, p);
+    else if (t.evidence) {
+      t.evidence.secured = true;
+      this.stats.evidenceSecured = (this.stats.evidenceSecured ?? 0) + 1;
+      this.events.push({ t: 'evidence', id: t.evidence.id, x: t.evidence.x, z: t.evidence.z });
+      this.events.push({ t: 'info', text: `Evidence bagged (${this.stats.evidenceSecured}/${this.evidence.length}).` });
+    }
+    else if (t.door) {
+      if (opts.crack) this.crackDoor(t.door, p);
+      else this.setDoor(t.door, t.door.target === 0, false, false, false, p);
+    }
     else if (t.actor) { if (t.actor.claimedBy) { t.actor.claimedBy.cuff = null; t.actor.claimedBy = null; } p.cuff = t.actor; p.cuffT = 0; }
   }
   playerPing(p: Actor, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number) {
@@ -1614,6 +1858,8 @@ export class Sim {
       { label: `Suspects arrested alive (${s.suspectsArrested}/${this.suspects.length})`, pts: Math.round((25 * s.suspectsArrested) / ns), max: 25 },
       { label: `Civilians secured (${this.civs.filter(c => c.alive && c.restrained).length}/${this.civs.length})`, pts: Math.round((20 * this.civs.filter(c => c.alive && c.restrained).length) / nc), max: 20 },
       { label: `Team unharmed (${4 - s.officersDown}/4)`, pts: Math.round((15 * (4 - s.officersDown)) / 4), max: 15 },
+      { label: `Evidence bagged (${s.evidenceSecured ?? 0}/${this.evidence.length})`, pts: this.evidence.length ? Math.round((5 * (s.evidenceSecured ?? 0)) / this.evidence.length) : 0, max: 5 },
+      { label: `Bloodless negotiations (${s.negotiatedSurrenders ?? 0})`, pts: Math.min(5, (s.negotiatedSurrenders ?? 0) * 2), max: 5 },
       { label: `Unauthorized force (${s.unauthorized})`, pts: -10 * s.unauthorized, max: 0 },
       { label: `Civilians killed by police (${s.civsKilledByPolice})`, pts: -20 * s.civsKilledByPolice, max: 0 },
     ];
@@ -1629,6 +1875,8 @@ export class Sim {
       return out;
     }
     if (s.suspectsArrested === this.suspects.length && s.unauthorized === 0) out.push({ title: 'TEXTBOOK ARREST', desc: '100% suspects arrested alive' });
+    if ((s.negotiatedSurrenders ?? 0) >= 2) out.push({ title: 'VOICE NEGOTIATOR', desc: `${s.negotiatedSurrenders} bloodless surrenders` });
+    if (this.evidence.length > 0 && (s.evidenceSecured ?? 0) >= this.evidence.length) out.push({ title: 'FORENSIC SWEEP', desc: 'All dropped weapons bagged' });
     if (s.shotsFired <= 4 && s.unauthorized === 0) out.push({ title: 'GHOST SQUAD', desc: 'Minimal gunfire & silent entry' });
     else if (s.shotsFired >= 60) out.push({ title: 'TRIGGER HAPPY', desc: `${s.shotsFired} rounds expended` });
     if ((s.bangsUsed ?? 0) >= 3) out.push({ title: 'FLASH MASTER', desc: `${s.bangsUsed} flashbangs deployed` });
@@ -1947,6 +2195,7 @@ export class Sim {
     }
     this.updateGrenades(dt);
     this.updateClouds(dt);
+    this.updateSensors(dt);
     this.updateDynamicEvents();
     this.checkT -= dt;
     if (this.checkT <= 0) {

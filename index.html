@@ -30,7 +30,7 @@
   <div id="ffWarn" class="hidden">FRIENDLY — HOLD FIRE</div>
   <div id="breachBanner" class="hidden"></div>
   <div id="hitmark"></div>
-  <div id="dmg"></div><div id="flash"></div>
+  <div id="dmg"></div><div id="suppress"></div><div id="flash"></div>
   <div id="objective"></div>
   <div id="compass">N · 000°</div>
   <div id="bombtimer" class="hidden"></div>
@@ -129,23 +129,23 @@
       <div class="loadout armory-lo">
         <label>Primary Gear
           <select id="lPrimary">
-            <option value="carbine">M4 Carbine (Lethal · Full-Auto)</option>
-            <option value="shotgun">M870 Tactical Shotgun (Lethal · Buckshot)</option>
-            <option value="beanbag">Beanbag Shotgun (Non-Lethal · High Arrest)</option>
+            <option value="carbine">TX-4 Carbine (Lethal · Full-Auto)</option>
+            <option value="shotgun">S-87 Breacher Shotgun (Lethal · Buckshot)</option>
+            <option value="beanbag">LL-12 Kinetic Launcher (Non-Lethal · High Arrest)</option>
             <option value="shield">Ballistic Shield (Blocks Frontal Fire)</option>
           </select>
         </label>
         <label>Secondary Gear
           <select id="lSecondary">
-            <option value="pistol">Glock 17 SWAT (RMR + X300)</option>
-            <option value="taser">X26 Taser (Non-Lethal · Instant Stun)</option>
+            <option value="pistol">P-17 Service Pistol (Micro Red-Dot + Tac-Light)</option>
+            <option value="taser">ARC-2 Stunner (Non-Lethal · Instant Stun)</option>
           </select>
         </label>
       </div>
       <div class="clabel" style="margin-top:14px">ENTRY TEAM SPECIALISTS</div>
       <div class="squadroles armory-roles">
         <div><b>Ken · Pointman</b>Faster movement</div>
-        <div><b>Maya · Breacher</b>Extra flash &amp; C2</div>
+        <div><b>Maya · Breacher</b>Extra flash &amp; Breach Charge</div>
         <div><b>Jack · Marksman</b>Sharper rifle aim</div>
         <div><b>Zoe · Negotiator</b>Better surrender &amp; cuffs</div>
       </div>
@@ -202,14 +202,14 @@
       <div class="clabel">YOUR CO-OP LOADOUT</div>
       <div class="lobby-lo">
         <select id="lobbyPrim">
-          <option value="carbine">M4 Carbine</option>
-          <option value="shotgun">M870 Shotgun</option>
-          <option value="beanbag">Beanbag (NL)</option>
+          <option value="carbine">TX-4 Carbine</option>
+          <option value="shotgun">S-87 Breacher</option>
+          <option value="beanbag">LL-12 Kinetic (NL)</option>
           <option value="shield">Ballistic Shield</option>
         </select>
         <select id="lobbySec">
-          <option value="pistol">Glock 17</option>
-          <option value="taser">X26 Taser</option>
+          <option value="pistol">P-17 Service</option>
+          <option value="taser">ARC-2 Stunner</option>
         </select>
       </div>
     </div>
@@ -239,8 +239,8 @@
       <div class="plan-tools">
         <button type="button" class="ptool on" data-pt="A">Team A Route</button>
         <button type="button" class="ptool" data-pt="B">Team B Route</button>
-        <button type="button" class="ptool" data-pt="c2">C2 Pin</button>
-        <button type="button" class="ptool" data-pt="flash">Flash Pin</button>
+        <button type="button" class="ptool" data-pt="c2">Breach Charge Pin</button>
+        <button type="button" class="ptool" data-pt="flash">Stun Pin</button>
         <button type="button" id="btnClearPlan">Clear</button>
       </div>
       <canvas id="briefMap"></canvas>
@@ -277,6 +277,7 @@
     <div id="debReplayWrap" class="debreplay">
       <div class="dr-head"><span>AFTER-ACTION REPLAY</span><span id="debReplayTime">0:00</span></div>
       <canvas id="debMap"></canvas>
+      <div id="debTimeline" class="deb-timeline"></div>
       <div class="dr-ctrl"><button type="button" id="btnReplayToggle">Pause</button><button type="button" id="btnReplayRestart">Replay 8x</button></div>
     </div>
   </div>
@@ -288,9 +289,9 @@
   <h2>Controls</h2>
   <div class="grid2">
     <div><kbd>W A S D</kbd> Walk</div><div><kbd>Shift</kbd> Run · 3× Magnifier (while ADS)</div><div><kbd>X</kbd> Sneak on/off (silent)</div><div><kbd>C</kbd> Crouch · <kbd>Z</kbd> Crawl (silent)</div><div><kbd>Space</kbd> Jump / stand up</div>
-    <div><kbd>Q</kbd> / <kbd>E</kbd> Lean / Peek around corners</div><div><kbd>Mouse</kbd> Look · <kbd>Left click</kbd> Fire</div><div><kbd>Right click</kbd> (hold) Aim down sights</div><div><kbd>R</kbd> Reload · <kbd>1</kbd>/<kbd>2</kbd> Weapons</div>
-    <div><kbd>F</kbd> Open door / cuff / breaker / defuse / revive / shout</div><div><kbd>G</kbd> Throw grenade · <kbd>`</kbd> Cycle Flash / Smoke / CS Gas</div>
-    <div><kbd>O</kbd> Optiwand Live Cam (door) / Share gear</div><div><kbd>U</kbd> C2 charge · <kbd>Y</kbd> Wedge door</div><div><kbd>N</kbd> Night Vision (NVG)</div>
+    <div><kbd>Q</kbd> / <kbd>E</kbd> Lean / Peek around corners</div><div><kbd>Mouse</kbd> Look · <kbd>Left click</kbd> Fire</div><div><kbd>Right click</kbd> (hold) Aim down sights (Canted under NVG)</div><div><kbd>R</kbd> Reload (Double-tap <kbd>R</kbd> speed reload) · <kbd>1</kbd>/<kbd>2</kbd> Weapons</div>
+    <div><kbd>F</kbd> Open door / disarm / bag evidence / cuff / shout · <kbd>Shift+F</kbd> Crack door</div><div><kbd>G</kbd> Throw grenade · <kbd>.</kbd> / <kbd>`</kbd> Cycle Stun / Smoke / CS Gas</div>
+    <div><kbd>O</kbd> FiberCam Live Cam (door) / Share gear</div><div><kbd>U</kbd> Breach Charge · <kbd>Y</kbd> Wedge door · <kbd>,</kbd> Acoustic Sensor</div><div><kbd>N</kbd> Night Vision (NVG + IR Laser)</div>
     <div><kbd>V</kbd> (hold) Talk to your team · <kbd>CapsLock</kbd> Shout compliance</div><div><kbd>T</kbd> Flashlight · <kbd>L</kbd> Tactical Laser · <kbd>K</kbd> Bodycam · <kbd>M</kbd> Map</div>
     <div><kbd>I</kbd> Fire Mode (Auto/Semi) · <kbd>P</kbd> Helmet Cam PiP · <kbd>F8</kbd> Dispatch</div>
     <div><kbd>Middle Click</kbd> Tactical 3D Ping · <kbd>J</kbd> Sync Breach Countdown</div>
@@ -312,8 +313,8 @@
     <tr><td>«breach» · «clear the room» · «move in»</td><td>Opens the door and clears the room</td></tr>
     <tr><td>«bang and clear» · «flashbang»</td><td>Throws a flashbang, then breaches</td></tr>
     <tr><td>«open the door» · «close the door»</td><td>Works the door without going in</td></tr>
-    <tr><td>«peek that door» · «optiwand»</td><td>Scouts suspects &amp; civilians behind the closed door</td></tr>
-    <tr><td>«C2 the door» · «blow the door»</td><td>Plants explosive C2 to breach locked doors &amp; stun threats</td></tr>
+    <tr><td>«peek that door» · «fibercam»</td><td>Scouts suspects, civilians &amp; tripwires behind the closed door</td></tr>
+    <tr><td>«breach charge» · «blow the door»</td><td>Plants explosive Breach Charge to breach locked doors &amp; stun threats</td></tr>
     <tr><td>«wedge the door» · «block door»</td><td>Places/removes a wedge to stop enemy flanks</td></tr>
     <tr><td>«defuse the bomb»</td><td>Orders the team to disarm an active explosive device</td></tr>
     <tr><td>«cuff them» · «secure them»</td><td>Handcuffs everyone who has given up</td></tr>
@@ -332,6 +333,7 @@
   <div id="sPaneSet">
   <div class="form">
     <label>Mouse sensitivity <input id="sSens" type="range" min="0.3" max="3" step="0.05" /></label>
+    <label>ADS sensitivity <input id="sAdsSens" type="range" min="0.2" max="1.5" step="0.05" /></label>
     <label>Volume <input id="sVol" type="range" min="0" max="1" step="0.05" /></label>
     <label>Menu music <select id="sMusic"><option value="1">On (CO.AG – Digital Blackout)</option><option value="0">Off</option></select></label>
     <label>Speech recognition <select id="sMic"><option value="1">On</option><option value="0">Off</option></select></label>
