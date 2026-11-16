@@ -550,4 +550,32 @@ ok(wins >= 4, 'bot should be able to win across missions');
   ok(sSn.sensorPings.length >= 1, 'acoustic sensor pings moving suspect through walls');
 }
 
+// ---- operators never share the same spot (they used to clip into each other and shudder) ----
+{
+  const sSp = new Sim(0, 7, 1);
+  // Keep the scene calm: nobody to fight, so we only measure squad movement.
+  for (const a of sSp.actors) if (a.kind !== 'player' && a.kind !== 'officer') { a.surrendered = true; a.armed = false; a.restrained = true; }
+  sSp.command({ team: 'A', action: 'move', dir: 'forward' }, null, sSp.player, { quiet: true });
+  sSp.command({ team: 'B', action: 'move', dir: 'forward' }, null, sSp.player, { quiet: true });
+  const offs = () => sSp.officers.filter(o => o.alive);
+  let minDist = 9, maxFrameStep = 0;
+  const prev = new Map<number, { x: number; z: number }>();
+  for (let i = 0; i < 60 * 14; i++) {
+    sSp.update(1 / 60);
+    const list = offs();
+    for (let a = 0; a < list.length; a++) for (let b = a + 1; b < list.length; b++) {
+      minDist = Math.min(minDist, Math.hypot(list[a].x - list[b].x, list[a].z - list[b].z));
+    }
+    if (i > 60 * 9) { // once the order has settled
+      for (const o of list) {
+        const p = prev.get(o.id);
+        if (p) maxFrameStep = Math.max(maxFrameStep, Math.hypot(o.x - p.x, o.z - p.z));
+        prev.set(o.id, { x: o.x, z: o.z });
+      }
+    }
+  }
+  ok(minDist > 0.5, `operators keep shoulder distance instead of merging (closest pair ${minDist.toFixed(2)} m)`);
+  ok(maxFrameStep < 0.02, `settled operators stand still instead of shaking (${(maxFrameStep * 60).toFixed(2)} m/s residual)`);
+}
+
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);
