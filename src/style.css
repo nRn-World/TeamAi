@@ -22,10 +22,13 @@ kbd { background:#1c2530; border:1px solid #3a4a5a; border-bottom-width:2px; bor
   -webkit-mask: radial-gradient(circle, transparent 5px, #000 6px); mask: radial-gradient(circle, transparent 5px, #000 6px); }
 #hitmark.head { filter: drop-shadow(0 0 3px #f33) hue-rotate(0); background:
   linear-gradient(45deg, transparent 46%, #ff5a4a 46%, #ff5a4a 54%, transparent 54%), linear-gradient(-45deg, transparent 46%, #ff5a4a 46%, #ff5a4a 54%, transparent 54%); }
+#hitmark.kill { transform:scale(1.18); filter: drop-shadow(0 0 6px #ff9a2e); }
 #dmg { position:absolute; inset:0; opacity:0; background: radial-gradient(ellipse at center, transparent 45%, rgba(200,0,0,.75) 100%); }
 #flash { position:absolute; inset:0; opacity:0; background:#fff; }
 #objective { position:absolute; top:14px; left:50%; transform:translateX(-50%); background:var(--bg); border:1px solid #2a3a48; border-radius:6px; padding:6px 16px; font-size:13px; letter-spacing:.06em; white-space:nowrap; }
 #objective b { color:var(--acc); }
+#compass { position:absolute; top:48px; left:50%; transform:translateX(-50%); background:rgba(8,12,17,.68); border:1px solid rgba(255,255,255,.1); border-radius:4px; padding:2px 14px; font:600 11px ui-monospace, Consolas, monospace; letter-spacing:.14em; color:#9eb8cc; white-space:nowrap; }
+#compass b { color:var(--acc); }
 #minimap { position:absolute; top:14px; right:14px; border:1px solid #2a3a48; border-radius:6px; background:rgba(6,10,14,.8); image-rendering:pixelated; }
 #team { position:absolute; left:14px; top:14px; width:230px; display:flex; flex-direction:column; gap:8px; }
 .tcard { background:var(--bg); border-left:4px solid var(--a); border-radius:4px; padding:6px 9px; }

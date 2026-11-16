@@ -923,6 +923,8 @@ export class FX {
   group = new THREE.Group(); private pos = new Float32Array(MAXP * 3); private col = new Float32Array(MAXP * 3); private vel = new Float32Array(MAXP * 3); private life = new Float32Array(MAXP); private grav = new Float32Array(MAXP);
   private pts: THREE.Points; private pi = 0; private tracers: { line: THREE.Line; t: number }[] = []; private ti = 0;
   private holes: THREE.Points; private hpos = new Float32Array(200 * 3); private hi = 0;
+  private shells: { m: THREE.Mesh; vx: number; vy: number; vz: number; rx: number; rz: number; life: number }[] = []; private shi = 0;
+  private laserDot: THREE.Mesh;
   light = new THREE.PointLight(0xffc070, 0, 12, 1.6); private lightT = 0; private markers: { m: THREE.Mesh; t: number }[] = [];
   private pings: { g: THREE.Group; ring: THREE.Mesh; sp: THREE.Sprite; t: number }[] = [];
   nades: THREE.Mesh[] = [];
@@ -938,6 +940,17 @@ export class FX {
     const holeTex = new THREE.CanvasTexture(hc);
     this.holes = new THREE.Points(hg, new THREE.PointsMaterial({ size: 0.045, map: holeTex, transparent: true, alphaTest: 0.12, depthWrite: false })); this.holes.frustumCulled = false; this.group.add(this.holes);
     for (let i = 0; i < 24; i++) { const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]); const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xffe2a0, transparent: true, opacity: 0.7 })); line.visible = false; line.frustumCulled = false; this.group.add(line); this.tracers.push({ line, t: 0 }); }
+    const shellGeo = new THREE.CylinderGeometry(0.006, 0.006, 0.028, 6);
+    for (let i = 0; i < 48; i++) {
+      const m = new THREE.Mesh(shellGeo, new THREE.MeshStandardMaterial({ color: 0xd8a840, metalness: 0.85, roughness: 0.25 }));
+      m.visible = false; this.group.add(m);
+      this.shells.push({ m, vx: 0, vy: 0, vz: 0, rx: 0, rz: 0, life: 0 });
+    }
+    this.laserDot = new THREE.Mesh(
+      new THREE.SphereGeometry(0.016, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.92 }),
+    );
+    this.laserDot.visible = false; this.group.add(this.laserDot);
     this.group.add(this.light);
     const ng = new THREE.CylinderGeometry(0.035, 0.035, 0.13, 8), nm = std({ color: 0x3a4a3a, metalness: 0.5, roughness: 0.4 });
     for (let i = 0; i < 4; i++) { const n = new THREE.Mesh(ng, nm); n.visible = false; this.group.add(n); this.nades.push(n); }
@@ -952,6 +965,21 @@ export class FX {
     }
   }
   hole(x: number, y: number, z: number) { const j = this.hi = (this.hi + 1) % 200; this.hpos[j * 3] = x; this.hpos[j * 3 + 1] = y; this.hpos[j * 3 + 2] = z; this.holes.geometry.attributes.position.needsUpdate = true; }
+  shell(x: number, y: number, z: number, vx: number, vy: number, vz: number, color = 0xd8a840, hull = false) {
+    const s = this.shells[this.shi = (this.shi + 1) % this.shells.length];
+    s.m.position.set(x, y, z);
+    s.m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+    s.m.scale.setScalar(hull ? 1.55 : 1);
+    (s.m.material as THREE.MeshStandardMaterial).color.setHex(color);
+    s.m.visible = true;
+    s.vx = vx; s.vy = vy; s.vz = vz;
+    s.rx = (Math.random() - 0.5) * 28; s.rz = (Math.random() - 0.5) * 28;
+    s.life = 5.5;
+  }
+  setLaser(on: boolean, x = 0, y = 0, z = 0) {
+    this.laserDot.visible = on;
+    if (on) this.laserDot.position.set(x, y, z);
+  }
   tracer(a: THREE.Vector3, b: THREE.Vector3, color = 0xffe2a0) {
     const t = this.tracers[this.ti = (this.ti + 1) % this.tracers.length];
     (t.line.material as THREE.LineBasicMaterial).color.setHex(color);
@@ -983,6 +1011,21 @@ export class FX {
     }
     this.pts.geometry.attributes.position.needsUpdate = true; this.pts.geometry.attributes.color.needsUpdate = true;
     for (const t of this.tracers) if (t.line.visible) { t.t -= dt; if (t.t <= 0) t.line.visible = false; }
+    for (const s of this.shells) {
+      if (!s.m.visible) continue;
+      s.life -= dt;
+      if (s.life <= 0) { s.m.visible = false; continue; }
+      if (s.m.position.y > 0.015 || s.vy > 0.05) {
+        s.vy -= 9.8 * dt;
+        s.m.position.x += s.vx * dt; s.m.position.y += s.vy * dt; s.m.position.z += s.vz * dt;
+        s.m.rotation.x += s.rx * dt; s.m.rotation.z += s.rz * dt;
+        if (s.m.position.y <= 0.015) {
+          s.m.position.y = 0.015;
+          if (Math.abs(s.vy) > 0.45) { s.vy = -s.vy * 0.35; s.vx *= 0.45; s.vz *= 0.45; s.rx *= 0.5; s.rz *= 0.5; }
+          else { s.vy = s.vx = s.vz = 0; s.m.rotation.x = Math.PI / 2; }
+        }
+      }
+    }
     this.lightT -= dt; if (this.lightT <= 0) this.light.intensity = 0;
     for (const m of this.markers) { m.t -= dt; (m.m.material as THREE.MeshBasicMaterial).opacity = Math.min(1, m.t); m.m.scale.setScalar(1 + Math.sin(m.t * 8) * 0.12); if (m.t <= 0) { this.group.remove(m.m); m.m.geometry.dispose(); } }
     this.markers = this.markers.filter(m => m.t > 0);

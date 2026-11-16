@@ -1,9 +1,9 @@
 // Weapon and door sounds are real recordings (public/sfx, CC0 – see public/sfx/LICENSE.txt); everything else is synthesized with WebAudio.
-export type Gun = 'rifle' | 'pistol' | 'smg';
+export type Gun = 'rifle' | 'pistol' | 'smg' | 'shotgun';
 const SFX = ['shot-m4a1-1', 'shot-m4a1-2', 'shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3', 'shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3', 'shot-m1014-1', 'far-rifle', 'far-pistol', 'far-smg', 'far-sniper',
   'foley-mag-out', 'foley-mag-in', 'foley-charge', 'foley-pistol-out', 'foley-pistol-in', 'foley-slide', 'foley-click', 'foley-bolt',
   'door-open-1', 'door-open-2', 'door-close-1', 'door-close-2', 'door-close-3', 'door-slam', 'door-creak-1', 'door-creak-2', 'door-latch'];
-const NEAR: Record<Gun, string[]> = { rifle: ['shot-m4a1-1', 'shot-m4a1-2'], pistol: ['shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3'], smg: ['shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3'] };
+const NEAR: Record<Gun, string[]> = { rifle: ['shot-m4a1-1', 'shot-m4a1-2'], pistol: ['shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3'], smg: ['shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3'], shotgun: ['shot-m1014-1'] };
 // Voice levels. Every clip is measured when it is loaded and scaled to LINE_LEVEL (RMS of its voiced parts, dBFS), so a shouted
 // line is not louder than a spoken one – it only sounds shouted. CH_* even out what the radio / rough-voice filters add.
 const LINE_LEVEL = -20, CH_RADIO = 0.89, CH_GRUFF = 0.8, CH_PLAIN = 2.14, CH_SHOUT = 1.25, CH_GRUFF_SHOUT = 0.95;
@@ -164,23 +164,48 @@ export class GameAudio {
     if (lowpass) { const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lowpass; f.Q.value = 0.4; last.connect(f); last = f; }
     last.connect(g); g.connect(dst); s.start(c.currentTime + delay); return true;
   }
-  shot(dist: number, pan: number, own: boolean, gun: Gun = 'rifle') {
+  shot(dist: number, pan: number, own: boolean, gun: Gun = 'rifle', muffled = false) {
     if (!this.ctx) return;
     const takes = NEAR[gun].filter(n => this.sfx.has(n));
+    const wallCut = muffled ? Math.max(520, 1250 - dist * 35) : 0;
     if (takes.length) {
       // never the same take twice in a row, and a slight pitch drift, so automatic fire does not sound like a loop
       let take = takes[(Math.random() * takes.length) | 0]; if (take === this.lastTake && takes.length > 1) take = takes[(takes.indexOf(take) + 1) % takes.length]; this.lastTake = take;
-      const rate = 0.97 + Math.random() * 0.06, far = Math.max(0, Math.min(1, (dist - 6) / 16)), o = this.out(pan, own ? 1.15 : 1.5 / (1 + dist * 0.1));
-      // close: the dry report; further away it is duller and gives way to the distant recording of the same weapon
-      if (far < 1) this.sample(take, o, 1 - far * 0.8, rate, 0, own ? 0 : Math.max(1400, 16000 - dist * 800));
-      if (far > 0 && !own) this.sample('far-' + gun, o, far * 1.3, rate);
-      if (own) this.tone(o, 'sine', gun === 'rifle' ? 95 : 120, 40, 0.09, 0.5); // chest thump the microphone does not capture
+      const rate = (gun === 'shotgun' ? 0.94 : 0.97) + Math.random() * 0.06;
+      const far = Math.max(0, Math.min(1, (dist - 6) / 16));
+      const gain = own ? (gun === 'shotgun' ? 1.25 : 1.15) : (muffled ? 0.85 : 1.5) / (1 + dist * 0.1);
+      const o = this.out(pan, gain, !muffled);
+      const lp = own ? 0 : wallCut || Math.max(1400, 16000 - dist * 800);
+      // close: the dry report; further away (or behind walls) it is duller and gives way to the distant recording
+      if (far < 1) this.sample(take, o, 1 - far * 0.8, rate, 0, lp);
+      if (far > 0 && !own) this.sample('far-' + (gun === 'shotgun' ? 'sniper' : gun), o, far * (muffled ? 0.75 : 1.3), gun === 'shotgun' ? rate * 0.85 : rate, 0, wallCut);
+      if (own) {
+        this.tone(o, 'sine', gun === 'shotgun' ? 68 : gun === 'rifle' ? 95 : 120, 36, gun === 'shotgun' ? 0.14 : 0.09, gun === 'shotgun' ? 0.7 : 0.5); // chest thump
+        this.shell(gun);
+      }
       return;
     }
-    const heavy = gun !== 'pistol', att = own ? 0.9 : 1 / (1 + dist * 0.12), o = this.out(pan, att);
-    const top = Math.max(900, 7000 - dist * 220);
-    this.burst(o, heavy ? 0.16 : 0.11, 'lowpass', top, 300, 0.7, 1.1); this.burst(o, 0.035, 'highpass', 2500, 1500, 0.5, own ? 0.7 : 0.3);
-    this.tone(o, 'sine', heavy ? 170 : 240, 45, 0.11, 0.9); if (own) this.burst(o, 0.05, 'bandpass', 5200, 4200, 6, 0.2, 0.09);
+    const heavy = gun !== 'pistol', att = own ? 0.9 : (muffled ? 0.55 : 1) / (1 + dist * 0.12), o = this.out(pan, att, !muffled);
+    const top = wallCut || Math.max(900, 7000 - dist * 220);
+    this.burst(o, heavy ? 0.16 : 0.11, 'lowpass', top, 300, 0.7, 1.1);
+    if (!muffled) this.burst(o, 0.035, 'highpass', 2500, 1500, 0.5, own ? 0.7 : 0.3);
+    this.tone(o, 'sine', heavy ? 170 : 240, 45, 0.11, 0.9);
+    if (own) { this.burst(o, 0.05, 'bandpass', 5200, 4200, 6, 0.2, 0.09); this.shell(gun); }
+  }
+  /** Subtle brass casing / shotgun hull clink hitting the floor. */
+  shell(gun: Gun = 'rifle') {
+    if (!this.ctx) return;
+    const o = this.out(0.28, gun === 'shotgun' ? 0.14 : 0.11, true);
+    const d1 = gun === 'shotgun' ? 0.38 : 0.26 + Math.random() * 0.08;
+    const fBase = gun === 'shotgun' ? 1400 : 4200 + Math.random() * 900;
+    this.tone(o, 'sine', fBase, fBase * 0.92, 0.025, 0.5, d1);
+    this.tone(o, 'sine', fBase * 1.18, fBase * 1.05, 0.02, 0.35, d1 + 0.065);
+  }
+  fireMode() {
+    if (!this.ctx) return;
+    const o = this.out(0.08, 0.45, false);
+    this.tone(o, 'triangle', 2200, 1300, 0.022, 0.7);
+    this.burst(o, 0.02, 'bandpass', 3600, 2600, 4, 0.35);
   }
   dry() { if (!this.ctx) return; const o = this.out(0, 0.9, false); if (!this.sample('foley-click', o)) this.tone(o, 'square', 1800, 900, 0.03, 0.14); }
   /** Magazine out, magazine in, charging handle / slide – spread over the reload time (seconds). */
@@ -210,7 +235,16 @@ export class GameAudio {
     if (deaf > 0.15) { const r = this.out(0, deaf * 0.08, false); this.tone(r, 'sine', 3900, 3850, 3 + deaf * 3, 1); } // ringing ears: audible, never painful
   }
   hurt() { if (!this.ctx) return; const o = this.out(0, 0.7, false); this.tone(o, 'sine', 140, 50, 0.18, 1); this.burst(o, 0.08, 'lowpass', 900, 200, 1, 0.6); }
-  hitmark(head: boolean) { if (!this.ctx) return; const o = this.out(0, 0.3, false); this.tone(o, 'triangle', head ? 1500 : 950, head ? 1100 : 700, 0.05, 0.7); }
+  hitmark(head: boolean, kill = false) {
+    if (!this.ctx) return;
+    const o = this.out(0, head ? 0.38 : 0.28, false);
+    this.tone(o, 'triangle', head ? 1850 : 980, head ? 1250 : 680, 0.045, 0.85);
+    if (head) {
+      this.tone(o, 'sine', 2600, 1950, 0.06, 0.55, 0.015);
+      this.burst(o, 0.025, 'highpass', 3200, 2200, 2, 0.4);
+    }
+    if (kill) this.tone(o, 'sine', 190, 65, 0.085, 0.65, 0.02);
+  }
   impact(dist: number, pan: number) { if (!this.ctx) return; const o = this.out(pan, 1.2 / (1 + dist * 0.2)); this.burst(o, 0.05, 'bandpass', 2600 + Math.random() * 1500, 900, 2, 0.8); }
   radio() { if (!this.ctx) return; const o = this.out(0, 0.3, false); this.tone(o, 'square', 1250, 1250, 0.045, 0.4); this.burst(o, 0.09, 'bandpass', 2200, 2000, 1.5, 0.35, 0.05); }
   radioSquelch(delay = 0.45) { if (!this.ctx) return; const o = this.out(0, 0.22, false); this.burst(o, 0.06, 'bandpass', 2500, 1900, 1.8, 0.45, delay); this.tone(o, 'sine', 1680, 1180, 0.04, 0.35, delay + 0.03); }
