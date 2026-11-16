@@ -229,35 +229,55 @@
   <div class="row"><button id="btnLeave">Leave</button><button id="btnLobbyReady">Ready</button><button id="btnLobbyStart" class="primary">Start mission</button></div>
 </div></div>
 
-<div id="brief" class="screen hidden"><div class="panel wide briefp">
-  <div class="brief-top">
-    <div><div class="kicker">Mission briefing · Pre-Planning</div><h2 id="briefTitle"></h2></div>
-    <button type="button" id="btnPlayDispatch" class="dispatch-play">▶ PLAY 911 DISPATCH</button>
-  </div>
-  <div class="briefgrid">
-    <div class="plan">
-      <div class="plan-tools">
-        <button type="button" class="ptool on" data-pt="A">Team A Route</button>
-        <button type="button" class="ptool" data-pt="B">Team B Route</button>
-        <button type="button" class="ptool" data-pt="c2">Breach Charge Pin</button>
-        <button type="button" class="ptool" data-pt="flash">Stun Pin</button>
-        <button type="button" id="btnClearPlan">Clear</button>
+<div id="brief" class="screen hidden" data-brief="ops">
+  <div class="panel wide briefp">
+    <div class="bhead">
+      <div class="bhead-l">
+        <div class="bkicker">Mission briefing · Pre-planning</div>
+        <h2 id="briefTitle"></h2>
       </div>
-      <canvas id="briefMap"></canvas>
-      <div class="planlbl">Click or drag on floorplan · <i class="dotE"></i> Entry · <span style="color:#ff5a5a">━</span> Team A · <span style="color:#4a9eff">━</span> Team B</div>
-    </div>
-    <div>
-      <p id="briefText"></p>
-      <div class="brief-entry-box">
-        <div class="clabel">ENTRY POINT</div>
-        <div id="briefEntries" class="brief-entries"></div>
+      <div class="bhead-r">
+        <div id="briefTag" class="btag"></div>
+        <button type="button" id="btnPlayDispatch" class="dispatch-play">▶ Play 911 dispatch</button>
       </div>
-      <div id="briefFacts" class="facts"></div>
+    </div>
+    <div class="briefgrid">
+      <div class="plan">
+        <div id="briefCams" class="camwall"></div>
+        <div class="plan-tools">
+          <button type="button" class="ptool on" data-pt="A">Team A Route</button>
+          <button type="button" class="ptool" data-pt="B">Team B Route</button>
+          <button type="button" class="ptool" data-pt="c2">Breach Charge Pin</button>
+          <button type="button" class="ptool" data-pt="flash">Stun Pin</button>
+          <button type="button" id="btnClearPlan">Clear</button>
+        </div>
+        <div class="planframe">
+          <canvas id="briefMap"></canvas>
+          <div class="planentry" id="briefEntryHud"></div>
+        </div>
+        <div class="planlbl">Click or drag on floorplan · <i class="dotE"></i> Entry · <span class="lgA">━</span> Team A · <span class="lgB">━</span> Team B</div>
+      </div>
+      <div class="bside">
+        <div id="briefCamList" class="camlist"></div>
+        <p id="briefText"></p>
+        <div class="brief-entry-box">
+          <div class="clabel">Entry point</div>
+          <div id="briefEntries" class="brief-entries"></div>
+        </div>
+        <div id="briefFacts" class="facts"></div>
+        <div id="briefIntel" class="bintel"></div>
+      </div>
+    </div>
+    <div class="tips"><b>Say for example</b> «Team A go left» · «Team B cover me» · «Everyone stack up on the door» · «Bravo bang and clear» · «Ken, you cover us» · «Jack, throw flash» · «Police! Drop the weapon!» · «Team A cuff them» · «Sök området»</div>
+    <div class="bfoot">
+      <div class="bstyles">
+        <span class="bsty-lbl">Briefing style · press 1–0 to flick through</span>
+        <div id="briefStyles" class="bsty-list"></div>
+      </div>
+      <div class="row"><button id="btnBack">Back</button><button id="btnGo" class="primary">Begin operation</button></div>
     </div>
   </div>
-  <div class="tips"><b>Say for example:</b> «Team A go left» · «Team B cover me» · «Everyone stack up on the door» · «Bravo bang and clear» · «Ken, you cover us» · «Jack, throw flash» · «Police! Drop the weapon!» · «Team A cuff them»</div>
-  <div class="row"><button id="btnBack">Back</button><button id="btnGo" class="primary">Begin operation</button></div>
-</div></div>
+</div>
 
 <div id="pause" class="screen hidden"><div class="panel">
   <h2>Paused</h2>
