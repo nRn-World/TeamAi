@@ -2,8 +2,8 @@ import { Sim, yawTo, fwd } from '../src/sim/sim';
 import type { Command } from '../src/sim/sim';
 import { parseCommand, parseCommands, shouldUseAiBrain } from '../src/sim/commands';
 import { buildLocalReport, buildTacticalContext } from '../src/sim/context';
-import { findPath } from '../src/sim/nav';
-import { MISSIONS, buildLevel, FLOOR, OUT, HIGH, WINDOW } from '../src/sim/level';
+import { findPath, nearestWalkable } from '../src/sim/nav';
+import { MISSIONS, buildLevel, roomAt, FLOOR, OUT, HIGH, WINDOW } from '../src/sim/level';
 import { encodeSnap, applySnap, encodeEv, decodeEv } from '../src/sim/netstate';
 
 let fails = 0;
@@ -20,6 +20,9 @@ const cases: [string, string][] = [
   ['team a fall back', 'A move back'], ['Team A opens the door', 'A open'], ['team-a close the door', 'A close'], ['bravo door', 'B stack'], ['team b breaching', 'B breach'], ['shut the door', 'ALL close'],
   ['Police! Get on the ground!', 'ALL shout'], ['show me your hands', 'ALL shout'], ['team b wait', 'B hold'], ['alpha sitrep', 'A report'], ['bravo bang and clear', 'B bang'], ['team a secure them', 'A restrain'],
   ['peek the door', 'ALL peek'], ['team b c2 that door', 'B c2'], ['wedge the door', 'ALL wedge'], ['defuse the bomb', 'ALL defuse'],
+  // search & secure the room we are in — but "secure them" must still mean handcuffs
+  ['search this room', 'ALL secure'], ['sweep the area', 'ALL secure'], ['sök området', 'ALL secure'], ['säkra rummet', 'ALL secure'],
+  ['team b sök igenom rummet', 'B secure'], ['team a secure the room', 'A secure'], ['secure them', 'ALL restrain'], ['cuff them', 'ALL restrain'],
 ];
 for (const [t, exp] of cases) { const c = parseCommand(t); const got = c ? [c.team, c.action, c.dir].filter(Boolean).join(' ') : 'null'; ok(got === exp, `parse "${t}" => ${got} (expected ${exp})`); }
 const named: [string, string, number?][] = [
@@ -576,6 +579,77 @@ ok(wins >= 4, 'bot should be able to win across missions');
   }
   ok(minDist > 0.5, `operators keep shoulder distance instead of merging (closest pair ${minDist.toFixed(2)} m)`);
   ok(maxFrameStep < 0.02, `settled operators stand still instead of shaking (${(maxFrameStep * 60).toFixed(2)} m/s residual)`);
+}
+
+// ---- room work: the squad searches/guards the room we are in and never leaves it ----
+function roomSquad(seed: number) {
+  const sim = new Sim(0, seed), p = sim.player;
+  const room = sim.level.rooms.filter(r => r.spawn && r.w >= 6 && r.h >= 6).sort((a, b) => b.w * b.h - a.w * a.h)[0] ?? sim.level.rooms[0];
+  p.x = room.x + room.w / 2; p.z = room.z + room.h / 2; p.moving = false;
+  // A quiet building: with the real hostiles alive the squad is dead within seconds and the test
+  // would pass for the wrong reason.
+  // Frozen hostiles: still alive (so the mission keeps running and the squad keeps updating) but
+  // unable to walk over and shoot the player mid-test.
+  for (const a of sim.suspects) { a.stun = 1e9; a.armed = false; a.hostile = false; a.target = null; }
+  for (const a of sim.civs) { a.stun = 1e9; a.target = null; }
+  // put the squad in the room with him, the way they arrive through the door in a real run
+  sim.officers.forEach((o, i) => {
+    const q = nearestWalkable(sim.level, p.x + (i - 1.5) * 0.9, p.z + 1.4, 3) ?? { x: p.x, z: p.z };
+    o.x = q.x; o.z = q.z; o.path = null; o.goal = null; o.moving = false;
+  });
+  return { sim, room, p };
+}
+{
+  const { sim, room, p } = roomSquad(4);
+  ok(sim.command({ team: 'ALL', action: 'secure' }) === true, 'secure order is accepted');
+  ok(!sim.over, 'secure test scenario is live');
+  ok(sim.teams.A.order.type === 'secure' && sim.teams.B.order.type === 'secure', 'both teams take the secure order');
+  const offs = () => sim.officers.filter(o => o.alive);
+  let outside = 0, minPair = 9;
+  for (let i = 0; i < 60 * 30; i++) {
+    sim.update(1 / 60);
+    const list = offs();
+    for (const o of list) if (roomAt(sim.level, o.x, o.z)?.id !== room.id) outside++;
+    for (let a = 0; a < list.length; a++) for (let b = a + 1; b < list.length; b++) minPair = Math.min(minPair, Math.hypot(list[a].x - list[b].x, list[a].z - list[b].z));
+  }
+  const list = offs();
+  let spread = 0;
+  for (let a = 0; a < list.length; a++) for (let b = a + 1; b < list.length; b++) spread = Math.max(spread, Math.hypot(list[a].x - list[b].x, list[a].z - list[b].z));
+  ok(outside === 0, `secure keeps the squad inside the room for the whole order (${outside} frames outside)`);
+  ok(minPair > 0.5, `secure posts do not stack two operators on one spot (closest pair ${minPair.toFixed(2)} m)`);
+  ok(spread > 1.2, `secure spreads the squad over the room instead of bunching up (${spread.toFixed(2)} m apart)`);
+  ok(sim.teams.A.order.phase === 1, 'the search phase hands back to holding the entrances');
+  // residual motion: everyone is standing on their post and only sweeping their sector
+  const before = list.map(o => ({ x: o.x, z: o.z }));
+  for (let i = 0; i < 60 * 4; i++) sim.update(1 / 60);
+  const drift = Math.max(...list.map((o, i) => Math.hypot(o.x - before[i].x, o.z - before[i].z)));
+  ok(drift < 0.6, `a secured squad holds its posts instead of pacing (${drift.toFixed(2)} m drift in 4 s)`);
+  ok(p.alive, 'player untouched by the squad shuffling around him');
+}
+{
+  // Following must not mean "glued to the player's back" — inside a room they take guarding posts.
+  const { sim, room, p } = roomSquad(6);
+  sim.command({ team: 'ALL', action: 'follow' });
+  for (let i = 0; i < 60 * 16; i++) sim.update(1 / 60);
+  const list = sim.officers.filter(o => o.alive);
+  ok(!sim.over && list.length === 4, 'follow test scenario is live');
+  const inside = list.filter(o => roomAt(sim.level, o.x, o.z)?.id === room.id).length;
+  const minLead = Math.min(...list.map(o => Math.hypot(o.x - p.x, o.z - p.z)));
+  ok(inside === list.length, `a following squad stays in the room the player is in (${inside}/${list.length})`);
+  ok(minLead > 0.9, `nobody stands in the player's lap while he holds still (closest ${minLead.toFixed(2)} m)`);
+  // and they still come along when he walks off (follow a real path, not through the furniture)
+  const before = list.map(o => ({ x: o.x, z: o.z }));
+  const target = nearestWalkable(sim.level, room.x + 1.5, room.z + 1.5, 4) ?? { x: room.x + 1.5, z: room.z + 1.5 };
+  const route = findPath(sim.level, p, target) ?? [];
+  let wi = 0;
+  for (let i = 0; i < 60 * 8 && wi < route.length; i++) {
+    const wp = route[wi], dx = wp.x - p.x, dz = wp.z - p.z, d = Math.hypot(dx, dz) || 1;
+    if (d < 0.3) { wi++; continue; }
+    sim.movePlayer((dx / d) * 2.4 / 60, (dz / d) * 2.4 / 60);
+    sim.update(1 / 60);
+  }
+  const moved = list.filter((o, i) => Math.hypot(o.x - before[i].x, o.z - before[i].z) > 0.5).length;
+  ok(moved >= list.length - 1, `the squad moves again once the player walks (${moved}/${list.length} followed)`);
 }
 
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);

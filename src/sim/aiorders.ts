@@ -3,7 +3,7 @@
 // Pure functions, unit-tested; the model itself lives in src/ai/brain.ts.
 import type { Action, Dir } from './sim';
 
-const ACTIONS: Action[] = ['follow', 'hold', 'move', 'cover', 'stack', 'breach', 'bang', 'open', 'close', 'restrain', 'fireFree', 'fireHold', 'report'];
+const ACTIONS: Action[] = ['follow', 'hold', 'move', 'cover', 'stack', 'breach', 'bang', 'open', 'close', 'restrain', 'fireFree', 'fireHold', 'report', 'secure'];
 const DIRS: Dir[] = ['left', 'right', 'forward', 'back', 'there'];
 
 /** JSON schema the model's answer is constrained to. */
@@ -13,6 +13,7 @@ const SYSTEM = `A police squad leader says something to his officers, in English
 Actions:
 follow = come with me, come back to me, regroup
 hold = stay where you are, stop, wait, do not move
+secure = search or secure the room/area we are in ("search the room", "sweep this area", "sök området", "säkra rummet"). The squad must not leave that room.
 move = go left, right, forward, back, or there (to the spot he points at). Put the direction in "dir".
 cover = cover, protect or guard the leader, watch his back
 stack = line up at the door and wait
@@ -30,6 +31,8 @@ const SHOTS: [string, string][] = [
   ['flytta er åt höger', '{"action":"move","dir":"right"}'],
   ['what was that noise', '{"action":"none","dir":""}'],
   ['nobody moves a muscle', '{"action":"hold","dir":""}'],
+  ['search this room and hold it', '{"action":"secure","dir":""}'],
+  ['sök igenom området', '{"action":"secure","dir":""}'],
   ['sätt handklovar på dem', '{"action":"restrain","dir":""}'],
   ['I am hungry', '{"action":"none","dir":""}'],
   ['keep an eye on me while I work', '{"action":"cover","dir":""}'],

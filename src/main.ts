@@ -386,18 +386,21 @@ class Game {
     const ring = document.querySelector('#wheel .wring')!;
     const items: { label: string; cmd: Command }[] = [
       { label: 'Follow', cmd: { team: 'ALL', action: 'follow' } },
+      { label: 'Sök & Säkra', cmd: { team: 'ALL', action: 'secure' } },
+      { label: 'Hold / Cover', cmd: { team: 'ALL', action: 'cover' } },
+      { label: 'Stack Up', cmd: { team: 'ALL', action: 'stack' } },
       { label: 'Breach', cmd: { team: 'ALL', action: 'breach' } },
       { label: 'Bang & Clear', cmd: { team: 'ALL', action: 'bang' } },
-      { label: 'FiberCam Peek', cmd: { team: 'ALL', action: 'peek' } },
       { label: 'C2 Breach', cmd: { team: 'ALL', action: 'c2' } },
-      { label: 'Wedge Door', cmd: { team: 'ALL', action: 'wedge' } },
-      { label: 'Secure Area', cmd: { team: 'ALL', action: 'restrain' } },
-      { label: 'Hold / Cover', cmd: { team: 'ALL', action: 'cover' } },
+      { label: 'FiberCam Peek', cmd: { team: 'ALL', action: 'peek' } },
+      { label: 'Handcuff', cmd: { team: 'ALL', action: 'restrain' } },
     ];
+    const dense = items.length > 8, ringR = dense ? 124 : 116;
+    if (dense) ring.classList.add('dense');
     items.forEach((it, i) => {
       const ang = (i / items.length) * Math.PI * 2 - Math.PI / 2;
       const b = document.createElement('button'); b.className = 'wslice'; b.textContent = it.label;
-      b.style.left = `${170 + Math.cos(ang) * 116}px`; b.style.top = `${170 + Math.sin(ang) * 116}px`;
+      b.style.left = `${170 + Math.cos(ang) * ringR}px`; b.style.top = `${170 + Math.sin(ang) * ringR}px`;
       b.onclick = () => { this.toggleWheel(false); this.exec({ ...it.cmd, team: this.selTeam }, true); this.lock(); };
       ring.appendChild(b);
     });
@@ -990,7 +993,7 @@ class Game {
   setTyping(on: boolean) { this.typing = on; show('cmdbox', on); const inp = $<HTMLInputElement>('cmdinput'); if (on) { this.keys.clear(); inp.focus(); } else inp.blur(); }
   onKey(code: string, shift = false) {
     const sim = this.sim!; if (sim.over) return;
-    const quick: Record<string, Command['action'] | 'there'> = { Digit3: 'follow', Digit4: 'hold', Digit5: 'there', Digit6: 'cover', Digit7: 'stack', Digit8: 'breach', Digit9: 'bang', Digit0: 'restrain' };
+    const quick: Record<string, Command['action'] | 'there'> = { Digit3: 'follow', Digit4: 'hold', Digit5: 'there', Digit6: 'cover', Digit7: 'stack', Digit8: 'breach', Digit9: 'bang', Digit0: 'restrain', F2: 'secure' };
     switch (code) {
       case 'KeyF': {
         if (this.mirror) { this.net.send({ t: shift ? 'crack' : 'use' }); break; }
@@ -1908,7 +1911,7 @@ class Game {
       html += '</div>';
     }
     $('team').innerHTML = html;
-    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · <kbd>Q/E</kbd> Lean · <kbd>.</kbd> Grenade · <kbd>,</kbd> Sensor · <kbd>Caps</kbd> Shout · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>P</kbd> Cam${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
+    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · <kbd>Q/E</kbd> Lean · <kbd>.</kbd> Grenade · <kbd>,</kbd> Sensor · <kbd>Caps</kbd> Shout · <kbd>F2</kbd> Sök &amp; Säkra · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>P</kbd> Cam${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
     const it = sim.interactTarget(), pr = $('prompt');
     if (p.downed && p.alive) {
       pr.style.opacity = '1'; pr.textContent = `DOWNED — BLEEDOUT IN ${Math.max(0, Math.ceil(p.bleedT))}s (WAIT FOR TEAMMATE)`;
