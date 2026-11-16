@@ -400,7 +400,17 @@ export class FpsArms {
 
       // 3D EOTech EXPS3 Holographic Sight + G33 Flip-to-Side 3x Magnifier aligned with carbine ADS line (0.113, -0.036, -0.36)
       this.buildOpticAssembly();
-      this.root.add(this.holoGroup);
+      // Mount the holographic sight + magnifier on the weapon itself. It used to hang off the
+      // arms root at a fixed offset, which only matched while the rifle sat still, so it drifted
+      // away from the gun as soon as the run/walk or reload animation moved the weapon.
+      this.root.updateMatrixWorld(true);
+      const host = this.rifleBone();
+      if (host) {
+        host.updateWorldMatrix(true, false);
+        host.attach(this.holoGroup); // keeps the tuned world pose, then follows the bone
+      } else {
+        this.root.add(this.holoGroup);
+      }
 
       if (rif) {
         const prep = (m: THREE.Group | null) => {
@@ -425,6 +435,29 @@ export class FpsArms {
     return this.ready;
   }
 
+  /** The bone the carbine meshes are actually skinned to — the optic has to ride on it. */
+  private rifleBone(): THREE.Object3D | null {
+    const tally = new Map<THREE.Object3D, number>();
+    for (const part of this.rifleParts) {
+      const m = part as THREE.SkinnedMesh;
+      const geo = m.geometry as THREE.BufferGeometry | undefined;
+      const sw = geo?.getAttribute('skinWeight') as THREE.BufferAttribute | undefined;
+      const si = geo?.getAttribute('skinIndex') as THREE.BufferAttribute | undefined;
+      const bones = m.skeleton?.bones;
+      if (!sw || !si || !bones?.length) continue;
+      const step = Math.max(1, Math.floor(si.count / 96));
+      for (let i = 0; i < si.count; i += step) {
+        const w = [sw.getX(i), sw.getY(i), sw.getZ(i), sw.getW(i)];
+        let k = 0;
+        for (let j = 1; j < 4; j++) if (w[j] > w[k]) k = j;
+        const b = bones[[si.getX(i), si.getY(i), si.getZ(i), si.getW(i)][k]];
+        if (b) tally.set(b, (tally.get(b) ?? 0) + w[k]);
+      }
+    }
+    let best: THREE.Object3D | null = null, bestW = -1;
+    for (const [b, w] of tally) if (w > bestW) { bestW = w; best = b; }
+    return best;
+  }
   private buildOpticAssembly() {
     this.holoGroup.position.set(0.113, -0.036, -0.35);
     const housing = new THREE.MeshStandardMaterial({ color: 0x181b21, metalness: 0.72, roughness: 0.34 });
