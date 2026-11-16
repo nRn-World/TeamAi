@@ -197,7 +197,7 @@ ok(wins >= 4, 'bot should be able to win across missions');
     s.player.yaw = yawTo(locked.cx + 0.5 - s.player.x, locked.cz + 0.5 - s.player.z);
     ok(!s.setDoor(locked, true), 'locked door cannot be opened directly');
     const report = s.peekDoor(locked, s.player);
-    ok(!!report && report.includes('Optiwand'), 'optiwand peek returns room report');
+    ok(!!report && report.includes('FiberCam'), 'fibercam peek returns room report');
     const c2Before = s.player.c2;
     ok(s.c2Door(locked, s.player) && !locked.locked && locked.target === 1 && s.player.c2 === c2Before - 1, 'C2 blows open locked door and consumes charge');
     s.setDoor(locked, false); locked.open = 0;
@@ -453,6 +453,101 @@ ok(wins >= 4, 'bot should be able to win across missions');
   ok(mir2.players[0].torch === false && mir2.players[0].ads === true && mir2.players[0].shield === true && mir2.players[0].speaking === true && mir2.players[0].weapon === 1 && Math.abs(mir2.players[0].pitch - 0.42) < 0.02, 'encodeSnap/applySnap syncs torch, ads, shield, speaking, weapon & pitch');
   ok(tgMap.has(mir2.players[0]), 'applySnap populates NetTarget map for smooth client interpolation');
   ok(sCoop.squadMvp().length === 2 && sCoop.squadMvp()[0].badge === 'SQUAD MVP', 'squadMvp ranks co-op players');
+}
+
+// ---- Phase 1-2 new tactical systems verification ----
+{
+  // 1) Multiple tactical entry points + PrePlan route execution
+  for (let m = 0; m < MISSIONS.length; m++) {
+    const l = buildLevel(m, 1);
+    ok(l.entries.length >= 2, `mission ${m} defines >=2 tactical entries`);
+  }
+  const simPlan = new Sim(0, 1, 1, 1, {}, {
+    entry: 1,
+    teamB: [{ x: 10, z: 10 }, { x: 12, z: 12 }],
+    teamA: [{ x: 14, z: 10 }, { x: 16, z: 12 }],
+  });
+  const e1 = simPlan.level.entries[1];
+  ok(Math.hypot(simPlan.player.x - e1.x, simPlan.player.z - e1.z) < 0.05, 'preplan entry selects alternate insertion point');
+  simPlan.executePreplan();
+  ok(simPlan.teams.B.order.type === 'move' && simPlan.teams.A.order.type === 'move', 'executePreplan dispatches drawn routes to Team A and Team B');
+
+  // 2) Lean offset + wall-safe clamping
+  const sim = new Sim(0, 1, 1);
+  const pl = sim.player;
+  pl.yaw = 0;
+  const lo = sim.leanOffset(pl, 1);
+  ok(lo.actual > 0.5 && lo.lx > 0.15, 'leanOffset shifts camera laterally in open space');
+
+  // 3) Smoke occlusion & CS gas stun/surrender
+  const sus = sim.suspects[0];
+  pl.x = sus.x + 4; pl.z = sus.z;
+  const openLos = sim.los(pl.x, pl.z, sus.x, sus.z);
+  sim.clouds.push({ kind: 'smoke', x: sus.x + 2, z: sus.z, r: 2.2, t: 10, maxT: 10 });
+  ok(!openLos || !sim.los(pl.x, pl.z, sus.x, sus.z), 'smoke cloud blocks line of sight');
+  sim.clouds.length = 0;
+  sim.clouds.push({ kind: 'gas', x: sus.x, z: sus.z, r: 3.0, t: 10, maxT: 10 });
+  for (let i = 0; i < 12; i++) sim.update(0.25);
+  ok(sus.stun > 0 || sus.down, 'CS gas cloud stuns/forces surrender on exposed suspect');
+
+  // 4) Optiwand emits live camera event for player
+  const door = sim.level.doors[0];
+  pl.x = door.cx + 0.5; pl.z = door.cz + (door.horiz ? 1.1 : 0.5);
+  if (!door.horiz) pl.x += 0.6;
+  sim.events.length = 0;
+  sim.peekDoor(door, pl);
+  ok(sim.events.some(e => e.t === 'optiwand'), 'peekDoor emits optiwand event for player PiP camera');
+
+  // 5) Wallbang penetration through solid wood door (exclude glass doors)
+  const woodDoor = sim.level.doors.find(d => d.horiz && !sim.isMetalDoor(d) && !sim.isGlassDoor(d))!;
+  woodDoor.open = 0; woodDoor.target = 0;
+  const wx = woodDoor.cx + 0.5, wz = woodDoor.cz + 0.5;
+  sim.events.length = 0;
+  sim.fire(pl, wx, 1.2, wz + 1.2, 0, 0, -1, 34, { pen: 1 });
+  ok(sim.events.some(e => e.t === 'pen'), 'pen>=1 fire through closed wood door emits penetration event');
+
+  // 6) Door tripwire trap: crackDoor discovers trap, disarmTrap neutralizes, otherwise opening detonates
+  const trapDoor = sim.level.doors.find(d => !sim.isGlassDoor(d) && !d.locked && d !== woodDoor)!;
+  trapDoor.open = 0; trapDoor.target = 0; trapDoor.trapped = true; trapDoor.trapKnown = false;
+  sim.events.length = 0;
+  ok(sim.crackDoor(trapDoor, pl) && !!trapDoor.trapKnown && sim.events.some(e => e.t === 'trap' && e.kind === 'found'), 'crackDoor exposes tripwire without detonating');
+  ok(sim.disarmTrap(trapDoor, pl) && !trapDoor.trapped && sim.events.some(e => e.t === 'trap' && e.kind === 'disarmed'), 'disarmTrap safely removes tripwire');
+
+  // 7) Ballistic shield blocks frontal rounds & emits shield event
+  const sSh = new Sim(0, 2, 1);
+  const shPl = sSh.player, shSus = sSh.suspects[0];
+  shPl.shield = true; shPl.yaw = 0; // facing -Z (north)
+  const hpBefore = shPl.hp;
+  shSus.x = shPl.x; shSus.z = shPl.z - 2.5;
+  sSh.events.length = 0;
+  sSh.fire(shSus, shSus.x, 1.3, shSus.z, 0, 0, 1, 25);
+  ok(shPl.hp === hpBefore && sSh.events.some(e => e.t === 'shield'), 'ballistic shield blocks frontal gunfire and emits shield event');
+
+  // 8) Dropped evidence spawns on surrender & securing prevents fake-reclaim
+  const sEv = new Sim(0, 3, 1);
+  const evSus = sEv.suspects[0];
+  evSus.armed = true; evSus.surrendered = false; evSus.morale = 0.2;
+  sEv.player.x = evSus.x; sEv.player.z = evSus.z + 1.2;
+  sEv.player.yaw = 0;
+  // Force surrender via non-lethal hit, then restrain suspect before bagging evidence
+  sEv.damage(evSus, 5, sEv.player, false, true);
+  evSus.restrained = true;
+  ok(sEv.evidence.length >= 1, 'surrendering armed suspect drops EvidenceItem');
+  const evItem = sEv.evidence[0];
+  sEv.player.x = evItem.x; sEv.player.z = evItem.z + 0.6; sEv.player.yaw = 0;
+  sEv.playerUse(sEv.player);
+  ok(evItem.secured && (sEv.stats.evidenceSecured ?? 0) >= 1, 'playerUse bags dropped weapon as secured evidence');
+
+  // 9) Acoustic wall sensor deploys on wall and detects movement through wall
+  const sSn = new Sim(0, 4, 1);
+  const snDoor = sSn.level.doors.find(d => d.horiz && !sSn.isGlassDoor(d))!;
+  snDoor.open = 0; snDoor.target = 0;
+  sSn.player.x = snDoor.cx + 0.5; sSn.player.z = snDoor.cz + 1.4; sSn.player.yaw = 0;
+  const snCountBefore = sSn.player.sensors;
+  ok(sSn.deploySensor(sSn.player) && sSn.player.sensors === snCountBefore - 1 && sSn.sensors.length === 1, 'deploySensor plants acoustic sensor on wall/door surface');
+  sSn.suspects[0].x = snDoor.cx + 0.5; sSn.suspects[0].z = snDoor.cz - 2.0; sSn.suspects[0].moving = true;
+  sSn.update(0.8);
+  ok(sSn.sensorPings.length >= 1, 'acoustic sensor pings moving suspect through walls');
 }
 
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);

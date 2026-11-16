@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as skinnedClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { Rig, HEIGHT } from './models';
+import { weaponModel, buildBallisticShield } from './weapons';
 
 const V = () => new THREE.Vector3(), Q = () => new THREE.Quaternion();
 const key = (n: string) => /mixamorig:?(\w+?)_\d+$/.exec(n)?.[1] ?? '';
@@ -65,6 +66,70 @@ export function menuOperator(phase: number): { obj: THREE.Object3D; mixer: THREE
   if (!T) return null; const obj = skinnedClone(T.wrap); let mixer: THREE.AnimationMixer | null = null;
   if (T.clip) { mixer = new THREE.AnimationMixer(obj); mixer.clipAction(T.clip).play(); mixer.setTime(phase); }
   return { obj, mixer };
+}
+
+/** Swap the 3D primary weapon & ballistic shield on a menu operator to match the live Loadout selection. */
+export function equipOperatorLoadout(obj: THREE.Object3D, primary: 'carbine' | 'shotgun' | 'beanbag' | 'shield', secondary: 'pistol' | 'taser') {
+  const opGun = obj.getObjectByName('OperatorRifle');
+  if (!opGun) return;
+  const B = bonesOf(obj);
+  const old = obj.getObjectByName('LoadoutPreviewGroup');
+  if (old) old.removeFromParent();
+  const oldShield = obj.getObjectByName('LoadoutShieldGroup');
+  if (oldShield) oldShield.removeFromParent();
+  const oldSec = obj.getObjectByName('LoadoutSecondaryGroup');
+  if (oldSec) oldSec.removeFromParent();
+
+  opGun.visible = primary === 'carbine';
+  if (primary !== 'carbine' && opGun.parent) {
+    const grp = new THREE.Group();
+    grp.name = 'LoadoutPreviewGroup';
+    const wKind = primary === 'shotgun' ? 'shotgun' : primary === 'beanbag' ? 'beanbag' : (secondary === 'taser' ? 'taser' : 'pistol');
+    const mod = weaponModel(wKind);
+    if (mod) {
+      obj.updateMatrixWorld(true);
+      const handWs = opGun.parent.getWorldScale(new THREE.Vector3()).x || 1;
+      grp.position.copy(opGun.position);
+      grp.quaternion.copy(opGun.quaternion);
+      // Map weaponModel (-Z barrel, +Y up) -> OperatorRifle space (+Y barrel, -Z up)
+      mod.rotation.set(Math.PI / 2, 0, Math.PI);
+      mod.scale.setScalar(1 / handWs);
+      if (primary === 'shield') mod.position.set(0, 0.04 / handWs, 0.02 / handWs);
+      else mod.position.set(0, 0.22 / handWs, 0.03 / handWs);
+      grp.add(mod);
+    }
+    opGun.parent.add(grp);
+  }
+
+  if (primary === 'shield' && B.LeftForeArm) {
+    obj.updateMatrixWorld(true);
+    const armWs = B.LeftForeArm.getWorldScale(new THREE.Vector3()).x || 1;
+    const shWrap = new THREE.Group();
+    shWrap.name = 'LoadoutShieldGroup';
+    const sh = buildBallisticShield(true);
+    sh.scale.setScalar(1 / armWs);
+    // Orient shield outward in front of the operator's left arm
+    sh.rotation.set(-0.25, 0.65, 0.15);
+    sh.position.set(0.05 / armWs, 0.15 / armWs, 0.18 / armWs);
+    shWrap.add(sh);
+    B.LeftForeArm.add(shWrap);
+  }
+
+  // Visible holstered secondary on the right thigh when holding a long gun
+  if (primary !== 'shield' && B.RightUpLeg) {
+    obj.updateMatrixWorld(true);
+    const legWs = B.RightUpLeg.getWorldScale(new THREE.Vector3()).x || 1;
+    const secWrap = new THREE.Group();
+    secWrap.name = 'LoadoutSecondaryGroup';
+    const sec = weaponModel(secondary === 'taser' ? 'taser' : 'pistol');
+    if (sec) {
+      sec.scale.setScalar(0.95 / legWs);
+      sec.rotation.set(-Math.PI / 2, 0, Math.PI / 2);
+      sec.position.set(-0.09 / legWs, 0.14 / legWs, 0.01 / legWs);
+      secWrap.add(sec);
+      B.RightUpLeg.add(secWrap);
+    }
+  }
 }
 
 const P = { // tuning (overridable from the console through window.__op)

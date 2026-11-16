@@ -4,7 +4,7 @@ import { Sim, Actor, Team } from '../sim/sim';
 import { WALL, OUT, WINDOW, Door, Prop } from '../sim/level';
 import * as T from './textures';
 import { modelsReady, Rig, droppedPistol } from './models';
-import { weaponModel } from './weapons';
+import { weaponModel, buildBallisticShield } from './weapons';
 import { OperatorBody, operatorReady } from './operator';
 import { propsReady, onPropsReady, propModel, exteriorPlanterModel, exteriorTreeModel } from './props';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -54,8 +54,12 @@ const THEME = {
 
 export class LevelView {
   group = new THREE.Group();
-  doors: { door: Door; pivot: THREE.Group; base: number; wedge: THREE.Mesh; lock: THREE.Mesh; glass?: THREE.Mesh }[] = [];
+  doors: { door: Door; pivot: THREE.Group; base: number; wedge: THREE.Mesh; lock: THREE.Mesh; tripwire: THREE.Mesh; glass?: THREE.Mesh }[] = [];
   windows = new Map<number, THREE.Mesh>();
+  private evidenceViews = new Map<number, THREE.Group>();
+  private sensorViews = new Set<object>();
+  private sensorGroup = new THREE.Group();
+  private pingRings: { mesh: THREE.Mesh; t: number }[] = [];
   private propViews = new Map<number, { group: THREE.Group; prop: Prop; serverLeds?: THREE.Mesh[] }>();
   private appliedBrokenProps = new Set<number>();
   private lightSources: { x: number; y: number; z: number; color: number; intensity: number; distance: number; decay: number; isRoom?: boolean }[] = [];
@@ -129,6 +133,7 @@ export class LevelView {
     const wallGeo = new THREE.BoxGeometry(1, 3, 1);
     const mk = (cells: [number, number][], mat: THREE.Material, h = 3) => {
       const im = new THREE.InstancedMesh(wallGeo, mat, cells.length); const m = new THREE.Matrix4();
+      if (quality >= 2) { im.castShadow = true; im.receiveShadow = true; }
       cells.forEach(([x, z], i) => { m.makeScale(1, h / 3, 1); m.setPosition(x + 0.5, h / 2, z + 0.5); im.setMatrixAt(i, m); }); g.add(im);
     };
     const wallMat = std({ map: T.wallTex(th.wall, th.trim, l.theme) });
@@ -184,10 +189,23 @@ export class LevelView {
       }
       const lock = box(0.08, 0.06, 0.18, lockMat, 0.84, 1.15, 0); lock.visible = !!d.locked; pivot.add(lock);
       const wedge = box(0.22, 0.08, 0.2, wedgeMat, 0.72, 0.04, 0); wedge.visible = !!d.wedged; pivot.add(wedge);
-      if (d.horiz) { pivot.position.set(d.cx + 0.03, 0, d.cz + 0.5); g.add(box(0.06, 2.2, 1.02, frameMat, d.cx + 0.0, 1.1, d.cz + 0.5), box(0.06, 2.2, 1.02, frameMat, d.cx + 1.0, 1.1, d.cz + 0.5)); }
-      else { pivot.position.set(d.cx + 0.5, 0, d.cz + 0.03); g.add(box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 0.0), box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 1.0)); }
-      const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base, wedge, lock, glass });
+      const tripMat = new THREE.MeshBasicMaterial({ color: 0xff3c28 });
+      const tripwire = box(0.92, 0.012, 0.012, tripMat, 0.47, 0.24, 0);
+      tripwire.visible = !!(d.trapped && d.trapKnown);
+      if (d.horiz) {
+        pivot.position.set(d.cx + 0.03, 0, d.cz + 0.5);
+        tripwire.position.set(d.cx + 0.5, 0.24, d.cz + 0.5);
+        g.add(box(0.06, 2.2, 1.02, frameMat, d.cx + 0.0, 1.1, d.cz + 0.5), box(0.06, 2.2, 1.02, frameMat, d.cx + 1.0, 1.1, d.cz + 0.5), tripwire);
+      } else {
+        pivot.position.set(d.cx + 0.5, 0, d.cz + 0.03);
+        tripwire.rotation.y = Math.PI / 2;
+        tripwire.position.set(d.cx + 0.5, 0.24, d.cz + 0.5);
+        g.add(box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 0.0), box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 1.0), tripwire);
+      }
+      if (quality >= 2) pivot.traverse((o: any) => { if (o.isMesh && o !== glass) { o.castShadow = true; o.receiveShadow = true; } });
+      const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base, wedge, lock, tripwire, glass });
     }
+    g.add(this.sensorGroup);
     // breaker box (wall-mounted flush to an adjacent solid wall if available)
     if (l.breaker) {
       const bm = std({ color: 0x3b444d, metalness: 0.5, roughness: 0.4 });
@@ -606,8 +624,79 @@ export class LevelView {
       d.pivot.rotation.y = d.base + d.door.open * 1.62;
       d.lock.visible = !!d.door.locked;
       d.wedge.visible = !!d.door.wedged;
+      d.tripwire.visible = !!(d.door.trapped && d.door.trapKnown);
       if (d.glass && d.glass.visible && this.sim.brokenDoorGlass.has(d.door.id)) d.glass.visible = false;
     }
+    // Sync dropped evidence weapons on the floor
+    const activeEvIds = new Set<number>();
+    for (const ev of this.sim.evidence) {
+      if (ev.secured) continue;
+      activeEvIds.add(ev.id);
+      let g = this.evidenceViews.get(ev.id);
+      if (!g) {
+        g = new THREE.Group();
+        const gunMesh = droppedPistol();
+        gunMesh.scale.setScalar(ev.kind === 'pistol' ? 1.15 : 1.55);
+        const halo = new THREE.Mesh(
+          new THREE.RingGeometry(0.14, 0.2, 20),
+          new THREE.MeshBasicMaterial({ color: 0x52c8ff, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false }),
+        );
+        halo.rotation.x = -Math.PI / 2;
+        halo.position.y = 0.02;
+        halo.name = 'halo';
+        g.add(gunMesh, halo);
+        g.position.set(ev.x, 0.01, ev.z);
+        g.rotation.y = ev.yaw;
+        this.group.add(g);
+        this.evidenceViews.set(ev.id, g);
+      }
+      const halo = g.getObjectByName('halo') as THREE.Mesh | undefined;
+      if (halo) {
+        const pulse = 0.3 + 0.25 * Math.sin(time * 4.5 + ev.id);
+        (halo.material as THREE.MeshBasicMaterial).opacity = pulse;
+        halo.scale.setScalar(0.95 + 0.1 * Math.sin(time * 4.5 + ev.id));
+      }
+    }
+    for (const [id, g] of this.evidenceViews) {
+      if (!activeEvIds.has(id)) {
+        this.group.remove(g);
+        this.evidenceViews.delete(id);
+      }
+    }
+    // Sync planted acoustic wall sensors + through-wall sonar ping rings
+    for (const sn of this.sim.sensors) {
+      if (this.sensorViews.has(sn)) continue;
+      this.sensorViews.add(sn);
+      const puck = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.08, 0.04, 12),
+        new THREE.MeshStandardMaterial({ color: 0x20262e, emissive: 0x1ee6b8, emissiveIntensity: 0.8, roughness: 0.35 }),
+      );
+      puck.position.set(sn.x, 1.3, sn.z);
+      puck.rotation.x = Math.PI / 2;
+      this.sensorGroup.add(puck);
+    }
+    for (const pg of this.sim.sensorPings) {
+      if ((pg.t ?? 0) > 1.32) {
+        const col = pg.kind === 'suspect' ? 0xff4848 : 0x4fd07a;
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(0.22, 0.32, 24),
+          new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.85, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set(pg.x, 0.9, pg.z);
+        ring.renderOrder = 10;
+        this.group.add(ring);
+        this.pingRings.push({ mesh: ring, t: 1.1 });
+      }
+    }
+    for (const pr of this.pingRings) {
+      pr.t -= dt;
+      const k = 1 - pr.t / 1.1;
+      pr.mesh.scale.setScalar(1 + k * 2.4);
+      (pr.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, pr.t * 0.78);
+      if (pr.t <= 0) { this.group.remove(pr.mesh); pr.mesh.geometry.dispose(); }
+    }
+    this.pingRings = this.pingRings.filter(pr => pr.t > 0);
     for (const [k, m] of this.windows) {
       if (this.sim.brokenWindows.has(k) && m.visible) m.visible = false;
     }
@@ -722,11 +811,8 @@ export class ActorView {
     const tc = off ? std({ color: tcol, emissive: tcol, emissiveIntensity: 0.35 }) : null;
     if (a.kind === 'officer' && tc) { this.teamMat = tc; this.teamShown = a.team; }
     if (a.kind === 'player') {
-      const sg = new THREE.Group();
-      sg.add(
-        box(0.46, 0.92, 0.04, std({ color: 0x161c24, metalness: 0.45, roughness: 0.45 }), -0.14, 1.08, -0.42),
-        box(0.28, 0.14, 0.05, new THREE.MeshPhysicalMaterial({ color: 0x99d0e8, transparent: true, opacity: 0.42, roughness: 0.1 }), -0.14, 1.32, -0.42),
-      );
+      const sg = buildBallisticShield(true);
+      sg.position.set(-0.14, 1.15, -0.44);
       sg.visible = false;
       this.root.add(sg);
       this.playerShield = sg;
@@ -918,27 +1004,71 @@ export class ActorView {
 }
 
 // ---------------- effects ----------------
-const MAXP = 400;
+const MAXP = 450;
+function softPuffTex(inner: string, outer: string) {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d')!;
+  const gr = g.createRadialGradient(32, 32, 2, 32, 32, 31);
+  gr.addColorStop(0, inner); gr.addColorStop(0.5, outer); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+
 export class FX {
   group = new THREE.Group(); private pos = new Float32Array(MAXP * 3); private col = new Float32Array(MAXP * 3); private vel = new Float32Array(MAXP * 3); private life = new Float32Array(MAXP); private grav = new Float32Array(MAXP);
   private pts: THREE.Points; private pi = 0; private tracers: { line: THREE.Line; t: number }[] = []; private ti = 0;
-  private holes: THREE.Points; private hpos = new Float32Array(200 * 3); private hi = 0;
+  private decals: THREE.Mesh[] = []; private di = 0;
+  private debrisList: { m: THREE.Mesh; vx: number; vy: number; vz: number; rx: number; rz: number; settled: boolean }[] = []; private dbi = 0;
+  private smokePuffs: { s: THREE.Sprite; vx: number; vy: number; vz: number; life: number; maxLife: number; baseScale: number }[] = []; private spi = 0;
+  private cloudGroups: Map<object, { g: THREE.Group; puffs: { s: THREE.Sprite; ox: number; oy: number; oz: number; phase: number }[] }> = new Map();
+  private smokeTex = softPuffTex('rgba(220,226,232,0.55)', 'rgba(170,180,192,0.26)');
+  private gasTex = softPuffTex('rgba(190,225,110,0.55)', 'rgba(140,185,70,0.24)');
+  private gunSmokeTex = softPuffTex('rgba(215,220,226,0.34)', 'rgba(160,168,176,0.12)');
   private shells: { m: THREE.Mesh; vx: number; vy: number; vz: number; rx: number; rz: number; life: number }[] = []; private shi = 0;
   private laserDot: THREE.Mesh;
+  private irBeam: THREE.Line;
   light = new THREE.PointLight(0xffc070, 0, 12, 1.6); private lightT = 0; private markers: { m: THREE.Mesh; t: number }[] = [];
   private pings: { g: THREE.Group; ring: THREE.Mesh; sp: THREE.Sprite; t: number }[] = [];
   nades: THREE.Mesh[] = [];
   constructor() {
     const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(this.col, 3));
     this.pos.fill(-999); this.pts = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.05, vertexColors: true, transparent: true, depthWrite: false })); this.pts.frustumCulled = false; this.group.add(this.pts);
-    const hg = new THREE.BufferGeometry(); this.hpos.fill(-999); hg.setAttribute('position', new THREE.BufferAttribute(this.hpos, 3));
-    const hc = document.createElement('canvas'); hc.width = hc.height = 32;
+
+    // Surface-oriented bullet-hole decal pool
+    const hc = document.createElement('canvas'); hc.width = hc.height = 64;
     const hctx = hc.getContext('2d')!;
-    const hgrad = hctx.createRadialGradient(16, 16, 1, 16, 16, 15);
-    hgrad.addColorStop(0, 'rgba(6,6,6,0.95)'); hgrad.addColorStop(0.55, 'rgba(18,16,14,0.85)'); hgrad.addColorStop(1, 'rgba(0,0,0,0)');
-    hctx.fillStyle = hgrad; hctx.fillRect(0, 0, 32, 32);
+    const hgrad = hctx.createRadialGradient(32, 32, 3, 32, 32, 28);
+    hgrad.addColorStop(0, 'rgba(6,6,6,0.98)');
+    hgrad.addColorStop(0.32, 'rgba(20,18,16,0.92)');
+    hgrad.addColorStop(0.6, 'rgba(65,60,55,0.45)');
+    hgrad.addColorStop(1, 'rgba(0,0,0,0)');
+    hctx.fillStyle = hgrad; hctx.fillRect(0, 0, 64, 64);
     const holeTex = new THREE.CanvasTexture(hc);
-    this.holes = new THREE.Points(hg, new THREE.PointsMaterial({ size: 0.045, map: holeTex, transparent: true, alphaTest: 0.12, depthWrite: false })); this.holes.frustumCulled = false; this.group.add(this.holes);
+    const decalGeo = new THREE.PlaneGeometry(0.08, 0.08);
+    for (let i = 0; i < 160; i++) {
+      const m = new THREE.Mesh(decalGeo, new THREE.MeshBasicMaterial({ map: holeTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }));
+      m.visible = false;
+      this.group.add(m);
+      this.decals.push(m);
+    }
+
+    // Physical wood/glass floor debris pool
+    const debGeo = new THREE.BoxGeometry(0.055, 0.012, 0.025);
+    for (let i = 0; i < 110; i++) {
+      const m = new THREE.Mesh(debGeo, new THREE.MeshStandardMaterial({ color: 0x9c6e42, roughness: 0.75, metalness: 0.08 }));
+      m.visible = false;
+      this.group.add(m);
+      this.debrisList.push({ m, vx: 0, vy: 0, vz: 0, rx: 0, rz: 0, settled: false });
+    }
+
+    // Lingering gunsmoke puff sprites
+    for (let i = 0; i < 36; i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.gunSmokeTex, transparent: true, depthWrite: false, opacity: 0 }));
+      s.visible = false;
+      this.group.add(s);
+      this.smokePuffs.push({ s, vx: 0, vy: 0, vz: 0, life: 0, maxLife: 1, baseScale: 0.2 });
+    }
+
     for (let i = 0; i < 24; i++) { const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]); const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xffe2a0, transparent: true, opacity: 0.7 })); line.visible = false; line.frustumCulled = false; this.group.add(line); this.tracers.push({ line, t: 0 }); }
     const shellGeo = new THREE.CylinderGeometry(0.006, 0.006, 0.028, 6);
     for (let i = 0; i < 48; i++) {
@@ -951,6 +1081,9 @@ export class FX {
       new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.92 }),
     );
     this.laserDot.visible = false; this.group.add(this.laserDot);
+    const beamGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    this.irBeam = new THREE.Line(beamGeo, new THREE.LineBasicMaterial({ color: 0x64ff88, transparent: true, opacity: 0.42 }));
+    this.irBeam.visible = false; this.irBeam.frustumCulled = false; this.group.add(this.irBeam);
     this.group.add(this.light);
     const ng = new THREE.CylinderGeometry(0.035, 0.035, 0.13, 8), nm = std({ color: 0x3a4a3a, metalness: 0.5, roughness: 0.4 });
     for (let i = 0; i < 4; i++) { const n = new THREE.Mesh(ng, nm); n.visible = false; this.group.add(n); this.nades.push(n); }
@@ -964,7 +1097,54 @@ export class FX {
       const k = 0.7 + Math.random() * 0.3; this.col[j * 3] = c.r * k; this.col[j * 3 + 1] = c.g * k; this.col[j * 3 + 2] = c.b * k; this.life[j] = life * (0.5 + Math.random()); this.grav[j] = grav;
     }
   }
-  hole(x: number, y: number, z: number) { const j = this.hi = (this.hi + 1) % 200; this.hpos[j * 3] = x; this.hpos[j * 3 + 1] = y; this.hpos[j * 3 + 2] = z; this.holes.geometry.attributes.position.needsUpdate = true; }
+  hole(x: number, y: number, z: number, nx = 0, ny = 1, nz = 0, mat: 'concrete' | 'wood' | 'glass' | 'metal' = 'concrete') {
+    const m = this.decals[this.di = (this.di + 1) % this.decals.length];
+    const len = Math.hypot(nx, ny, nz) || 1;
+    const ux = nx / len, uy = ny / len, uz = nz / len;
+    m.position.set(x + ux * 0.008, y + uy * 0.008, z + uz * 0.008);
+    m.lookAt(x + ux * 2, y + uy * 2, z + uz * 2);
+    m.rotateZ(Math.random() * Math.PI * 2);
+    m.scale.setScalar(mat === 'wood' ? 1.15 : mat === 'metal' ? 0.75 : 1.0);
+    (m.material as THREE.MeshBasicMaterial).color.setHex(mat === 'metal' ? 0xb8c2ce : mat === 'wood' ? 0x5c4028 : 0xffffff);
+    m.visible = true;
+  }
+  debris(x: number, y: number, z: number, count: number, kind: 'wood' | 'glass' | 'concrete') {
+    const col = kind === 'glass' ? 0x9cd6f0 : kind === 'wood' ? 0x8b5e36 : 0x7a7d82;
+    for (let i = 0; i < count; i++) {
+      const d = this.debrisList[this.dbi = (this.dbi + 1) % this.debrisList.length];
+      d.m.position.set(x + (Math.random() - 0.5) * 0.25, Math.max(0.04, y + (Math.random() - 0.5) * 0.2), z + (Math.random() - 0.5) * 0.25);
+      d.m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+      d.m.scale.set(0.7 + Math.random() * 1.1, kind === 'glass' ? 0.4 : 0.9, 0.6 + Math.random() * 1.0);
+      const dm = d.m.material as THREE.MeshStandardMaterial;
+      dm.color.setHex(col);
+      dm.roughness = kind === 'glass' ? 0.12 : 0.85;
+      dm.metalness = kind === 'glass' ? 0.25 : 0.05;
+      dm.transparent = kind === 'glass';
+      dm.opacity = kind === 'glass' ? 0.68 : 1;
+      d.m.visible = true;
+      d.vx = (Math.random() - 0.5) * 2.8;
+      d.vy = 0.8 + Math.random() * 2.2;
+      d.vz = (Math.random() - 0.5) * 2.8;
+      d.rx = (Math.random() - 0.5) * 18;
+      d.rz = (Math.random() - 0.5) * 18;
+      d.settled = false;
+    }
+  }
+  gunsmoke(x: number, y: number, z: number, dx: number, dy: number, dz: number, count = 2) {
+    for (let i = 0; i < count; i++) {
+      const p = this.smokePuffs[this.spi = (this.spi + 1) % this.smokePuffs.length];
+      p.s.position.set(x + dx * (0.1 + i * 0.08), y + dy * 0.1, z + dz * (0.1 + i * 0.08));
+      p.vx = dx * (0.4 + Math.random() * 0.4) + (Math.random() - 0.5) * 0.22;
+      p.vy = 0.18 + Math.random() * 0.22;
+      p.vz = dz * (0.4 + Math.random() * 0.4) + (Math.random() - 0.5) * 0.22;
+      p.maxLife = 0.85 + Math.random() * 0.65;
+      p.life = p.maxLife;
+      p.baseScale = 0.16 + Math.random() * 0.12;
+      p.s.scale.setScalar(p.baseScale);
+      (p.s.material as THREE.SpriteMaterial).opacity = 0.36;
+      p.s.visible = true;
+    }
+  }
   shell(x: number, y: number, z: number, vx: number, vy: number, vz: number, color = 0xd8a840, hull = false) {
     const s = this.shells[this.shi = (this.shi + 1) % this.shells.length];
     s.m.position.set(x, y, z);
@@ -976,9 +1156,23 @@ export class FX {
     s.rx = (Math.random() - 0.5) * 28; s.rz = (Math.random() - 0.5) * 28;
     s.life = 5.5;
   }
-  setLaser(on: boolean, x = 0, y = 0, z = 0) {
+  setLaser(on: boolean, x = 0, y = 0, z = 0, ox = 0, oy = 0, oz = 0, irBeam = false) {
     this.laserDot.visible = on;
-    if (on) this.laserDot.position.set(x, y, z);
+    if (on) {
+      this.laserDot.position.set(x, y, z);
+      (this.laserDot.material as THREE.MeshBasicMaterial).color.setHex(irBeam ? 0x80ff98 : 0xff2222);
+    }
+    this.irBeam.visible = on && irBeam;
+    if (this.irBeam.visible) {
+      const p = this.irBeam.geometry.attributes.position as THREE.BufferAttribute;
+      p.setXYZ(0, ox, oy, oz);
+      p.setXYZ(1, x, y, z);
+      p.needsUpdate = true;
+    }
+  }
+  shieldHit(x: number, y: number, z: number) {
+    this.burst(x, y, z, 14, 0xffd27a, 4.2, 6, 0.28);
+    this.flashAt(x, y, z, 18, 0.05, 0xffd27a);
   }
   tracer(a: THREE.Vector3, b: THREE.Vector3, color = 0xffe2a0) {
     const t = this.tracers[this.ti = (this.ti + 1) % this.tracers.length];
@@ -1011,6 +1205,67 @@ export class FX {
     }
     this.pts.geometry.attributes.position.needsUpdate = true; this.pts.geometry.attributes.color.needsUpdate = true;
     for (const t of this.tracers) if (t.line.visible) { t.t -= dt; if (t.t <= 0) t.line.visible = false; }
+    for (const d of this.debrisList) {
+      if (!d.m.visible || d.settled) continue;
+      d.vy -= 9.8 * dt;
+      d.m.position.x += d.vx * dt; d.m.position.y += d.vy * dt; d.m.position.z += d.vz * dt;
+      d.m.rotation.x += d.rx * dt; d.m.rotation.z += d.rz * dt;
+      if (d.m.position.y <= 0.012) {
+        d.m.position.y = 0.012;
+        if (Math.abs(d.vy) > 0.5) { d.vy = -d.vy * 0.25; d.vx *= 0.4; d.vz *= 0.4; }
+        else { d.settled = true; d.m.rotation.x = 0; d.m.rotation.z = 0; }
+      }
+    }
+    for (const p of this.smokePuffs) {
+      if (!p.s.visible) continue;
+      p.life -= dt;
+      if (p.life <= 0) { p.s.visible = false; continue; }
+      p.s.position.x += p.vx * dt; p.s.position.y += p.vy * dt; p.s.position.z += p.vz * dt;
+      const k = 1 - p.life / p.maxLife;
+      p.s.scale.setScalar(p.baseScale * (1 + k * 2.6));
+      (p.s.material as THREE.SpriteMaterial).opacity = 0.34 * (1 - k);
+    }
+    // Sync 3D volumetric smoke & CS tear gas clouds
+    const activeSet = new Set<object>(sim.clouds);
+    for (const [k, cg] of this.cloudGroups) {
+      if (!activeSet.has(k)) { this.group.remove(cg.g); this.cloudGroups.delete(k); }
+    }
+    for (const cl of sim.clouds) {
+      let cg = this.cloudGroups.get(cl);
+      if (!cg) {
+        const g = new THREE.Group();
+        g.position.set(cl.x, 0, cl.z);
+        const puffs: { s: THREE.Sprite; ox: number; oy: number; oz: number; phase: number }[] = [];
+        const tex = cl.kind === 'gas' ? this.gasTex : this.smokeTex;
+        for (let i = 0; i < 22; i++) {
+          const ang = (i / 22) * Math.PI * 2 + (i % 3) * 0.4;
+          const rad = (i % 4) * 0.85;
+          const ox = Math.cos(ang) * rad, oz = Math.sin(ang) * rad, oy = 0.75 + (i % 3) * 0.58;
+          const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.7 });
+          const s = new THREE.Sprite(mat);
+          s.position.set(ox, oy, oz);
+          s.scale.setScalar(2.6 + (i % 3) * 0.75);
+          g.add(s);
+          puffs.push({ s, ox, oy, oz, phase: i * 0.7 });
+        }
+        this.group.add(g);
+        cg = { g, puffs };
+        this.cloudGroups.set(cl, cg);
+      }
+      const fadeIn = Math.min(1, (cl.maxT - cl.t) / 1.4);
+      const fadeOut = Math.min(1, cl.t / 3.0);
+      const env = fadeIn * fadeOut;
+      for (const pf of cg.puffs) {
+        const drift = sim.time * 0.9 + pf.phase;
+        pf.s.position.set(
+          pf.ox * (0.45 + 0.55 * fadeIn) + Math.sin(drift) * 0.22,
+          pf.oy + Math.cos(drift * 0.8) * 0.14,
+          pf.oz * (0.45 + 0.55 * fadeIn) + Math.cos(drift) * 0.22,
+        );
+        (pf.s.material as THREE.SpriteMaterial).opacity = (cl.kind === 'gas' ? 0.58 : 0.78) * env;
+      }
+    }
+
     for (const s of this.shells) {
       if (!s.m.visible) continue;
       s.life -= dt;
@@ -1038,14 +1293,22 @@ export class FX {
       if (p.t <= 0) { this.group.remove(p.g); }
     }
     this.pings = this.pings.filter(p => p.t > 0);
-    this.nades.forEach((n, i) => { const g = sim.grenades[i]; n.visible = !!g; if (g) { n.position.set(g.x, g.y, g.z); n.rotation.x += dt * 9; n.rotation.z += dt * 6; } });
+    this.nades.forEach((n, i) => {
+      const g = sim.grenades[i];
+      n.visible = !!g;
+      if (g) {
+        n.position.set(g.x, g.y, g.z);
+        n.rotation.x += dt * 9; n.rotation.z += dt * 6;
+        (n.material as THREE.MeshStandardMaterial).color.setHex(g.kind === 'smoke' ? 0x62707a : g.kind === 'gas' ? 0xb59c24 : 0x3a4a3a);
+      }
+    });
   }
 }
 
 // ---------------- first-person weapon ----------------
 export function makeViewModel() {
   const g = new THREE.Group(), gm = std({ color: 0x4a4f57, roughness: 0.5, metalness: 0.1 }), gm2 = std({ color: 0x666c75, roughness: 0.65, metalness: 0.05 }), glove = std({ color: 0x383c44 }), sleeve = std({ color: 0x34466a });
-  const rifle = new THREE.Group(), pistol = new THREE.Group();
+  const rifle = new THREE.Group(), pistol = new THREE.Group(), shotgun = new THREE.Group(), beanbag = new THREE.Group();
   rifle.add(box(0.055, 0.085, 0.36, gm, 0, 0, 0), box(0.05, 0.06, 0.3, gm2, 0, 0.005, -0.32), box(0.022, 0.022, 0.2, gm, 0, 0.01, -0.56), box(0.04, 0.045, 0.07, gm, 0, 0.01, -0.67),
     box(0.04, 0.15, 0.07, gm2, 0, -0.11, -0.06), box(0.04, 0.1, 0.05, gm, 0, -0.085, 0.11), box(0.045, 0.075, 0.24, gm2, 0, -0.01, 0.3), box(0.03, 0.035, 0.1, gm, 0, 0.065, -0.02), box(0.012, 0.04, 0.012, gm, 0, 0.06, -0.44), box(0.03, 0.03, 0.12, gm, 0, -0.045, -0.3));
   const dot = new THREE.Mesh(new THREE.CircleGeometry(0.004, 8), new THREE.MeshBasicMaterial({ color: 0xff3020 })); dot.position.set(0, 0.07, 0.031); rifle.add(dot);
@@ -1053,20 +1316,19 @@ export function makeViewModel() {
   const hr = new THREE.Group(); hr.add(box(0.07, 0.09, 0.08, glove, 0, 0, 0), box(0.08, 0.08, 0.3, sleeve, 0.02, -0.05, 0.19)); hr.position.set(0.005, -0.09, 0.11); rifle.add(hr);
   pistol.add(box(0.035, 0.05, 0.2, gm, 0, 0, -0.05), box(0.034, 0.12, 0.05, gm2, 0, -0.07, 0.02), box(0.07, 0.09, 0.09, glove, 0, -0.07, 0.03), box(0.08, 0.08, 0.3, sleeve, 0.02, -0.11, 0.2), box(0.07, 0.07, 0.09, glove, -0.04, -0.09, 0.03));
   pistol.children.slice(2).forEach(c => { c.userData.hand = true; });
-  pistol.visible = false; g.add(rifle, pistol);
+  pistol.visible = false; shotgun.visible = false; beanbag.visible = false;
+  g.add(rifle, pistol, shotgun, beanbag);
   const flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glowTex(), blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, transparent: true })); flash.scale.setScalar(0.28); flash.position.set(0, 0.02, -0.78); flash.visible = false; g.add(flash);
-  const shield = new THREE.Group();
-  shield.add(
-    box(0.36, 0.52, 0.025, std({ color: 0x14181f, metalness: 0.4, roughness: 0.5 }), -0.18, -0.02, -0.45),
-    box(0.22, 0.1, 0.03, new THREE.MeshPhysicalMaterial({ color: 0x99d0e8, transparent: true, opacity: 0.35, roughness: 0.1 }), -0.18, 0.12, -0.45),
-  );
+  const shield = buildBallisticShield(true);
+  shield.position.set(-0.18, -0.04, -0.45);
+  shield.scale.setScalar(0.76);
   shield.visible = false; g.add(shield);
-  return { group: g, rifle, pistol, flash, shield };
+  return { group: g, rifle, pistol, shotgun, beanbag, flash, shield };
 }
 /** Swap the box weapons of the first-person view for the real models (hands and sleeves stay). */
 export function upgradeViewModel(vm: ReturnType<typeof makeViewModel>) {
-  const V = (window as any).__vm ?? { r: [0, 0, 0.11, 1], p: [0, -0.005, 0.03, 1.1] };
-  for (const [grp, kind, keep] of [[vm.rifle, 'rifle', V.r], [vm.pistol, 'pistol', V.p]] as const) {
+  const V = (window as any).__vm ?? { r: [0, 0, 0.11, 1], p: [0, -0.005, 0.03, 1.1], s: [0, -0.01, 0.08, 0.95] };
+  for (const [grp, kind, keep] of [[vm.rifle, 'rifle', V.r], [vm.pistol, 'pistol', V.p], [vm.shotgun, 'shotgun', V.s], [vm.beanbag, 'beanbag', V.s]] as const) {
     const m = weaponModel(kind); if (!m) continue;
     for (const c of [...grp.children]) if ((c as THREE.Mesh).isMesh && !c.userData.hand) grp.remove(c);
     m.position.set(keep[0], keep[1], keep[2]); m.scale.setScalar(keep[3]); m.traverse(o => { o.castShadow = false; }); grp.add(m);
