@@ -287,7 +287,7 @@ export class Speech {
   get hasLangVoice() { return !!this.pick(); }
   say(text: string, pitch = 1, rate = 1.15, vol = 0.9, force = false, lang?: string) {
     if ((!this.enabled && !force) || !('speechSynthesis' in window)) return;
-    if (this.queue > 3 && !force) return;
+    if (this.queue > 1 && !force) return;
     const clean = text.replace(/^Team ([AB]): /, '');
     const u = new SpeechSynthesisUtterance(clean), v = this.pick(lang);
     if (v) { u.voice = v; u.lang = v.lang; } // no matching voice: let the browser use its default voice instead of staying silent

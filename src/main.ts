@@ -671,6 +671,7 @@ class Game {
         if (!mods.pistolOnly && shields[i]) pl.shield = true;
       });
       this.stepPh.clear();
+      this.recentSay.clear(); this.recentBarkActor.clear(); this.recentBarkKind.clear(); this.recentBarkLine.clear(); this.lastTeamShoutT = 0;
       const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
       show('coopHud', sim.players.length > 1);
       show('breachBanner', false); show('ffWarn', false);
@@ -772,6 +773,11 @@ class Game {
 
   // ---------------- commands ----------------
   lastSay = ''; lastSayT = 0; lastInfo = ''; lastInfoT = 0; micS = ''; micD: string | undefined;
+  private recentSay = new Map<string, number>();
+  private recentBarkActor = new Map<number, number>();
+  private recentBarkKind = new Map<string, number>();
+  private recentBarkLine = new Map<string, number>();
+  private lastTeamShoutT = 0;
   aiState(s: AiState, detail = '') {
     const badge = $('aibadge'), info = $('aiInfo');
     const mp = this.net.online;
@@ -1073,10 +1079,15 @@ class Game {
       case 'death': if (e.a !== p) { fx.burst(e.a.x, 1.1, e.a.z, 26, 0x8a0f0f, 2.6, 8, 0.7); fx.burst(e.a.x, 0.5, e.a.z, 14, 0x6a0808, 1.4, 6, 0.9); } if (e.a.kind === 'officer') this.log(`${e.a.name} has been killed.`, 'warn'); break;
       case 'door': { const q = this.pan(e.door.cx + 0.5, e.door.cz + 0.5); this.audio.door(q.d, q.pan, e.open, !!e.kick); break; }
       case 'say': {
-        const o = e.a; this.log(`${o.name}: ${e.text.replace(/^Team [AB]: /, '')}`, o.team);
-        // an order to both teams gives one spoken reply, not the same sentence twice
-        const key = e.text.replace(/^Team [AB]: /, ''), now = performance.now(), dup = !e.shout && key === this.lastSay && now - this.lastSayT < 2500; this.lastSay = key; this.lastSayT = now;
+        const o = e.a;
+        const key = e.text.replace(/^Team [AB]: /, ''), now = performance.now();
+        const prevT = this.recentSay.get(key) ?? 0;
+        const minGap = e.shout ? 5000 : 8000;
+        const dup = now - prevT < minGap || (e.shout && now - this.lastTeamShoutT < 4000);
+        if (!(e.shout && now - prevT < 3500)) this.log(`${o.name}: ${key}`, o.team);
         if (dup) break;
+        this.recentSay.set(key, now); this.lastSay = key; this.lastSayT = now;
+        if (e.shout) this.lastTeamShoutT = now;
         this.audio.radio();
         const ms = (!e.shout || Math.random() < 0.6) ? this.speak(e.text, o, { pitch: [0.85, 1.25, 0.65, 1.05][o.slot] ?? 1, rate: e.shout ? 1.35 : 1.2, gain: e.shout ? 1 : 0.85 }) : 0;
         if (o.kind === 'officer' && !e.shout) this.audio.radioSquelch(ms ? Math.min(1.8, ms / 1000) : 0.4);
@@ -1084,21 +1095,53 @@ class Game {
       }
       case 'bang': { const q = this.pan(e.x, e.z); this.audio.bang(q.d, q.pan, p.flash); fx.flashAt(e.x, 1, e.z, 900, 0.12, 0xffffff); fx.burst(e.x, 0.3, e.z, 60, 0xffffff, 7, 3, 0.5); fx.burst(e.x, 0.3, e.z, 30, 0x999999, 2, -0.5, 1.6); break; }
       case 'throw': this.audio.step(0.3); break;
-      case 'shout': if (e.a !== p) { this.log(`${e.a.name}: Police! Drop the weapon!`, ''); const q = this.pan(e.a.x, e.a.z); if (!this.audio.hasLine(SHOUTS[0]) || !S.tts) this.audio.vocal('shout', 0.9, q.d, q.pan); else this.speak(SHOUTS[0], e.a, { gain: 1 / (1 + q.d * 0.1), pan: q.pan }); } break;
+      case 'shout': if (e.a !== p) {
+        const now = performance.now(), prevT = this.recentSay.get(SHOUTS[0]) ?? 0;
+        if (now - prevT < 4500 || now - this.lastTeamShoutT < 4000) break;
+        this.recentSay.set(SHOUTS[0], now); this.lastTeamShoutT = now;
+        this.log(`${e.a.name}: Police! Drop the weapon!`, '');
+        const q = this.pan(e.a.x, e.a.z);
+        if (!this.audio.hasLine(SHOUTS[0]) || !S.tts) this.audio.vocal('shout', 0.9, q.d, q.pan);
+        else this.speak(SHOUTS[0], e.a, { gain: 1 / (1 + q.d * 0.1), pan: q.pan });
+      } break;
       case 'bark': {
         const a = e.a, q = this.pan(a.x, a.z); if (q.d > 22) break;
         const near = sim.los(p.x, p.z, a.x, a.z) ? 1 : 0.45, pitch = (a.kind === 'civ' ? 1.25 : 0.85) + (a.variant % 3) * 0.12;
         const d2 = q.d / near; // muffled through walls
         const clip = !!S.tts && this.audio.linesReady; // recorded lines replace the synthetic shout
-        const pick = (l: string[]) => l[(a.id + Math.floor(sim.time)) % l.length];
+        if (e.kind === 'pain') { this.audio.vocal('pain', pitch, d2, q.pan); break; }
+        if (e.kind === 'die') { this.audio.vocal('die', pitch, d2, q.pan); break; }
+
+        const now = performance.now();
+        const actorGap = e.kind === 'surrender' ? 2500 : 9000;
+        const kindGap = e.kind === 'spot' ? 7000 : e.kind === 'surrender' ? 2200 : 6000;
+        if (now - (this.recentBarkActor.get(a.id) ?? 0) < actorGap) break;
+        if (now - (this.recentBarkKind.get(e.kind) ?? 0) < kindGap) break;
+
+        const pickFresh = (l: string[], minFallback = 20000) => {
+          const fresh = l.filter(x => now - (this.recentBarkLine.get(x) ?? 0) >= 35000);
+          if (fresh.length) return fresh[Math.floor(Math.random() * fresh.length)];
+          const oldest = [...l].sort((x, y) => (this.recentBarkLine.get(x) ?? 0) - (this.recentBarkLine.get(y) ?? 0))[0];
+          return now - (this.recentBarkLine.get(oldest) ?? 0) >= minFallback ? oldest : '';
+        };
+
         let line = '';
-        if (e.kind === 'pain') this.audio.vocal('pain', pitch, d2, q.pan);
-        else if (e.kind === 'die') this.audio.vocal('die', pitch, d2, q.pan);
-        else if (e.kind === 'spot') { if (!clip) this.audio.vocal('shout', pitch, d2, q.pan); line = pick(['Cops!', 'The cops are here!', "They're coming in!", 'Shoot them!', 'We got company!', 'Get them!']); }
-        else if (e.kind === 'unrest') { if (!clip) this.audio.vocal('shout', pitch, d2, q.pan); line = "I'm out of here!"; }
-        else if (e.kind === 'panic') { this.audio.vocal('whimper', pitch, d2, q.pan); line = pick(['Help!', 'No, no!', "Don't shoot!", "What's going on?"]); }
-        else if (e.kind === 'surrender') { if (!clip || a.kind === 'civ') this.audio.vocal(a.kind === 'civ' ? 'whimper' : 'yes', pitch, d2, q.pan); line = a.kind === 'civ' ? pick(["Don't shoot, please!", "I'll do what you say!", 'Help me!', "Please don't hurt me!"]) : pick(["Don't shoot! I give up!", 'Okay, okay! I give up!', "I'm dropping the gun!"]); }
-        if (line && q.d < 16) { this.log(`${a.kind === 'civ' ? 'Civilian' : 'Suspect'}: ${line}`, ''); this.speak(line, a, { pitch: Math.min(2, pitch * 1.1), rate: 1.25, gain: Math.max(0.15, near * (1 - q.d / 20)), pan: q.pan, muffle: near < 1 }); }
+        if (e.kind === 'spot') { line = pickFresh(['Cops!', 'The cops are here!', "They're coming in!", 'Shoot them!', 'We got company!', 'Get them!']); if (line && !clip) this.audio.vocal('shout', pitch, d2, q.pan); }
+        else if (e.kind === 'unrest') { line = pickFresh(["I'm out of here!"]); if (line && !clip) this.audio.vocal('shout', pitch, d2, q.pan); }
+        else if (e.kind === 'panic') { line = pickFresh(['Help!', 'No, no!', "Don't shoot!", "What's going on?"]); if (line) this.audio.vocal('whimper', pitch, d2, q.pan); }
+        else if (e.kind === 'surrender') {
+          line = a.kind === 'civ'
+            ? pickFresh(["Don't shoot, please!", "I'll do what you say!", 'Help me!', "Please don't hurt me!"], 10000)
+            : pickFresh(["Don't shoot! I give up!", 'Okay, okay! I give up!', "I'm dropping the gun!"], 10000);
+          if (line && (!clip || a.kind === 'civ')) this.audio.vocal(a.kind === 'civ' ? 'whimper' : 'yes', pitch, d2, q.pan);
+        }
+        if (line && q.d < 16) {
+          this.recentBarkActor.set(a.id, now);
+          this.recentBarkKind.set(e.kind, now);
+          this.recentBarkLine.set(line, now);
+          this.log(`${a.kind === 'civ' ? 'Civilian' : 'Suspect'}: ${line}`, '');
+          this.speak(line, a, { pitch: Math.min(2, pitch * 1.1), rate: 1.25, gain: Math.max(0.15, near * (1 - q.d / 20)), pan: q.pan, muffle: near < 1 });
+        }
         break;
       }
       case 'cuff': { const q = this.pan(e.a.x, e.a.z); if (q.d < 10) this.audio.cuff(); if (e.by === p) this.log(e.a.kind === 'suspect' ? 'You secured a suspect.' : 'You secured a civilian.', 'me'); break; }
