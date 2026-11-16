@@ -21,6 +21,18 @@ npm run build    # production build in dist/
 
 Code dependencies: three.js (MIT), Vite (MIT), TypeScript (Apache-2.0), PeerJS (MIT). Third-party assets and their authors are listed in the game under Settings → Credits & licences; every CC BY asset ships with its `license.txt`.
 
+## Lighting and finish
+
+Above graphics level Low every frame goes through a three.js `EffectComposer` chain in `src/game/postfx.ts`:
+
+- the world scene and then the weapon scene are rendered into one HDR (half-float) target, so the gun is never fogged by the level,
+- `UnrealBloomPass` picks up only the light fittings: the ceiling panels are pushed to ~1.5 in linear space so they glow without fogging the room,
+- `OutputPass` does the ACES tone map and the sRGB conversion (a render target bypasses the renderer's own tone mapping, so this pass is required),
+- a small grade pass adds cool shadows / warm highlights, a vignette, film grain and a touch of edge aberration, and flashes red at the edges when you are hit,
+- `FXAAPass` on High and Ultra.
+
+The room lighting was rebalanced for it: ambient and hemisphere light were cut back, the wall and ceiling tints are darkened, and the dynamic light pool carries the scene, so corridors read as pools of light instead of a flat white wash. Low keeps the old forward render with brighter ambient light, and `?qual=0` behaves exactly as before.
+
 ## Voices
 
 The lines in `voice/lines.json` are rendered by the workflow `.github/workflows/voices.yml` with the speech model Kokoro-82M (Apache-2.0) and stored in `public/voice/`. Edit or add lines in `voice/lines.json` and push; the clips are regenerated automatically.
@@ -96,3 +108,5 @@ Nothing here needs a server or an API key; the models run in the player's browse
 - **AI order reading** (optional, experimental, off by default; `src/ai/brain.ts`, `src/ai/llm.worker.ts`): Qwen2.5 1.5B Instruct through WebLLM (WebGPU required, about 1 GB). Only an order the fixed rules cannot read is sent to the model, which answers with the action alone (JSON constrained to a schema, `src/sim/aiorders.ts`); who the order is for is still decided by the rules. In the Actions check the model named the right action for about two out of three unfamiliar wordings; the 0.5B model was tried and was not usable.
 - **Online play**: the models run only for the player who speaks. What goes over the network is the finished `Command`, exactly as before.
 - `tools/check-ai.mts` + the «AI model check» workflow verify in GitHub Actions that the model files exist and show how the language model answers a list of unfamiliar English and Swedish wordings; the result is posted as a comment on the commit.
+
+The lobby sofas, lounge poufs and desk lamps added in this round are «Glam Velvet Sofa», «Specular Silk Pouf» and «Iridescence Lamp» from the Khronos Group glTF Sample Assets (Eric Chadwick © Wayfair, LLC, CC BY 4.0). They are normalised to metric scale in `src/game/props.ts`; see `public/models/props/LICENSE.txt`.

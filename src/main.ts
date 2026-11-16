@@ -11,6 +11,7 @@ import '@fontsource/barlow-condensed/500.css'; import '@fontsource/barlow-conden
 import { parseCommands, shouldUseAiBrain, ACTION_LABEL, DIR_LABEL } from './sim/commands';
 import { TacticalAi, AI_MODELS, AiState, AiResult } from './game/ai';
 import { LevelView, ActorView, FX, makeViewModel, TEAM_COLOR } from './game/world';
+import { PostFX } from './game/postfx';
 import { GameAudio, Speech } from './game/audio';
 import { Voice } from './game/voice';
 import { LocalVoice } from './ai/localvoice';
@@ -90,7 +91,8 @@ const ORDER_LABEL: Record<string, string> = {
 let assetsDone: Promise<unknown> = Promise.resolve();
 
 class Game {
-  renderer: THREE.WebGLRenderer; scene = new THREE.Scene(); camera = new THREE.PerspectiveCamera(74, 1, 0.06, 120);
+  renderer: THREE.WebGLRenderer; post: PostFX | null = null; postScene: THREE.Scene | null = null;
+  scene = new THREE.Scene(); camera = new THREE.PerspectiveCamera(74, 1, 0.06, 120);
   viewScene = new THREE.Scene(); viewCam = new THREE.PerspectiveCamera(52, 1, 0.01, 10); vm = makeViewModel();
   torch = new THREE.SpotLight(0xfff0d6, 22, 32, 0.5, 0.6, 1.2);
   sim: Sim | null = null; level: LevelView | null = null; views = new Map<Actor, ActorView>(); fx = new FX();
@@ -143,7 +145,7 @@ class Game {
   constructor() {
     const canvas = $<HTMLCanvasElement>('c');
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.15; this.renderer.autoClear = false;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = S.qual ? 1.0 : 1.15; this.renderer.autoClear = false;
     this.camera.rotation.order = 'YXZ'; this.pipCam.rotation.order = 'YXZ';
     this.viewScene.add(this.viewCam); this.viewCam.add(this.vm.group);
     this.viewScene.add(new THREE.AmbientLight(0xffffff, 1.1)); const vl = new THREE.DirectionalLight(0xffffff, 1.6); vl.position.set(0.5, 1, 0.6); this.viewScene.add(vl);
@@ -187,9 +189,11 @@ class Game {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, cap));
     this.renderer.setSize(w, h, false);
     this.camera.aspect = this.viewCam.aspect = w / h; this.camera.updateProjectionMatrix(); this.viewCam.updateProjectionMatrix();
+    this.post?.setSize(w, h, this.renderer.getPixelRatio());
   }
   applySettings() {
     ActorView.detailed = S.qual > 0;
+    this.post?.setQuality(S.qual);
     this.renderer.shadowMap.enabled = S.qual >= 2;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.torch.castShadow = S.qual >= 2;
@@ -200,7 +204,7 @@ class Game {
       this.torch.shadow.bias = -0.0005;
     }
     this.menu.setQuality(S.qual);
-    if (this.scene && S.qual > 0) this.scene.environmentIntensity = S.qual >= 3 ? 0.36 : S.qual === 2 ? 0.28 : 0.18;
+    if (this.scene && S.qual > 0) this.scene.environmentIntensity = S.qual >= 3 ? 0.3 : S.qual === 2 ? 0.22 : 0.14;
     this.audio.setVolume(S.vol); this.speech.enabled = !!S.tts; this.speech.lang = S.lang;
     const local = LocalVoice.supported && ((S.asr === 'local' && !this.localVoice.failed) || !Voice.supported), nv = local ? this.localVoice : this.webVoice;
     if (nv !== this.voice) { this.voice.stop(); this.voice = nv; }
@@ -1058,11 +1062,12 @@ class Game {
       const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
       show('coopHud', sim.players.length > 1);
       show('breachBanner', false); show('ffWarn', false);
-      this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x070a10); this.scene.fog = new THREE.FogExp2(0x070a10, 0.016);
-      if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = S.qual >= 3 ? 0.36 : S.qual === 2 ? 0.28 : 0.18; }
-      this.ambLight = new THREE.AmbientLight(0x9fb0c8, (mods.blackout ? 0.1 : (S.qual ? 0.45 : 1.1)));
+      this.post?.dispose(); this.post = null; this.postScene = null;
+      this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x070a10); this.scene.fog = new THREE.FogExp2(0x070a10, 0.0135);
+      if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = S.qual >= 3 ? 0.3 : S.qual === 2 ? 0.22 : 0.14; }
+      this.ambLight = new THREE.AmbientLight(0x9fb0c8, (mods.blackout ? (S.qual ? 0.05 : 0.1) : (S.qual ? 0.15 : 1.1)));
       this.nvgLight = new THREE.AmbientLight(0x6aff99, 0);
-      this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(0xb8c8ff, 0x2a241c, mods.blackout ? 0.18 : 0.55));
+      this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(0xb8c8ff, 0x2a241c, mods.blackout ? (S.qual ? 0.08 : 0.18) : (S.qual ? 0.2 : 0.55)));
       const moon = new THREE.DirectionalLight(0xa8c0ff, mods.blackout ? 0.3 : 0.7); moon.position.set(-8, 14, 6); this.scene.add(moon);
       this.level?.dispose();
       this.level = new LevelView(sim, S.qual); this.scene.add(this.level.group);
@@ -1081,7 +1086,7 @@ class Game {
       this.stopReplay();
       show('nvg', false); show('bodycam', this.bodycamOn); show('wheel', false); show('pipFrame', false); $('pipFrame').classList.remove('optiwand'); show('pipMeta', false); show('dispatchPanel', false); show('radioCard', false); $('bcCensor').innerHTML = '';
       $('bcSector').textContent = SECTOR_LOCS[mission] ?? 'SECTOR UNKNOWN';
-      this.renderer.toneMappingExposure = 1.15;
+      this.renderer.toneMappingExposure = S.qual ? 1.0 : 1.15;
       this.selTeam = this.lastTeam = 'ALL'; this.lastWho = null;
       setLoad(86, 'Staging armored transport & gear...');
       await withTimeout(this.level.whenReady(), 8000);
@@ -2403,6 +2408,22 @@ class Game {
     }
     box.innerHTML = html;
   }
+  /** Builds (or rebuilds) the post chain for the current level scene. */
+  ensurePost(): PostFX | null {
+    if (S.qual <= 0) return null;
+    if (!this.post || this.postScene !== this.scene) {
+      this.post?.dispose();
+      this.post = new PostFX(this.renderer, this.scene, this.camera, this.viewScene, this.viewCam, {
+        bloom: S.qual >= 3 ? 0.3 : 0.22,
+        radius: S.qual >= 3 ? 0.64 : 0.54,
+        threshold: 1.6,
+      });
+      this.postScene = this.scene;
+      this.post.setQuality(S.qual);
+      this.post.setSize(innerWidth, innerHeight, this.renderer.getPixelRatio());
+    }
+    return this.post;
+  }
   render() {
     const r = this.renderer;
     r.setScissorTest(false);
@@ -2415,7 +2436,13 @@ class Game {
       r.render(this.menu.scene, this.menu.cam);
     }
     else if (this.sim) {
-      r.render(this.scene, this.camera); r.clearDepth(); r.render(this.viewScene, this.viewCam);
+      const post = this.ensurePost();
+      if (post) {
+        post.flash = Math.min(1, this.dmgFx * 0.6 + this.hitFx * 0.3);
+        post.render(1 / 60);
+      } else {
+        r.render(this.scene, this.camera); r.clearDepth(); r.render(this.viewScene, this.viewCam);
+      }
       if (this.pipOn && S.pip && this.state === 'play') {
         const w = 240, h = 146, padX = 18, padY = innerHeight - 146 - 146;
         const x = Math.max(0, innerWidth - w - padX), y = Math.max(0, padY);
