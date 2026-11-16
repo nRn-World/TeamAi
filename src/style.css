@@ -263,6 +263,8 @@ td { border-bottom:1px solid rgba(255,255,255,.08); }
 #briefText { margin-top:0; font-size:15.5px; line-height:1.6; }
 .facts { display:flex; gap:26px; margin-top:18px; padding-top:16px; border-top:1px solid var(--line); }
 .facts div { font:500 12px/1.2 var(--hd); letter-spacing:.16em; text-transform:uppercase; color:#9aa6b0; } .facts b { display:block; font:700 38px/1 var(--hd); color:#fff; letter-spacing:0; }
+.facts .fact-obj { flex:1 1 200px; min-width:0; }
+.facts .fact-obj b { font:600 13px/1.4 var(--hd); letter-spacing:.05em; text-transform:none; }
 
 @media (max-width:900px) {
   .acard { position:static; transform:none; margin:16px auto; width:calc(100% - 28px); max-height:none; }

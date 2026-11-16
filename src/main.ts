@@ -312,7 +312,9 @@ class Game {
     $('briefTitle').textContent = m.name;
     $('briefText').textContent = m.brief;
     const objMap = { clear: 'Locate & arrest or neutralize all suspects, secure all civilians.', hostage: 'Rescue the VIP bank director and secure all suspects.', bomb: 'Find and defuse the explosive device before detonation.' } as const;
-    $('briefMeta').innerHTML = `<div><span>Suspects</span>${m.suspects}</div><div><span>Civilians</span>${m.civs}</div><div><span>Objective</span>${objMap[m.objective]}</div>`;
+    // The briefing facts live in #briefFacts; never let a missing element block the launch.
+    const facts = $('briefFacts');
+    if (facts) facts.innerHTML = `<div><span>Suspects</span><b>${m.suspects}</b></div><div><span>Civilians</span><b>${m.civs}</b></div><div class="fact-obj"><span>Objective</span><b>${objMap[m.objective]}</b></div>`;
 
     // Entry points selector
     const entriesBox = $('briefEntries');
