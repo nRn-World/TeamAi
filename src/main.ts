@@ -99,7 +99,7 @@ class Game {
     const sec = this.net.online ? this.lobbySec : S.secondary;
     return [PRIMARY_SPECS[prim] ?? PRIMARY_SPECS.carbine, SECONDARY_SPECS[sec] ?? SECONDARY_SPECS.pistol];
   }
-  selTeam: Team | 'ALL' = 'ALL'; lastTeam: Team | 'ALL' = 'ALL'; lastWho: number | null = null; typing = false; dmgFx = 0; hitFx = 0; hudT = 0; last = performance.now(); mapBase: HTMLCanvasElement | null = null; endT = 0; parsedT = 0;
+  selTeam: Team | 'ALL' = 'ALL'; lastTeam: Team | 'ALL' = 'ALL'; lastWho: number | null = null; typing = false; dmgFx = 0; hitFx = 0; hudT = 0; mapT = 0; censorT = 0; last = performance.now(); mapBase: HTMLCanvasElement | null = null; endT = 0; parsedT = 0;
 
   constructor() {
     const canvas = $<HTMLCanvasElement>('c');
@@ -143,10 +143,18 @@ class Game {
     }
   }
   resize() {
-    const w = innerWidth, h = innerHeight; this.renderer.setPixelRatio(Math.min(devicePixelRatio, S.qual > 1 ? 2 : S.qual ? 1.5 : 1)); this.renderer.setSize(w, h, false);
+    const w = innerWidth, h = innerHeight;
+    const cap = S.qual >= 3 ? 2 : S.qual === 2 ? 1.5 : S.qual === 1 ? 1.15 : 1;
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, cap));
+    this.renderer.setSize(w, h, false);
     this.camera.aspect = this.viewCam.aspect = w / h; this.camera.updateProjectionMatrix(); this.viewCam.updateProjectionMatrix();
   }
   applySettings() {
+    ActorView.detailed = S.qual > 0;
+    this.renderer.shadowMap.enabled = S.qual >= 2;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.menu.setQuality(S.qual);
+    if (this.scene && S.qual > 0) this.scene.environmentIntensity = S.qual >= 3 ? 0.36 : S.qual === 2 ? 0.28 : 0.18;
     this.audio.setVolume(S.vol); this.speech.enabled = !!S.tts; this.speech.lang = S.lang;
     const local = LocalVoice.supported && ((S.asr === 'local' && !this.localVoice.failed) || !Voice.supported), nv = local ? this.localVoice : this.webVoice;
     if (nv !== this.voice) { this.voice.stop(); this.voice = nv; }
@@ -676,7 +684,7 @@ class Game {
       show('coopHud', sim.players.length > 1);
       show('breachBanner', false); show('ffWarn', false);
       this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x070a10); this.scene.fog = new THREE.FogExp2(0x070a10, 0.016);
-      if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = 0.28; }
+      if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = S.qual >= 3 ? 0.36 : S.qual === 2 ? 0.28 : 0.18; }
       this.ambLight = new THREE.AmbientLight(0x9fb0c8, (mods.blackout ? 0.1 : (S.qual ? 0.45 : 1.1)));
       this.nvgLight = new THREE.AmbientLight(0x6aff99, 0);
       this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(0xb8c8ff, 0x2a241c, mods.blackout ? 0.18 : 0.55));
@@ -1342,6 +1350,7 @@ class Game {
     const sim = this.sim!, l = sim.level, k = 4, c = document.createElement('canvas'); c.width = l.w * k; c.height = l.h * k; const g = c.getContext('2d')!;
     for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) { const v = l.cells[z * l.w + x]; g.fillStyle = v === WALL ? '#8fa3b5' : v === DOOR ? '#f2c14e' : v === WINDOW ? '#68b6e0' : v === LOW || v === HIGH ? '#33414d' : v === 1 ? '#18212a' : '#0c1116'; g.fillRect(x * k, z * k, k, k); }
     this.mapBase = c; const m = $<HTMLCanvasElement>('minimap'); m.width = c.width; m.height = c.height; m.style.width = c.width * 1.15 + 'px';
+    this.mapT = 0; this.drawMap();
   }
   drawMap() {
     const m = $<HTMLCanvasElement>('minimap'); m.style.display = this.mapOn ? '' : 'none'; if (!this.mapOn || !this.mapBase) return;
@@ -1509,7 +1518,7 @@ class Game {
       if (last !== undefined && ph !== last && !a.prone) { const q = this.pan(a.x, a.z); if (q.d < 14) this.audio.step((a.kind === 'officer' || a.kind === 'player' ? 0.2 : 0.14) / (1 + q.d * 0.25), q.pan); }
     }
     if (this.net.online) { const vc = $('vc'); vc.textContent = this.net.micOk ? (this.net.muted ? 'VOICE CHAT: MIC OFF (B)' : `SPATIAL RADIO ON · ${this.net.voiceCount} peers · B = mute`) : 'VOICE CHAT: no microphone – listen-only'; vc.className = this.net.muted || !this.net.micOk ? 'off' : ''; }
-    this.level!.update(dt, sim.time); for (const v of this.views.values()) v.update(dt, sim.time); this.fx.update(dt, sim);
+    this.level!.update(dt, sim.time, p.x, p.z); for (const v of this.views.values()) v.update(dt, sim.time); this.fx.update(dt, sim);
     for (const pg of this.pings) pg.t -= dt;
     this.pings = this.pings.filter(pg => pg.t > 0);
     if (this.breachBannerT > 0) { this.breachBannerT -= dt; if (this.breachBannerT <= 0 && sim.breachSyncT <= 0) show('breachBanner', false); }
@@ -1571,7 +1580,8 @@ class Game {
       this.hbT -= dt;
       if (this.hbT <= 0) { this.hbT = p.hp < 20 ? 0.55 : 0.78; this.audio.heartbeat(1 - p.hp / 35); }
     }
-    this.updateCensors();
+    this.censorT -= dt;
+    if (this.censorT <= 0) { this.censorT = 0.04; this.updateCensors(); }
     $('dmg').style.opacity = String(Math.max(this.dmgFx, p.hp < 35 && p.alive ? 0.35 : 0, p.alive ? 0 : 0.8)); $('flash').style.opacity = String(Math.min(1, p.flash * 1.6));
     const hm = $('hitmark'); hm.style.opacity = String(this.hitFx);
     const cross = $('cross');
@@ -1581,7 +1591,9 @@ class Game {
     cross.classList.toggle('ads', this.aimK > 0.35);
     cross.style.opacity = p.alive ? '1' : '0'; // keep crisp optical center dot visible when zooming down sights
     if (this.parsedT > 0) { this.parsedT -= dt; if (this.parsedT <= 0) { $('parsed').textContent = ''; $('heard').textContent = ''; } }
-    this.updateHud(); this.drawMap();
+    this.updateHud();
+    this.mapT -= dt;
+    if (this.mapT <= 0) { this.mapT = 0.055; this.drawMap(); }
     if (this.endT > 0) { this.endT -= dt; if (this.endT <= 0) this.debrief(); }
   }
   private updateCensors() {

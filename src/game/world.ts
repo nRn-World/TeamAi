@@ -58,7 +58,11 @@ export class LevelView {
   windows = new Map<number, THREE.Mesh>();
   private propViews = new Map<number, { group: THREE.Group; prop: Prop; serverLeds?: THREE.Mesh[] }>();
   private appliedBrokenProps = new Set<number>();
-  private roomLights: { light: THREE.PointLight; baseInt: number }[] = [];
+  private lightSources: { x: number; y: number; z: number; color: number; intensity: number; distance: number; decay: number; isRoom?: boolean }[] = [];
+  private lightPool: THREE.PointLight[] = [];
+  private lastPoolX = 1e9;
+  private lastPoolZ = 1e9;
+  private poolT = 0;
   private lampMeshes: THREE.Mesh[] = [];
   private lampOnMat: THREE.MeshBasicMaterial;
   private lampOffMat: THREE.MeshStandardMaterial;
@@ -89,7 +93,12 @@ export class LevelView {
     const ceilMat = std({ map: T.floorTex('ceiling') });
     const lampOn = this.lampOnMat = new THREE.MeshBasicMaterial({ color: l.theme === 'club' ? 0xc864ff : 0xfff4dc });
     const lampOff = this.lampOffMat = std({ color: 0x3a3a38 });
-    let lights = 0;
+    const poolCount = quality >= 3 ? 16 : quality === 2 ? 11 : quality === 1 ? 7 : 0;
+    for (let i = 0; i < poolCount; i++) {
+      const pl = new THREE.PointLight(0xffffff, 0, 12, 1.6);
+      g.add(pl);
+      this.lightPool.push(pl);
+    }
     for (const r of l.rooms) {
       const fl = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), std({ map: T.floorTex(r.floor), roughness: r.floor === 'tile' ? 0.35 : 0.95 }));
       scaleUV(fl.geometry, r.w / 2, r.h / 2); fl.rotation.x = -Math.PI / 2; fl.position.set(r.x + r.w / 2, r.id * 0.0006, r.z + r.h / 2); g.add(fl);
@@ -102,12 +111,10 @@ export class LevelView {
         const lm = box(r.kind === 'warehouse' ? 0.4 : 1.1, 0.05, r.kind === 'corridor' ? 0.3 : 0.5, dark ? lampOff : lampOn, x, 2.97, z);
         g.add(lm);
         if (!dark) this.lampMeshes.push(lm);
-        if ((!dark || l.theme === 'club') && quality > 0 && lights < (quality > 1 ? 22 : 12)) {
+        if ((!dark || l.theme === 'club') && poolCount > 0) {
           const col = l.theme === 'club' ? (i % 2 ? 0xff3ea5 : 0x3ea8ff) : r.kind === 'warehouse' ? 0xdfe8ff : 0xffe9c8;
           const baseInt = l.theme === 'club' ? 12 : r.kind === 'warehouse' ? 26 : 15;
-          const pl = new THREE.PointLight(col, baseInt, 11, 1.7); pl.position.set(x, 2.55, z); g.add(pl);
-          this.roomLights.push({ light: pl, baseInt });
-          lights++;
+          this.lightSources.push({ x, y: 2.55, z, color: col, intensity: baseInt, distance: 11, decay: 1.7, isRoom: true });
         }
       }
     }
@@ -132,7 +139,9 @@ export class LevelView {
     const perimH = l.theme === 'club' ? 2.6 : 0.85;
     mk(inner, wallMat); mk(outer.filter(([x, z]) => !(x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1)), brickMat, 3.2); mk(outer.filter(([x, z]) => x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1), l.theme === 'club' ? brickMat : curbMat, perimH);
     // breakable glass windows (floor-to-ceiling curtain-wall glass on office/hotel/club ground exterior)
-    const glassMat = new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.3, roughness: 0.08, metalness: 0.15 });
+    const glassMat = quality > 0
+      ? new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.3, roughness: 0.08, metalness: 0.15 })
+      : std({ color: 0xaad8ee, transparent: true, opacity: 0.34, roughness: 0.15 });
     const frameAlum = std({ color: 0x161a20, roughness: 0.35, metalness: 0.65 });
     const curtainWall = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'club';
     for (const w of l.windows) {
@@ -154,7 +163,9 @@ export class LevelView {
     }
     // doors (+ lock & wedge indicators; glass entrance doors on office/hotel/bank)
     const doorMat = std({ map: T.doorTex(), roughness: 0.6 }), frameMat = std({ color: 0x202328, roughness: 0.4, metalness: 0.4 });
-    const glassDoorMat = new THREE.MeshPhysicalMaterial({ color: 0x99d0e8, transparent: true, opacity: 0.36, roughness: 0.08, metalness: 0.2 });
+    const glassDoorMat = quality > 0
+      ? new THREE.MeshPhysicalMaterial({ color: 0x99d0e8, transparent: true, opacity: 0.36, roughness: 0.08, metalness: 0.2 })
+      : std({ color: 0x99d0e8, transparent: true, opacity: 0.38, roughness: 0.15 });
     const wedgeMat = std({ color: 0xf2a82e, roughness: 0.4 }), lockMat = std({ color: 0xe04848, emissive: 0x801010, emissiveIntensity: 0.6 });
     for (const d of l.doors) {
       const frontGlassDoor = (l.theme === 'office' || l.theme === 'hotel' || l.theme === 'bank') && (sim.cell(d.cx, d.cz + 1) === OUT || sim.cell(d.cx, d.cz - 1) === OUT);
@@ -352,9 +363,12 @@ export class LevelView {
       const sp = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: T.signTex(text, bg, fg, glow) }));
       sp.position.set(x, y, z); sp.rotation.y = ry; g.add(sp);
     };
+    const addLight = (x: number, y: number, z: number, color: number, intensity: number, distance: number, decay = 1.5) => {
+      if (this.lightPool.length > 0) this.lightSources.push({ x, y, z, color, intensity, distance, decay });
+    };
     const addStreetLamp = (x: number, z: number, col = 0xffe0b2, ry = 0) => {
       placeCityModel('street_lamp_01', { x, y: 0, z, ry, scale: 1.18 });
-      if (quality > 0) { const pl = new THREE.PointLight(col, 14, 15, 1.55); pl.position.set(x, 4.35, z); g.add(pl); }
+      addLight(x, 4.35, z, col, 14, 15, 1.55);
     };
 
     if (l.theme === 'office') {
@@ -369,11 +383,7 @@ export class LevelView {
         const d = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.03, 12), soffitMat);
         d.position.set(lx, 3.05, 21.3); g.add(d);
       }
-      if (quality > 0) {
-        for (const lx of [12.4, 14.5, 16.6]) {
-          const pl = new THREE.PointLight(0xffdfb0, 16, 11, 1.5); pl.position.set(lx, 2.95, 21.35); g.add(pl);
-        }
-      }
+      for (const lx of [12.4, 14.5, 16.6]) addLight(lx, 2.95, 21.35, 0xffdfb0, 16, 11, 1.5);
       addSign('EXIT · NÖDUTGÅNG', '#093818', '#52ff88', '#34e86a', 1.35, 0.3, 14.5, 2.52, 21.03);
       addSign('KISTA TECH CENTER', '#0c1624', '#dbeafe', '#3b82f6', 3.4, 0.48, 15.0, 3.55, 22.32);
       g.add(box(0.14, 2.9, 0.14, darkSteel, 7.2, 1.45, 25.1));
@@ -407,7 +417,7 @@ export class LevelView {
       placeCityModel('warehouse_depot', { x: 21.0, y: 0, z: -10.0, w: 28.0, h: 8.5, d: 10.0 });
       g.add(box(5.6, 0.25, 1.6, darkSteel, 16.5, 3.18, 23.8), box(5.6, 0.1, 0.12, haz, 16.5, 3.05, 24.55));
       addSign('WAREHOUSE 04', '#161a1e', '#f0c050', '#c89020', 2.6, 0.48, 16.5, 3.18, 24.62);
-      if (quality > 0) { const pl = new THREE.PointLight(0xffb454, 18, 13, 1.5); pl.position.set(16.5, 2.95, 24.1); g.add(pl); }
+      addLight(16.5, 2.95, 24.1, 0xffb454, 18, 13, 1.5);
       const cont = (x: number, y: number, z: number, col: number, ry = 0) => {
         const c = box(5.8, 2.5, 2.4, std({ color: col, roughness: 0.62, metalness: 0.45 }), x, y, z);
         c.rotation.y = ry; g.add(c);
@@ -417,7 +427,7 @@ export class LevelView {
       for (const cx of [-2.5, 37.5]) {
         g.add(box(1.1, 16, 1.1, darkSteel, cx, 8, -2), box(1.1, 16, 1.1, darkSteel, cx + 3.2, 8, -2));
         g.add(box(14, 0.9, 1.2, haz, cx + 4, 15.5, -2));
-        if (quality > 0) { const pl = new THREE.PointLight(0xffa64d, 24, 24, 1.4); pl.position.set(cx + 4, 14.5, -1); g.add(pl); }
+        addLight(cx + 4, 14.5, -1, 0xffa64d, 24, 24, 1.4);
       }
       placeCityModel('concrete_road_barrier', { x: 11.4, y: 0, z: 29.8, ry: 0.1 });
       placeCityModel('concrete_road_barrier', { x: 35.8, y: 0, z: 29.4, ry: -0.2 });
@@ -433,9 +443,7 @@ export class LevelView {
       }
       g.add(box(11.4, 0.35, 3.0, darkSteel, 22.5, 3.4, 25.3));
       addSign('HOTEL NORTH STAR', '#1c1510', '#ffd480', '#e0a238', 3.8, 0.54, 22.5, 3.42, 26.82);
-      if (quality > 0) {
-        for (const lx of [20.5, 22.5, 24.5]) { const pl = new THREE.PointLight(0xffcf88, 18, 12, 1.5); pl.position.set(lx, 3.1, 25.6); g.add(pl); }
-      }
+      for (const lx of [20.5, 22.5, 24.5]) addLight(lx, 3.1, 25.6, 0xffcf88, 18, 12, 1.5);
       addShrub(18.6, 25.5); addShrub(26.4, 25.5);
       addTree(16.2, 25.8, 1.65); addTree(36.6, 26.2, 1.65);
       // Roof deck + towering Marina-style hotel skyscraper above the lobby & neighboring residential blocks
@@ -468,9 +476,7 @@ export class LevelView {
       for (const bx of [9.6, 11.2, 12.8, 18.2, 19.8]) addBollard(bx, 27.1);
       addShrub(12.3, 25.7); addShrub(18.7, 25.7);
       addTree(7.8, 26.2, 1.6); addTree(30.8, 26.2, 1.6);
-      if (quality > 0) {
-        for (const lx of [12.5, 15.5, 18.5]) { const pl = new THREE.PointLight(0xffdfb8, 18, 12, 1.5); pl.position.set(lx, 5.8, 25.8); g.add(pl); }
-      }
+      for (const lx of [12.5, 15.5, 18.5]) addLight(lx, 5.8, 25.8, 0xffdfb8, 18, 12, 1.5);
       placeCityModel('concrete_road_barrier_02', { x: 21.8, y: 0, z: 28.4 });
       placeCityModel('fire_hydrant', { x: 6.4, y: 0, z: 27.4 });
       addStreetLamp(6.2, 26.8, 0xffe4b8);
@@ -490,7 +496,7 @@ export class LevelView {
       addShrub(7.6, 24.6); addShrub(15.2, 24.6);
       for (const [sx, sz, col] of [[6.15, 25.5, 0xd438ff], [6.15, 28.0, 0x38c8ff], [23.35, 25.5, 0x38c8ff], [23.35, 28.0, 0xd438ff]] as const) {
         g.add(box(0.14, 0.45, 0.2, new THREE.MeshBasicMaterial({ color: col }), sx, 2.3, sz));
-        if (quality > 0) { const pl = new THREE.PointLight(col, 14, 10, 1.6); pl.position.set(sx + (sx < 13 ? 0.5 : -0.5), 2.3, sz); g.add(pl); }
+        addLight(sx + (sx < 13 ? 0.5 : -0.5), 2.3, sz, col, 14, 10, 1.6);
       }
       const ballGrp = new THREE.Group(); ballGrp.position.set(14.0, 2.62, 16.5);
       const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 1), std({ color: 0xe6eeff, metalness: 0.95, roughness: 0.08, emissive: 0x384460 }));
@@ -534,7 +540,7 @@ export class LevelView {
       for (const tx of [5.0, 36.2]) {
         g.add(box(0.22, 7.5, 0.22, darkSteel, tx, 3.75, fz + 0.3));
         g.add(box(0.9, 0.3, 0.2, soffitMat, tx, 7.4, fz + 0.3));
-        if (quality > 0) { const pl = new THREE.PointLight(0xdfe8ff, 26, 22, 1.4); pl.position.set(tx, 7.1, fz + 0.6); g.add(pl); }
+        addLight(tx, 7.1, fz + 0.6, 0xdfe8ff, 26, 22, 1.4);
       }
       placeCityModel('concrete_road_barrier', { x: sx - 3.6, y: 0, z: fz + 1.1, ry: 0.2 });
       placeCityModel('metal_trash_can', { x: 6.4, y: 0, z: fz + 0.9 });
@@ -595,7 +601,7 @@ export class LevelView {
       }
     } catch { /* fallback quietly if asset unavailable */ }
   }
-  update(dt = 0.016, time = 0) {
+  update(dt = 0.016, time = 0, camX = this.sim.player.x, camZ = this.sim.player.z) {
     for (const d of this.doors) {
       d.pivot.rotation.y = d.base + d.door.open * 1.62;
       d.lock.visible = !!d.door.locked;
@@ -631,10 +637,37 @@ export class LevelView {
         }
       }
     }
-    if (this.sim.powerOn !== this.lastPower) {
+    const powerChanged = this.sim.powerOn !== this.lastPower;
+    if (powerChanged) {
       this.lastPower = this.sim.powerOn;
-      for (const rl of this.roomLights) rl.light.intensity = this.lastPower ? rl.baseInt : 0;
       for (const lm of this.lampMeshes) lm.material = this.lastPower ? this.lampOnMat : this.lampOffMat;
+    }
+    if (this.lightPool.length > 0) {
+      this.poolT -= dt;
+      const moved = (camX - this.lastPoolX) * (camX - this.lastPoolX) + (camZ - this.lastPoolZ) * (camZ - this.lastPoolZ);
+      if (powerChanged || (this.poolT <= 0 && moved > 0.12)) {
+        this.lastPoolX = camX;
+        this.lastPoolZ = camZ;
+        this.poolT = 0.08;
+        const active = this.lightSources
+          .filter(s => !s.isRoom || this.sim.powerOn)
+          .map(s => ({ s, d2: (s.x - camX) * (s.x - camX) + (s.z - camZ) * (s.z - camZ) }))
+          .sort((a, b) => a.d2 - b.d2);
+        for (let i = 0; i < this.lightPool.length; i++) {
+          const pl = this.lightPool[i];
+          const item = active[i];
+          if (!item || item.d2 > 625) {
+            pl.intensity = 0;
+          } else {
+            const s = item.s;
+            pl.position.set(s.x, s.y, s.z);
+            pl.color.setHex(s.color);
+            pl.distance = s.distance;
+            pl.decay = s.decay;
+            pl.intensity = s.intensity;
+          }
+        }
+      }
     }
     if (this.bombLed && this.sim.bomb) {
       if (this.sim.bomb.defused) { (this.bombLed.material as THREE.MeshBasicMaterial).color.setHex(0x4fd07a); this.bombLed.visible = true; }

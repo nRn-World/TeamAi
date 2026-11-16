@@ -37,7 +37,7 @@ export function loadOperator(url = './models/operator/scene.gltf'): Promise<bool
     try {
       const g = await new GLTFLoader().loadAsync(url), scene = g.scene; scene.updateMatrixWorld(true);
       const bb = new THREE.Box3().setFromObject(scene), k = 1.84 / (bb.max.y - bb.min.y);
-      scene.traverse((o: any) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; if (o.material) { o.material.envMapIntensity = 0.6; if (o.material.name === 'eyes') o.material.color.setScalar(0.5); } } });
+      scene.traverse((o: any) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = !o.isSkinnedMesh; if (o.material) { o.material.envMapIntensity = 0.6; if (o.material.name === 'eyes') o.material.color.setScalar(0.5); } } });
       const wrap = new THREE.Group(); scene.scale.setScalar(k); scene.position.y = -bb.min.y * k; wrap.add(scene); wrap.updateMatrixWorld(true);
       // The rifle and the two patches are loose objects placed for the first frame of the animation: hang them on the bones they belong to.
       const clip = g.animations[0] ?? null, B = bonesOf(wrap), mixer = new THREE.AnimationMixer(wrap);
