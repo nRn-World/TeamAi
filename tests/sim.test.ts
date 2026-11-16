@@ -1,3 +1,4 @@
+import { RANKS, gearUnlockXp, isGearUnlocked, missionUnlocked, nextUncleared, campaignComplete, defaultCareer, applyMissionResult, deployRoster, normaliseCareer } from '../src/game/career';
 import { Sim, yawTo, fwd } from '../src/sim/sim';
 import type { Command } from '../src/sim/sim';
 import { parseCommand, parseCommands, shouldUseAiBrain } from '../src/sim/commands';
@@ -654,6 +655,44 @@ function roomSquad(seed: number) {
   }
   const moved = list.filter((o, i) => Math.hypot(o.x - before[i].x, o.z - before[i].z) > 0.5).length;
   ok(moved >= list.length - 1, `the squad moves again once the player walks (${moved}/${list.length} followed)`);
+}
+
+// ---- career: ranks, campaign order, ironman, injuries ----
+{
+  ok(RANKS.every((r, i) => i === 0 || r.xp > RANKS[i - 1].xp), 'ranks are ordered by XP');
+  ok(gearUnlockXp('carbine') === 0 && gearUnlockXp('shield') >= 1000, 'starting kit is free, the shield is late-game');
+  ok(!isGearUnlocked('taser', 0) && isGearUnlocked('taser', 200), 'the taser unlocks with the rank that carries it');
+
+  const cleared: Record<string, number> = {};
+  ok(missionUnlocked(cleared, 0) && !missionUnlocked(cleared, 1), 'the first operation is open, the second is locked');
+  cleared[0] = 80;
+  ok(missionUnlocked(cleared, 1) && !missionUnlocked(cleared, 2), 'clearing operation 1 opens operation 2 only');
+  ok(!campaignComplete(cleared, 3) && nextUncleared(cleared, 3) === 1, 'campaign tracks the next uncleared operation');
+
+  const c = defaultCareer();
+  const r1 = applyMissionResult(c, { win: true, mission: 0, score: 210, downed: [], ironman: false });
+  ok(r1.xpGained === 210 && r1.xpAfter === 210, 'a completed operation pays out the score as XP');
+  ok(r1.unlocked.includes('taser'), 'reaching 200 XP unlocks the taser');
+  ok(c.ops === 1, 'a completed operation counts as an operation');
+
+  const c2 = defaultCareer();
+  const r2 = applyMissionResult(c2, { win: true, mission: 0, score: 100, downed: ['Ken'], ironman: false });
+  ok(r2.injured.length === 1 && c2.roster[0].opsOut > 0, 'an officer who goes down sits out the coming operations');
+  const squad = deployRoster(c2);
+  ok(squad[0].rookie && squad[0].name.startsWith('Rookie'), 'a rookie stands in for the recovering officer');
+  ok(squad[1].rookie === false, 'fit officers still deploy');
+  const out = c2.roster[0].opsOut;
+  for (let i = 0; i < out; i++) applyMissionResult(c2, { win: true, mission: 1, score: 50, downed: [], ironman: false });
+  ok(c2.roster[0].opsOut === 0 && deployRoster(c2)[0].name === 'Ken', 'the officer comes back after the recovery countdown');
+
+  const c3 = defaultCareer();
+  c3.ironman = true;
+  const r3 = applyMissionResult(c3, { win: false, mission: 0, score: 90, downed: ['Maya'], ironman: true });
+  ok(r3.ironmanPenalty && r3.xpGained === 0 && c3.xp === 0, 'ironman: a failed operation earns nothing');
+  ok(c3.roster[1].opsOut > 0, 'ironman: injuries still come home');
+
+  const saved = normaliseCareer(JSON.parse(JSON.stringify({ xp: 640, ops: 3 })));
+  ok(saved.roster.length === 4 && saved.roster.every(r => r.opsOut === 0), 'an older save without a roster is upgraded safely');
 }
 
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);

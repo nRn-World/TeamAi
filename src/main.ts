@@ -12,6 +12,11 @@ import { parseCommands, shouldUseAiBrain, ACTION_LABEL, DIR_LABEL } from './sim/
 import { TacticalAi, AI_MODELS, AiState, AiResult } from './game/ai';
 import { LevelView, ActorView, FX, makeViewModel, TEAM_COLOR } from './game/world';
 import { PostFX } from './game/postfx';
+import {
+  RANKS, GEAR_NAMES, SQUAD, loadCareer, saveCareer, rankOf, nextRank, isGearUnlocked, gearLockLabel,
+  missionUnlocked, clearedCount, nextUncleared, campaignComplete, deployRoster, applyMissionResult,
+  type GearKey, type AppliedResult,
+} from './game/career';
 import { GameAudio, Speech } from './game/audio';
 import { Voice } from './game/voice';
 import { LocalVoice } from './ai/localvoice';
@@ -32,9 +37,8 @@ if (!String(S.lang).startsWith('en')) S.lang = 'en-US'; // English only
 if (!AI_MODELS.some(m => m.id === S.aiModel)) S.aiModel = AI_MODELS[0].id;
 const best: Record<string, number> = JSON.parse(localStorage.getItem('teamai.best') || '{}');
 const dailyBest: Record<string, number> = JSON.parse(localStorage.getItem('teamai.daily') || '{}');
-const career = { xp: 0, ops: 0, arrests: 0, ...JSON.parse(localStorage.getItem('teamai.career') || '{}') };
-const RANKS: [number, string][] = [[0, 'Rookie Officer'], [200, 'Tactical Officer'], [500, 'Senior Breacher'], [950, 'Entry Team Lead'], [1500, 'Tactical Commander'], [2400, 'Master Operator']];
-const getRank = (xp: number) => [...RANKS].reverse().find(r => xp >= r[0])![1];
+const career = loadCareer();
+const getRank = (xp: number) => rankOf(xp).name;
 if (params.has('q')) S.qual = +params.get('q')!;
 /** The ten selectable looks for the mission briefing (#brief[data-brief] in style.css). */
 const BRIEF_STYLES: { id: string; label: string }[] = [
@@ -227,6 +231,7 @@ class Game {
   // ---------------- menus ----------------
   showPlan = false;
   selectMission(i: number) {
+    if (!missionUnlocked(best, i)) i = nextUncleared(best, MISSIONS.length) ?? 0;
     this.mission = i;
     const m = MISSIONS[i];
     const LOCS = ['KISTA, STOCKHOLM', 'DOCKLANDS, HARBOR', 'CITY CENTER', 'FINANCIAL DISTRICT', 'DOWNTOWN UNDERGROUND', 'OUTSKIRTS COMPOUND'];
@@ -247,12 +252,73 @@ class Game {
     if (best[i] != null) { b.textContent = `BEST ${best[i]}/100`; b.className = ''; }
     else { b.textContent = 'UNCOMPLETED'; b.className = 'none'; }
   }
+  /** Rank unlocks, campaign progress, the roster and ironman state, all in one place. */
+  refreshCareerUi() {
+    const gl = $('gearLocks');
+    if (gl) {
+      gl.innerHTML = RANKS.filter(r => r.gear).map(r => {
+        const ok = isGearUnlocked(r.gear!, career.xp);
+        return `<div class="gearlock ${ok ? 'on' : 'off'}"><b>${GEAR_NAMES[r.gear!]}</b><span>${ok ? 'unlocked' : `LOCKED · ${gearLockLabel(r.gear!)}`}</span></div>`;
+      }).join('');
+    }
+    // loadout selects follow the rank
+    const lp = $<HTMLSelectElement>('lPrimary'), ls = $<HTMLSelectElement>('lSecondary');
+    for (const sel of [lp, ls]) {
+      if (!sel) continue;
+      for (const opt of Array.from(sel.options)) {
+        const key = opt.value as GearKey;
+        if (!opt.dataset.base) opt.dataset.base = opt.textContent || '';
+        const base = opt.dataset.base;
+        const ok = isGearUnlocked(key, career.xp);
+        opt.disabled = !ok;
+        opt.textContent = ok ? base : `${base} · LOCKED — ${gearLockLabel(key)}`;
+      }
+      const cur = sel.value as GearKey;
+      if (!isGearUnlocked(cur, career.xp)) {
+        sel.value = sel === lp ? 'carbine' : 'pistol';
+        if (sel === lp) S.primary = sel.value as PrimaryLoadout; else S.secondary = sel.value as SecondaryLoadout;
+        saveSettings();
+      }
+    }
+    // campaign progress
+    const cp = $('cmpProgress');
+    if (cp) {
+      const done = clearedCount(best), total = MISSIONS.length;
+      const next = nextUncleared(best, total);
+      cp.innerHTML = `<div class="cmpbar"><i style="width:${(done / total) * 100}%"></i></div>` +
+        `<div class="cmpline">${campaignComplete(best, total) ? 'Campaign complete — every sector secured' : `Next: ${MISSIONS[next ?? 0].name}`} · ${done}/${total} cleared</div>`;
+    }
+    const ib = $('btnIronman'), ii = $('ironmanInfo');
+    if (ib) { ib.textContent = `IRONMAN · ${career.ironman ? 'ON' : 'OFF'}`; ib.classList.toggle('on', career.ironman); }
+    if (ii) ii.textContent = career.ironman
+      ? 'No restarts, and a failed operation earns nothing. Injured officers still sit out.'
+      : 'Off: restart freely and keep the XP from every completed operation.';
+    const rl = $('rosterList');
+    if (rl) {
+      const squad = deployRoster(career);
+      rl.innerHTML = SQUAD.map((m, i) => {
+        const d = squad[i];
+        return d.rookie
+          ? `<div class="recov"><b>${m.name} · ${m.role}</b>Recovering · ${d.recovering} op${d.recovering > 1 ? 's' : ''}<i>${d.name} stands in</i></div>`
+          : `<div><b>${m.name} · ${m.role}</b>${m.perk}</div>`;
+      }).join('');
+    }
+    // locked operations on the mission strip
+    document.querySelectorAll<HTMLElement>('#mPills .mpill').forEach((el, i) => {
+      const locked = !missionUnlocked(best, i);
+      el.classList.toggle('locked', locked);
+      el.title = locked ? `Locked — complete operation ${i} first` : MISSIONS[i].name;
+    });
+  }
   updateRankDock() {
     $('mRank').textContent = `${getRank(career.xp)} · ${career.xp} XP`;
-    const cur = [...RANKS].reverse().find(r => career.xp >= r[0])!;
-    const nxt = RANKS.find(r => r[0] > career.xp);
-    const pct = nxt ? Math.min(100, ((career.xp - cur[0]) / (nxt[0] - cur[0])) * 100) : 100;
+    const cur = rankOf(career.xp);
+    const nxt = nextRank(career.xp);
+    const pct = nxt ? Math.min(100, ((career.xp - cur.xp) / (nxt.xp - cur.xp)) * 100) : 100;
     ($('mXpFill') as HTMLElement).style.width = `${Math.max(8, pct)}%`;
+    const nx = $('mNextRank');
+    if (nx) nx.textContent = nxt ? `${nxt.name} in ${Math.max(0, Math.ceil(nxt.xp - career.xp))} XP · ${nxt.note}` : 'Highest rank reached · +20 % XP';
+    this.refreshCareerUi();
   }
   buildMenu() {
     const pills = $('mPills'); pills.innerHTML = '';
@@ -260,7 +326,15 @@ class Game {
       const b = document.createElement('button'); b.className = 'mpill';
       b.title = m.name;
       b.textContent = `0${i + 1}`;
-      b.onclick = () => { this.audio.init(); this.audio.ui(); this.selectMission(i); };
+      b.onclick = () => {
+        this.audio.init(); this.audio.ui();
+        if (!missionUnlocked(best, i)) {
+          const bb = $('mBestBadge'); bb.textContent = `LOCKED · CLEAR OPERATION 0${i} FIRST`; bb.className = 'none';
+          this.audio.fail();
+          return;
+        }
+        this.selectMission(i);
+      };
       pills.appendChild(b);
     });
     this.selectMission(this.mission);
@@ -281,7 +355,11 @@ class Game {
         document.querySelectorAll<HTMLElement>('#mDiffPips [data-diff]').forEach(o => o.classList.toggle('on', o === b));
       };
     });
-    $('btnStartMission').onclick = () => { this.audio.init(); this.audio.ui(); this.isDaily = false; this.openBrief(this.mission); };
+    $('btnStartMission').onclick = () => {
+      this.audio.init(); this.audio.ui(); this.isDaily = false;
+      if (!missionUnlocked(best, this.mission)) { this.audio.fail(); return; }
+      this.openBrief(this.mission);
+    };
     const di = dailyInfo();
     const db = dailyBest[di.key];
     $('dailyBestBadge').textContent = db != null ? `${MISSIONS[di.mission].name} · BEST ${db}/100` : `${di.key} · ${MISSIONS[di.mission].name}`;
@@ -296,8 +374,24 @@ class Game {
     const done = MISSIONS.filter((_, i) => best[i] != null).length; $('mBest').textContent = `${done}/${MISSIONS.length} Ops Completed`;
     this.updateRankDock();
     ($('lPrimary') as HTMLSelectElement).value = S.primary; ($('lSecondary') as HTMLSelectElement).value = S.secondary;
-    ($('lPrimary') as HTMLSelectElement).onchange = () => { S.primary = ($('lPrimary') as HTMLSelectElement).value as PrimaryLoadout; saveSettings(); this.menu.setHeroLoadout(S.primary, S.secondary); };
-    ($('lSecondary') as HTMLSelectElement).onchange = () => { S.secondary = ($('lSecondary') as HTMLSelectElement).value as SecondaryLoadout; saveSettings(); this.menu.setHeroLoadout(S.primary, S.secondary); };
+    ($('lPrimary') as HTMLSelectElement).onchange = () => {
+      const v = ($('lPrimary') as HTMLSelectElement).value as PrimaryLoadout;
+      if (!isGearUnlocked(v as GearKey, career.xp)) { this.audio.fail(); ($('lPrimary') as HTMLSelectElement).value = S.primary; this.refreshCareerUi(); return; }
+      S.primary = v; saveSettings(); this.menu.setHeroLoadout(S.primary, S.secondary); this.audio.ui();
+    };
+    ($('lSecondary') as HTMLSelectElement).onchange = () => {
+      const v = ($('lSecondary') as HTMLSelectElement).value as SecondaryLoadout;
+      if (!isGearUnlocked(v as GearKey, career.xp)) { this.audio.fail(); ($('lSecondary') as HTMLSelectElement).value = S.secondary; this.refreshCareerUi(); return; }
+      S.secondary = v; saveSettings(); this.menu.setHeroLoadout(S.primary, S.secondary); this.audio.ui();
+    };
+    ($('btnIronman') as HTMLButtonElement).onclick = () => {
+      career.ironman = !career.ironman; saveCareer(career); this.audio.ui(); this.refreshCareerUi();
+    };
+    ($('btnFirstRunOk') as HTMLButtonElement).onclick = () => {
+      career.tutorialDone = true; saveCareer(career); show('firstrun', false); this.audio.ui();
+    };
+    if (!career.tutorialDone) show('firstrun', true);
+    this.refreshCareerUi();
     this.menu.setHeroLoadout(S.primary, S.secondary);
     const canVoice = Voice.supported || LocalVoice.supported; $('mMic').textContent = canVoice ? 'Voice Ready' : 'No Mic'; $('mMic').className = canVoice ? 'ok' : 'bad';
     document.querySelectorAll<HTMLElement>('.docknav [data-tab]').forEach(n => n.onclick = () => {
@@ -742,7 +836,11 @@ class Game {
     click('btnNewTab', () => { window.open(location.href.split('?')[0], '_blank'); });
     click('btnQuit', () => this.toMenu()); click('btnMenu', () => this.toMenu());
     click('btnAgain', () => { show('debrief', false); if (this.isDaily) { const di = dailyInfo(); this.start(di.mission, di.seed, 1, 0, Math.max(1, S.diff)); this.lock(); } else this.newRound(this.mission); });
-    click('btnNext', () => { show('debrief', false); this.isDaily = false; this.newRound((this.mission + 1) % MISSIONS.length); });
+    click('btnNext', () => {
+      const next = this.mission + 1;
+      if (next >= MISSIONS.length || !missionUnlocked(best, next)) return;
+      show('debrief', false); this.isDaily = false; this.newRound(next);
+    });
     click('btnDispatchToggle', () => { show('pause', false); this.state = 'play'; this.toggleDispatch(true); });
     click('btnCloseDispatch', () => { this.toggleDispatch(false); if (this.state === 'play') this.lock(); });
     document.querySelectorAll<HTMLElement>('#dispatchPanel [data-dp]').forEach(b => b.onclick = () => {
@@ -781,7 +879,7 @@ class Game {
       void this.ai.ensureLoaded(S.aiModel);
     };
   }
-  toMenu() { this.stopReplay(); this.dispatchPlaying = false; this.audio.stopDispatch(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
+  toMenu() { this.stopReplay(); this.dispatchPlaying = false; this.audio.stopDispatch(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); this.updateRankDock(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
   // ---------------- online co-op ----------------
   private currentMods(): CoopMods & { daily?: boolean } {
     const black = ($('modBlackout') as HTMLInputElement).checked;
@@ -1052,6 +1150,10 @@ class Game {
       this.mission = mission; this.seed = seed; this.audio.init(); void this.audio.setMenuMusic(false); this.audio.stopDispatch();
       document.body.classList.remove('menu-wait');
       this.netTargets.clear(); this.pings = []; this.breachBannerT = 0;
+      // career roster: injured officers sit out, rookies take their place (solo only)
+      if (!this.net.online && !mods.roster) {
+        mods.roster = deployRoster(career).map(o => ({ name: o.name, role: o.role, speed: o.speed, hp: o.hp }));
+      }
       const sim = this.sim = new Sim(mission, seed, diff, n, mods, preplan); if (me) sim.player = sim.players[me];
       sim.players.forEach((pl, i) => {
         if (names[i]) pl.name = names[i];
@@ -1059,7 +1161,7 @@ class Game {
       });
       this.stepPh.clear();
       this.recentSay.clear(); this.recentBarkActor.clear(); this.recentBarkKind.clear(); this.recentBarkLine.clear(); this.lastTeamShoutT = 0;
-      const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
+      const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp || career.ironman); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
       show('coopHud', sim.players.length > 1);
       show('breachBanner', false); show('ffWarn', false);
       this.post?.dispose(); this.post = null; this.postScene = null;
@@ -1854,18 +1956,44 @@ class Game {
     this.updateDebReadyUi();
     $('debTable').innerHTML = sc.parts.filter(p => p.max > 0 || p.pts < 0).map(p => `<tr><td>${p.label}</td><td class="${p.pts < 0 ? 'neg' : ''}">${p.pts}${p.max ? ' / ' + p.max : ''}</td></tr>`).join('') + `<tr class="total"><td>Total</td><td>${sc.total} / 100</td></tr>`;
     $('debNotes').innerHTML = sim.debriefNotes().map(n => `<div>• ${n}</div>`).join('');
+    // ---- career: XP, unlocks, injuries, campaign order ----
+    const solo = !this.net.online;
+    const downed = sim.officers.filter(o => o.hp <= 0 || !o.alive).map(o => o.name);
+    const res: AppliedResult = applyMissionResult(career, {
+      win, mission: this.mission, score: sc.total,
+      downed: solo ? downed : [], ironman: solo && (career.ironman || this.isDaily),
+    });
+    if (win) career.arrests += sim.stats.suspectsArrested;
+    saveCareer(career);
     if (win) {
-      career.xp += Math.max(25, sc.total); career.ops++; career.arrests += sim.stats.suspectsArrested;
-      localStorage.setItem('teamai.career', JSON.stringify(career));
       if ((best[this.mission] ?? -1) < sc.total) { best[this.mission] = sc.total; localStorage.setItem('teamai.best', JSON.stringify(best)); }
       if (this.isDaily) {
         const di = dailyInfo();
         if ((dailyBest[di.key] ?? -1) < sc.total) { dailyBest[di.key] = sc.total; localStorage.setItem('teamai.daily', JSON.stringify(dailyBest)); }
       }
-      this.updateRankDock();
-      const done = MISSIONS.filter((_, i) => best[i] != null).length; $('mBest').textContent = `${done}/${MISSIONS.length} Ops Completed`;
-      this.selectMission(this.mission);
     }
+    this.updateRankDock();
+    $('mBest').textContent = `${clearedCount(best)}/${MISSIONS.length} Ops Completed`;
+    this.selectMission(this.mission);
+    {
+      const lines: string[] = [];
+      if (res.ironmanPenalty) lines.push(`<div class="dc-line neg">IRONMAN · operation failed — no XP earned</div>`);
+      if (res.xpGained > 0) lines.push(`<div class="dc-line">+${res.xpGained} XP · ${res.xpAfter} XP total · ${rankOf(res.xpAfter).name}</div>`);
+      if (res.rankUp) lines.push(`<div class="dc-line up">RANK UP · ${res.rankUp.name} — ${res.rankUp.note}</div>`);
+      for (const g of res.unlocked) lines.push(`<div class="dc-line up">UNLOCKED · ${GEAR_NAMES[g]} — Armory › Loadout</div>`);
+      for (const inj of res.injured) lines.push(`<div class="dc-line neg">INJURED · ${inj.name} sits out ${inj.ops} op${inj.ops > 1 ? 's' : ''} — a rookie stands in</div>`);
+      for (const h of res.healed) lines.push(`<div class="dc-line">BACK ON DUTY · ${h}</div>`);
+      if (campaignComplete(best, MISSIONS.length)) lines.push(`<div class="dc-line up">CAMPAIGN COMPLETE · every sector secured — try the Daily Raid or a random raid</div>`);
+      else if (!win && best[this.mission] == null) lines.push(`<div class="dc-line">${MISSIONS[this.mission].name} is still uncleared — the next operation stays locked until it is done.</div>`);
+      $('debCareer').innerHTML = lines.join('');
+    }
+    const nextIdx = this.mission + 1;
+    const nextOk = nextIdx < MISSIONS.length && missionUnlocked(best, nextIdx);
+    const showNext = nextOk && this.net.role !== 'client' && !this.isDaily;
+    $('btnNext').classList.toggle('hidden', !showNext);
+    if (showNext) $('btnNext').textContent = `Next mission · ${MISSIONS[nextIdx].name}`;
+    // ironman: no retry of a failed operation
+    $('btnAgain').classList.toggle('hidden', this.net.role === 'client' || (career.ironman && !win && !this.isDaily));
     show('hud', false); show('debrief', true); win ? this.audio.ok() : this.audio.fail();
     this.startReplay();
   }
