@@ -35,6 +35,20 @@ const career = { xp: 0, ops: 0, arrests: 0, ...JSON.parse(localStorage.getItem('
 const RANKS: [number, string][] = [[0, 'Rookie Officer'], [200, 'Tactical Officer'], [500, 'Senior Breacher'], [950, 'Entry Team Lead'], [1500, 'Tactical Commander'], [2400, 'Master Operator']];
 const getRank = (xp: number) => [...RANKS].reverse().find(r => xp >= r[0])![1];
 if (params.has('q')) S.qual = +params.get('q')!;
+/** The ten selectable looks for the mission briefing (#brief[data-brief] in style.css). */
+const BRIEF_STYLES: { id: string; label: string }[] = [
+  { id: 'ops', label: 'Ops Board' },
+  { id: 'blueprint', label: 'Blueprint' },
+  { id: 'dossier', label: 'Dossier' },
+  { id: 'phosphor', label: 'Phosphor' },
+  { id: 'swiss', label: 'Swiss' },
+  { id: 'neon', label: 'Neon Noir' },
+  { id: 'amber', label: 'Amber TTY' },
+  { id: 'nato', label: 'Field Manual' },
+  { id: 'daylight', label: 'Daylight' },
+  { id: 'alert', label: 'Red Alert' },
+];
+
 const saveSettings = () => localStorage.setItem('teamai.settings', JSON.stringify(S));
 const dailyInfo = () => {
   const d = new Date();
@@ -104,6 +118,7 @@ class Game {
   preplan: PrePlan = { entry: 0, teamA: [], teamB: [], pins: [] };
   planTool: 'B' | 'A' | 'c2' | 'flash' = 'B';
   briefLevel: Level | null = null;
+  briefStyle = BRIEF_STYLES.some(b => b.id === localStorage.getItem('teamai.briefStyle')) ? localStorage.getItem('teamai.briefStyle')! : 'ops';
   dispatchPlaying = false;
   dispatchOn = false; isDaily = false; stress = 0; clubBeatT = 0; hbT = 0; breathT = 0; acousticT = 0; sensorPingSfxT = 0; radioCardT = 0;
   shieldHits = 0; suppressFx = 0; highReadyK = 0; lastRT = 0; speedReload = false; reloadShell = false; reloadDur = 2;
@@ -312,9 +327,34 @@ class Game {
     $('briefTitle').textContent = m.name;
     $('briefText').textContent = m.brief;
     const objMap = { clear: 'Locate & arrest or neutralize all suspects, secure all civilians.', hostage: 'Rescue the VIP bank director and secure all suspects.', bomb: 'Find and defuse the explosive device before detonation.' } as const;
+    if ($('briefTag')) $('briefTag').textContent = `Mission ${String(index + 1).padStart(2, '0')} / ${String(MISSIONS.length).padStart(2, '0')} · Goal ${m.objective}`;
     // The briefing facts live in #briefFacts; never let a missing element block the launch.
     const facts = $('briefFacts');
     if (facts) facts.innerHTML = `<div><span>Suspects</span><b>${m.suspects}</b></div><div><span>Civilians</span><b>${m.civs}</b></div><div class="fact-obj"><span>Objective</span><b>${objMap[m.objective]}</b></div>`;
+
+    // Intel that is actually in the level, so pre-planning is not guesswork.
+    const bl = this.briefLevel;
+    const intel = $('briefIntel');
+    if (intel && bl) {
+      const locked = bl.doors.filter(d => d.locked).length;
+      const names = bl.entries.map(e => e.name);
+      const rows: [string, string][] = [
+        ['Ways in', names.length > 2 ? `${names.length} entries — pick one below` : `${names.length} — ${names.join(' · ')}`],
+        ['Doors', `${bl.doors.length}${locked ? ` · ${locked} locked (C2 or force)` : ' · none locked'}`],
+        ['Glass', bl.windows.length ? `${bl.windows.length} windows — FiberCam can scout them` : 'no exterior glass'],
+        ['Power', bl.breaker ? 'Breaker panel — cut it and the site goes dark' : 'mains live'],
+      ];
+      if (bl.bomb) rows.push(['Device', `Explosive on site · ${Math.ceil(bl.bomb.time)} s on the clock`]);
+      intel.innerHTML = rows.map(([k, v]) => `<div><b>${k}</b><span>${v}</span></div>`).join('');
+    }
+
+    // Briefing look picker — ten styles, remembered between sessions.
+    const stylesBox = $('briefStyles');
+    if (stylesBox) {
+      stylesBox.innerHTML = BRIEF_STYLES.map((st, i) => `<button type="button" class="bsty ${st.id === this.briefStyle ? 'on' : ''}" data-bsty="${st.id}" title="${st.label}">${i + 1} ${st.label}</button>`).join('');
+      stylesBox.querySelectorAll<HTMLElement>('.bsty').forEach(b => { b.onclick = () => { this.audio.ui(); this.applyBriefStyle(b.dataset.bsty!); }; });
+    }
+    this.applyBriefStyle(this.briefStyle, false);
 
     // Entry points selector
     const entriesBox = $('briefEntries');
@@ -325,6 +365,8 @@ class Game {
         this.audio.ui();
         this.preplan.entry = +btn.dataset.ep!;
         entriesBox.querySelectorAll('.entry-btn').forEach(o => o.classList.toggle('on', o === btn));
+        const hud = $('briefEntryHud');
+        if (hud) hud.textContent = `Entry · ${entries[this.preplan.entry ?? 0]?.name ?? ''}`;
         this.drawBriefPlan();
       };
     });
@@ -333,36 +375,63 @@ class Game {
       b.classList.toggle('on', b.dataset.pt === this.planTool);
     });
 
+    const hud = $('briefEntryHud');
+    if (hud) hud.textContent = `Entry · ${entries[this.preplan.entry ?? 0]?.name ?? ''}`;
     this.drawBriefPlan();
     show('menu', false);
     show('brief', true);
+  }
+  /** Switches the look of the briefing screen (see BRIEF_STYLES). */
+  applyBriefStyle(id: string, save = true) {
+    if (!BRIEF_STYLES.some(b => b.id === id)) id = 'ops';
+    this.briefStyle = id;
+    const el = document.getElementById('brief');
+    if (el) el.dataset.brief = id;
+    if (save) localStorage.setItem('teamai.briefStyle', id);
+    document.querySelectorAll<HTMLElement>('#briefStyles .bsty').forEach(b => b.classList.toggle('on', b.dataset.bsty === id));
+    this.drawBriefPlan();
+  }
+  /** Reads one of the --map-* colours the briefing look defines for the floorplan. */
+  private briefVar(name: string, fallback: string) {
+    const el = document.getElementById('brief');
+    const v = el ? getComputedStyle(el).getPropertyValue(name).trim() : '';
+    return v || fallback;
   }
   drawBriefPlan() {
     const l = this.briefLevel; if (!l) return;
     const c = $<HTMLCanvasElement>('briefMap'), k = 9;
     c.width = l.w * k; c.height = l.h * k;
     const g = c.getContext('2d')!;
-    g.fillStyle = '#0b1118'; g.fillRect(0, 0, c.width, c.height);
-    g.strokeStyle = 'rgba(120,160,200,.08)'; g.lineWidth = 1; g.beginPath();
+    const col = {
+      bg: this.briefVar('--map-bg', '#0b1118'), grid: this.briefVar('--map-grid', 'rgba(120,160,200,.08)'),
+      floor: this.briefVar('--map-floor', '#152130'), wall: this.briefVar('--map-wall', '#9db4c8'),
+      door: this.briefVar('--map-door', '#f2c14e'), win: this.briefVar('--map-win', '#68b6e0'),
+      prop: this.briefVar('--map-prop', '#263645'), entry: this.briefVar('--map-entry', '#4fd07a'),
+      bomb: this.briefVar('--map-bomb', '#ff3b3b'), a: this.briefVar('--map-a', '#ff5a5a'),
+      b: this.briefVar('--map-b', '#4a9eff'), ink: this.briefVar('--map-ink', '#7f93a8'),
+    };
+    g.fillStyle = col.bg; g.fillRect(0, 0, c.width, c.height);
+    g.strokeStyle = col.grid; g.lineWidth = 1; g.beginPath();
     for (let x = 0; x <= l.w; x += 2) { g.moveTo(x * k + 0.5, 0); g.lineTo(x * k + 0.5, c.height); }
     for (let z = 0; z <= l.h; z += 2) { g.moveTo(0, z * k + 0.5); g.lineTo(c.width, z * k + 0.5); }
     g.stroke();
     for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) {
       const v = l.cells[z * l.w + x]; if (v === 0) continue;
-      g.fillStyle = v === WALL ? '#9db4c8' : v === DOOR ? '#f2c14e' : v === WINDOW ? '#68b6e0' : v === LOW || v === HIGH ? '#263645' : '#152130';
+      g.fillStyle = v === WALL ? col.wall : v === DOOR ? col.door : v === WINDOW ? col.win : v === LOW || v === HIGH ? col.prop : col.floor;
       g.fillRect(x * k, z * k, k, k);
     }
     // Entry points
     l.entries.forEach((ep, idx) => {
       const active = idx === (this.preplan.entry ?? 0);
-      g.fillStyle = active ? '#4ade80' : 'rgba(148,163,184,0.45)';
+      g.globalAlpha = active ? 1 : 0.55; g.fillStyle = active ? col.entry : col.ink;
       g.beginPath(); g.arc(ep.x * k, ep.z * k, active ? k * 0.85 : k * 0.55, 0, 6.28); g.fill();
       if (active) {
-        g.strokeStyle = '#ecfdf5'; g.lineWidth = 1.5;
+        g.strokeStyle = col.entry; g.lineWidth = 1.5;
         g.beginPath(); g.arc(ep.x * k, ep.z * k, k * 1.15, 0, 6.28); g.stroke();
       }
     });
-    if (l.bomb) { g.fillStyle = '#ff3b3b'; g.beginPath(); g.arc(l.bomb.x * k, l.bomb.z * k, k * 0.7, 0, 6.28); g.fill(); }
+    g.globalAlpha = 1;
+    if (l.bomb) { g.fillStyle = col.bomb; g.beginPath(); g.arc(l.bomb.x * k, l.bomb.z * k, k * 0.7, 0, 6.28); g.fill(); }
     // Pre-plan routes
     const drawRoute = (pts: { x: number; z: number }[] | undefined, col: string) => {
       if (!pts?.length) return;
@@ -373,8 +442,8 @@ class Game {
       const last = pts[pts.length - 1];
       g.fillStyle = col; g.beginPath(); g.arc(last.x * k, last.z * k, 4, 0, 6.28); g.fill();
     };
-    drawRoute(this.preplan.teamB, '#4a9eff');
-    drawRoute(this.preplan.teamA, '#f87171');
+    drawRoute(this.preplan.teamB, col.b);
+    drawRoute(this.preplan.teamA, col.a);
     for (const mk of this.preplan.pins ?? []) {
       g.fillStyle = mk.kind === 'c2' ? '#f59e0b' : '#38bdf8';
       g.beginPath(); g.arc(mk.x * k, mk.z * k, 5, 0, 6.28); g.fill();
@@ -972,6 +1041,13 @@ class Game {
     });
     document.addEventListener('contextmenu', e => { if (this.state === 'play') e.preventDefault(); });
     document.addEventListener('mouseup', e => { if (e.button === 0) { this.mouseDown = false; this.semiLock = false; } if (e.button === 2) this.ads = false; });
+    // Flight through the briefing looks with 1-0 while the briefing is open.
+    document.addEventListener('keydown', e => {
+      if (this.typing || $('brief').classList.contains('hidden')) return;
+      const m = /^Digit([0-9])$/.exec(e.code); if (!m) return;
+      const st = BRIEF_STYLES[+m[1] === 0 ? 9 : +m[1] - 1]; if (!st) return;
+      e.preventDefault(); this.applyBriefStyle(st.id); this.audio.ui();
+    });
     document.addEventListener('keydown', e => {
       if (this.typing) { if (e.code === 'Enter') { const inp = $<HTMLInputElement>('cmdinput'); const v = inp.value.trim(); inp.value = ''; this.setTyping(false); if (v) this.heard(v, false); e.preventDefault(); } else if (e.code === 'Escape') this.setTyping(false); return; }
       if (e.code === 'Escape') { if (this.dispatchOn) { this.toggleDispatch(false); this.lock(); return; } if (this.wheelOn) { this.toggleWheel(false); this.lock(); return; } if (!$('help').classList.contains('hidden') || !$('settings').classList.contains('hidden')) { show('help', false); show('settings', false); } else if (this.state === 'pause') this.resume(); else if (this.state === 'play' && AUTO) this.pause(); return; }
