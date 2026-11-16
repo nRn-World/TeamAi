@@ -48,16 +48,16 @@ const SECTOR_LOCS = ['KISTA SECTOR · SE', 'DOCKLANDS · HARBOR', 'CITY CENTER �
 const AIMPOS = [[-0.113, 0.036, 0, 0, 0], [-0.0936, 0.0813, -0.02, 0, 0]];
 // the challenges the player and the officers yell; one is picked at random each time
 const SHOUTS = ['Police! Drop the weapon!', 'Police! Get on the ground!', 'Police! Hands up! Now!', 'Get down! Get down on the ground!', 'Drop it! Drop it now!', 'Show me your hands!'];
-interface WeaponSpec { name: string; mag: number; res: number; rate: number; dmg: number; auto: boolean; spread: number; reload: number; kick: number; pellets?: number; nonLethal?: boolean; taser?: boolean; shield?: boolean }
+interface WeaponSpec { name: string; mag: number; res: number; rate: number; dmg: number; auto: boolean; spread: number; reload: number; kick: number; pellets?: number; nonLethal?: boolean; taser?: boolean; shield?: boolean; gun?: 'rifle' | 'pistol' | 'shotgun'; canSemi?: boolean }
 const PRIMARY_SPECS: Record<PrimaryLoadout, WeaponSpec> = {
-  carbine: { name: 'M4 CARBINE', mag: 30, res: 150, rate: 0.095, dmg: 34, auto: true, spread: 0.004, reload: 2.0, kick: 0.011 },
-  shotgun: { name: 'M870 SHOTGUN', mag: 8, res: 40, rate: 0.58, dmg: 16, pellets: 8, auto: false, spread: 0.045, reload: 2.2, kick: 0.038 },
-  beanbag: { name: 'BEANBAG SHOTGUN', mag: 8, res: 40, rate: 0.55, dmg: 8, pellets: 1, nonLethal: true, auto: false, spread: 0.012, reload: 2.1, kick: 0.024 },
-  shield: { name: 'SHIELD + PISTOL', mag: 15, res: 90, rate: 0.16, dmg: 26, auto: false, spread: 0.01, reload: 1.5, kick: 0.015, shield: true },
+  carbine: { name: 'M4 CARBINE', mag: 30, res: 150, rate: 0.095, dmg: 34, auto: true, spread: 0.004, reload: 2.0, kick: 0.011, gun: 'rifle', canSemi: true },
+  shotgun: { name: 'M870 SHOTGUN', mag: 8, res: 40, rate: 0.58, dmg: 16, pellets: 8, auto: false, spread: 0.045, reload: 2.2, kick: 0.038, gun: 'shotgun' },
+  beanbag: { name: 'BEANBAG SHOTGUN', mag: 8, res: 40, rate: 0.55, dmg: 8, pellets: 1, nonLethal: true, auto: false, spread: 0.012, reload: 2.1, kick: 0.024, gun: 'shotgun' },
+  shield: { name: 'SHIELD + PISTOL', mag: 15, res: 90, rate: 0.16, dmg: 26, auto: false, spread: 0.01, reload: 1.5, kick: 0.015, shield: true, gun: 'pistol' },
 };
 const SECONDARY_SPECS: Record<SecondaryLoadout, WeaponSpec> = {
-  pistol: { name: 'GLOCK 17 SWAT', mag: 17, res: 68, rate: 0.15, dmg: 26, auto: false, spread: 0.008, reload: 1.4, kick: 0.016 },
-  taser: { name: 'X26 TASER', mag: 2, res: 12, rate: 0.45, dmg: 4, auto: false, spread: 0.006, reload: 1.5, kick: 0.008, nonLethal: true, taser: true },
+  pistol: { name: 'GLOCK 17 SWAT', mag: 17, res: 68, rate: 0.15, dmg: 26, auto: false, spread: 0.008, reload: 1.4, kick: 0.016, gun: 'pistol' },
+  taser: { name: 'X26 TASER', mag: 2, res: 12, rate: 0.45, dmg: 4, auto: false, spread: 0.006, reload: 1.5, kick: 0.008, nonLethal: true, taser: true, gun: 'pistol' },
 };
 const ORDER_LABEL: Record<string, string> = {
   follow: 'FOLLOWING', hold: 'HOLDING', move: 'MOVING', cover: 'COVERING YOU',
@@ -86,8 +86,9 @@ class Game {
   private lobbyVoiceTimer = 0;
   state: 'menu' | 'play' | 'pause' | 'end' = 'menu'; mission = 0; seed = 1;
   yaw = 0; pitch = 0; keys = new Set<string>(); mouseDown = false; eye = 1.62; bob = 0; stepAcc = 0; recoil = 0; vmKick = 0; sway = new THREE.Vector2();
-  weapon = 0; ammo = [30, 15]; reserve = [150, 60]; fireCd = 0; reloadT = 0; semiLock = false; torchOn = true; mapOn = true;
+  weapon = 0; ammo = [30, 15]; reserve = [150, 60]; fireCd = 0; reloadT = 0; semiLock = false; torchOn = true; laserOn = true; fireMode: 'auto' | 'semi' = 'auto'; mapOn = true;
   nvgOn = false; bodycamOn = false; wheelOn = false; nvgLight: THREE.AmbientLight | null = null; ambLight: THREE.AmbientLight | null = null;
+  recoilPitch = 0; recoilRoll = 0; camShake = 0; hitHead = false;
   pipCam = new THREE.PerspectiveCamera(78, 240 / 146, 0.08, 55);
   pipOn = false; pipActorIdx = 0; pipTimer = 0; pipManual = false;
   dispatchOn = false; isDaily = false; stress = 0; clubBeatT = 0; hbT = 0; radioCardT = 0;
@@ -99,7 +100,13 @@ class Game {
     const sec = this.net.online ? this.lobbySec : S.secondary;
     return [PRIMARY_SPECS[prim] ?? PRIMARY_SPECS.carbine, SECONDARY_SPECS[sec] ?? SECONDARY_SPECS.pistol];
   }
-  selTeam: Team | 'ALL' = 'ALL'; lastTeam: Team | 'ALL' = 'ALL'; lastWho: number | null = null; typing = false; dmgFx = 0; hitFx = 0; hudT = 0; last = performance.now(); mapBase: HTMLCanvasElement | null = null; endT = 0; parsedT = 0;
+  private activeGun(w = this.weaponSpecs[this.weapon]): 'rifle' | 'pistol' | 'shotgun' {
+    return w.gun ?? (this.weapon === 0 && !w.shield ? 'rifle' : 'pistol');
+  }
+  private isWeaponAuto(w = this.weaponSpecs[this.weapon]): boolean {
+    return w.auto && (!w.canSemi || this.fireMode === 'auto');
+  }
+  selTeam: Team | 'ALL' = 'ALL'; lastTeam: Team | 'ALL' = 'ALL'; lastWho: number | null = null; typing = false; dmgFx = 0; hitFx = 0; hudT = 0; mapT = 0; censorT = 0; last = performance.now(); mapBase: HTMLCanvasElement | null = null; endT = 0; parsedT = 0;
 
   constructor() {
     const canvas = $<HTMLCanvasElement>('c');
@@ -143,10 +150,18 @@ class Game {
     }
   }
   resize() {
-    const w = innerWidth, h = innerHeight; this.renderer.setPixelRatio(Math.min(devicePixelRatio, S.qual > 1 ? 2 : S.qual ? 1.5 : 1)); this.renderer.setSize(w, h, false);
+    const w = innerWidth, h = innerHeight;
+    const cap = S.qual >= 3 ? 2 : S.qual === 2 ? 1.5 : S.qual === 1 ? 1.15 : 1;
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, cap));
+    this.renderer.setSize(w, h, false);
     this.camera.aspect = this.viewCam.aspect = w / h; this.camera.updateProjectionMatrix(); this.viewCam.updateProjectionMatrix();
   }
   applySettings() {
+    ActorView.detailed = S.qual > 0;
+    this.renderer.shadowMap.enabled = S.qual >= 2;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.menu.setQuality(S.qual);
+    if (this.scene && S.qual > 0) this.scene.environmentIntensity = S.qual >= 3 ? 0.36 : S.qual === 2 ? 0.28 : 0.18;
     this.audio.setVolume(S.vol); this.speech.enabled = !!S.tts; this.speech.lang = S.lang;
     const local = LocalVoice.supported && ((S.asr === 'local' && !this.localVoice.failed) || !Voice.supported), nv = local ? this.localVoice : this.webVoice;
     if (nv !== this.voice) { this.voice.stop(); this.voice = nv; }
@@ -676,7 +691,7 @@ class Game {
       show('coopHud', sim.players.length > 1);
       show('breachBanner', false); show('ffWarn', false);
       this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x070a10); this.scene.fog = new THREE.FogExp2(0x070a10, 0.016);
-      if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = 0.28; }
+      if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = S.qual >= 3 ? 0.36 : S.qual === 2 ? 0.28 : 0.18; }
       this.ambLight = new THREE.AmbientLight(0x9fb0c8, (mods.blackout ? 0.1 : (S.qual ? 0.45 : 1.1)));
       this.nvgLight = new THREE.AmbientLight(0x6aff99, 0);
       this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(0xb8c8ff, 0x2a241c, mods.blackout ? 0.18 : 0.55));
@@ -689,8 +704,8 @@ class Game {
       if (!mods.pistolOnly) sim.player.shield = (this.net.online ? this.lobbyPrim : S.primary) === 'shield';
       else sim.player.shield = false;
       const ws = this.weaponSpecs;
-      this.yaw = sim.player.yaw; this.pitch = 0; this.weapon = 0; this.ammo = [ws[0].mag, ws[1].mag]; this.reserve = [ws[0].res, ws[1].res]; this.reloadT = 0; this.fireCd = 0; this.recoil = 0; this.dmgFx = 0; this.endT = 0;
-      this.nvgOn = false; this.bodycamOn = !!S.stream; this.wheelOn = false; this.pipOn = false; this.pipManual = false; this.pipTimer = 0; this.dispatchOn = false; this.stress = 0; this.clubBeatT = 0; this.hbT = 0; this.radioCardT = 0;
+      this.yaw = sim.player.yaw; this.pitch = 0; this.weapon = 0; this.ammo = [ws[0].mag, ws[1].mag]; this.reserve = [ws[0].res, ws[1].res]; this.reloadT = 0; this.fireCd = 0; this.recoil = 0; this.recoilPitch = 0; this.recoilRoll = 0; this.camShake = 0; this.dmgFx = 0; this.hitFx = 0; this.hitHead = false; this.endT = 0;
+      this.nvgOn = false; this.bodycamOn = !!S.stream; this.wheelOn = false; this.pipOn = false; this.pipManual = false; this.pipTimer = 0; this.dispatchOn = false; this.stress = 0; this.clubBeatT = 0; this.hbT = 0; this.radioCardT = 0; this.fireMode = 'auto';
       this.stopReplay();
       show('nvg', false); show('bodycam', this.bodycamOn); show('wheel', false); show('pipFrame', false); show('dispatchPanel', false); show('radioCard', false); $('bcCensor').innerHTML = '';
       $('bcSector').textContent = SECTOR_LOCS[mission] ?? 'SECTOR UNKNOWN';
@@ -724,7 +739,7 @@ class Game {
       const k = 0.0022 * S.sens * (1 - this.aimK * 0.5); this.yaw -= e.movementX * k; this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * k));
       this.sway.x += e.movementX * 0.00012; this.sway.y += e.movementY * 0.00012;
     });
-    document.addEventListener('mousedown', e => { if (this.state !== 'play' || !document.pointerLockElement) return; if (e.button === 0) { this.mouseDown = true; const sp = this.sim?.player; const ws = this.weaponSpecs[this.weapon]; if (sp?.alive && !sp.downed && !this.typing && !this.wheelOn && this.fireCd <= 0 && this.reloadT <= 0 && this.ammo[this.weapon] > 0 && !this.semiLock && !this.preShot && !ws.taser) { this.preShot = true; this.audio.shot(0, 0, true, this.weapon === 0 && !ws.shield ? 'rifle' : 'pistol'); } } if (e.button === 1) { e.preventDefault(); this.ping(); } if (e.button === 2) this.ads = true; });
+    document.addEventListener('mousedown', e => { if (this.state !== 'play' || !document.pointerLockElement) return; if (e.button === 0) { this.mouseDown = true; const sp = this.sim?.player; const ws = this.weaponSpecs[this.weapon]; if (sp?.alive && !sp.downed && !this.typing && !this.wheelOn && this.fireCd <= 0 && this.reloadT <= 0 && this.ammo[this.weapon] > 0 && !this.semiLock && !this.preShot && !ws.taser) { this.preShot = true; this.audio.shot(0, 0, true, this.activeGun(ws)); } } if (e.button === 1) { e.preventDefault(); this.ping(); } if (e.button === 2) this.ads = true; });
     document.addEventListener('contextmenu', e => { if (this.state === 'play') e.preventDefault(); });
     document.addEventListener('mouseup', e => { if (e.button === 0) { this.mouseDown = false; this.semiLock = false; } if (e.button === 2) this.ads = false; });
     document.addEventListener('keydown', e => {
@@ -758,13 +773,23 @@ class Game {
       case 'KeyG': this.throwBang(); break;
       case 'KeyV': if (S.ptt && S.mic) { if (this.voice.state !== 'listening' && this.voice.state !== 'starting') { this.voice.stop(); this.voice.start(); } if (!this.voice.held) $('heard').textContent = ''; this.voice.press(); } else this.shout(true); break;
       case 'KeyQ': this.shout(true); break;
-      case 'KeyT': this.torchOn = !this.torchOn; this.audio.dry(); break;
+      case 'KeyT': this.torchOn = !this.torchOn; this.audio.dry(); this.updateHud(true); break;
+      case 'KeyL': this.laserOn = !this.laserOn; this.audio.dry(); this.updateHud(true); break;
+      case 'KeyI': case 'Backquote': {
+        const w = this.weaponSpecs[this.weapon];
+        if (w.canSemi) {
+          this.fireMode = this.fireMode === 'auto' ? 'semi' : 'auto';
+          this.audio.fireMode();
+          this.updateHud(true);
+        }
+        break;
+      }
       case 'KeyM': this.mapOn = !this.mapOn; break;
       case 'KeyC': if (sim.player.prone) { sim.player.prone = false; sim.player.crouch = true; } else sim.player.crouch = !sim.player.crouch; break;
       case 'KeyZ': sim.player.prone = !sim.player.prone; sim.player.crouch = false; break;
       case 'KeyX': this.slow = !this.slow; this.audio.ui(); break;
       case 'Space': { const pl = sim.player; if (pl.prone || pl.crouch) { pl.prone = false; pl.crouch = false; } else if (pl.jumpY <= 0 && pl.alive) this.jumpV = 3.4; break; }
-      case 'Digit1': case 'Digit2': { const w = code === 'Digit1' ? 0 : 1; if (w !== this.weapon) { this.weapon = w; this.reloadT = 0; this.fireCd = 0.35; this.vmKick = -0.5; this.audio.draw(); if (!this.weaponSpecs[w].shield) this.arms.draw(); } break; }
+      case 'Digit1': case 'Digit2': { const w = code === 'Digit1' ? 0 : 1; if (w !== this.weapon) { this.weapon = w; this.reloadT = 0; this.fireCd = 0.35; this.vmKick = -0.5; this.audio.draw(); if (!this.weaponSpecs[w].shield) this.arms.draw(); this.updateHud(true); } break; }
       case 'Tab': this.selTeam = this.selTeam === 'ALL' ? 'A' : this.selTeam === 'A' ? 'B' : 'ALL'; this.audio.ui(); this.updateHud(true); break;
       case 'Enter': this.setTyping(true); break;
       default: if (quick[code]) { const q = quick[code]; this.exec(q === 'there' ? { team: this.selTeam, action: 'move', dir: 'there' } : { team: this.selTeam, action: q }, true); }
@@ -978,18 +1003,20 @@ class Game {
     const moving = this.keys.has('KeyW') || this.keys.has('KeyA') || this.keys.has('KeyS') || this.keys.has('KeyD');
     const pellets = w.pellets ?? 1;
     const ak = this.aimK;
+    const semiMul = w.canSemi && this.fireMode === 'semi' ? 0.52 : 1;
+    const laserMul = this.laserOn && !w.taser ? 0.72 : 1;
     const moveMul = moving ? (2.6 - ak * 1.5) : 1;
     const crouchMul = p.crouch ? 0.6 : 1;
     const adsSpreadMul = pellets > 1 ? (1 - ak * 0.42) : (1 - ak * 0.96);
     const adsRecoilMul = 1 - ak * 0.78;
     const firstAimedShot = pellets === 1 && ak > 0.82 && this.recoil <= w.kick * 1.15;
-    const sp = firstAimedShot ? 0 : (w.spread * moveMul * crouchMul * adsSpreadMul + this.recoil * 0.25 * adsRecoilMul);
+    const sp = firstAimedShot ? 0 : (w.spread * semiMul * laserMul * moveMul * crouchMul * adsSpreadMul + this.recoil * 0.25 * adsRecoilMul);
 
     // Sync camera world matrix so ADS shots originate at the exact optical screen center
     const bobScale = 1 - ak * 0.85;
     const ox = p.x, oy = this.eye + Math.sin(this.bob * 2) * 0.022 * bobScale, oz = p.z;
     this.camera.position.set(ox, oy, oz);
-    this.camera.rotation.set(this.pitch, this.yaw, !p.alive ? 0.5 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale));
+    this.camera.rotation.set(Math.min(1.45, this.pitch + this.recoilPitch), this.yaw, (!p.alive ? 0.5 : p.downed ? 0.22 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale)) + this.recoilRoll);
     this.camera.updateMatrixWorld();
     const baseDir = new THREE.Vector3();
     this.camera.getWorldDirection(baseDir);
@@ -1005,16 +1032,27 @@ class Game {
       if (this.mirror) { this.net.send({ t: 'fire', o: [ox, oy, oz], d: [d.x, d.y, d.z], dmg: w.dmg, nl: !!w.nonLethal, ts: !!w.taser }); }
       else sim.fire(p, ox, oy, oz, d.x, d.y, d.z, w.dmg, { nonLethal: !!w.nonLethal, taser: !!w.taser });
     }
-    if (this.mirror && !this.preShot && !w.taser) this.audio.shot(0, 0, true, this.weapon === 0 && !w.shield ? 'rifle' : 'pistol');
+    const gunType = this.activeGun(w);
+    if (this.mirror && !this.preShot && !w.taser) this.audio.shot(0, 0, true, gunType);
     this.preShot = false;
-    const kickScale = 1 - ak * 0.35;
+    const kickScale = (1 - ak * 0.35) * semiMul;
     this.stress = Math.min(1, this.stress + 0.14);
     this.recoil = Math.min(0.11, this.recoil + w.kick * kickScale);
-    this.pitch = Math.min(1.45, this.pitch + w.kick * 0.55 * kickScale);
-    this.yaw += (Math.random() - 0.5) * w.kick * 0.5 * (1 - ak * 0.6);
+    this.pitch = Math.min(1.45, this.pitch + w.kick * 0.38 * kickScale);
+    this.recoilPitch = Math.min(0.08, this.recoilPitch + w.kick * (gunType === 'shotgun' ? 1.8 : 1.15) * kickScale);
+    this.recoilRoll += (Math.random() - 0.5) * w.kick * 0.85 * (1 - ak * 0.5);
+    this.yaw += (Math.random() - 0.5) * w.kick * 0.42 * (1 - ak * 0.6);
+    this.camShake = Math.max(this.camShake, gunType === 'shotgun' ? 0.014 : 0.004);
     this.vmKick = 1;
     if (!w.shield) this.arms.fire();
-    if (!w.taser) { this.vm.flash.visible = true; this.vm.flash.material.rotation = Math.random() * 6; setTimeout(() => { this.vm.flash.visible = false; }, 45); }
+    if (!w.taser) {
+      this.vm.flash.visible = true; this.vm.flash.material.rotation = Math.random() * 6; setTimeout(() => { this.vm.flash.visible = false; }, 45);
+      // Eject brass shell / shotgun hull to the right
+      const f = fwd(this.yaw), rx = -f.z, rz = f.x;
+      const hull = gunType === 'shotgun';
+      const col = hull ? (w.nonLethal ? 0x2f85d8 : 0xb82424) : 0xd8a840;
+      this.fx.shell(ox + f.x * 0.32 + rx * 0.14, oy - 0.1, oz + f.z * 0.32 + rz * 0.14, rx * (1.8 + Math.random() * 0.9) + (Math.random() - 0.5) * 0.4, 1.3 + Math.random() * 0.8, rz * (1.8 + Math.random() * 0.9) + (Math.random() - 0.5) * 0.4, col, hull);
+    }
   }
 
   // ---------------- events ----------------
@@ -1030,17 +1068,26 @@ class Game {
           a.set(p.x + r.x * 0.5 - r.z * (0.12 * (1 - ak)), this.eye - (0.12 - 0.07 * ak), p.z + r.z * 0.5 + r.x * (0.12 * (1 - ak)));
         } else this.views.get(e.by)?.muzzle();
         fx.tracer(a, b); const pn = this.pan(e.x, e.z);
+        const muffle = !own && !sim.los(p.x, p.z, e.x, e.z);
         if (own && this.preShot) this.preShot = false;
-        else if (!(own && this.mirror)) this.audio.shot(pn.d, pn.pan, own, own ? (this.weapon === 0 && !this.weaponSpecs[0].shield ? 'rifle' : 'pistol') : e.by.kind === 'suspect' ? 'smg' : 'rifle');
+        else if (!(own && this.mirror)) this.audio.shot(pn.d, pn.pan, own, own ? this.activeGun() : e.by.kind === 'suspect' ? 'smg' : 'rifle', muffle);
         fx.flashAt(a.x, a.y, a.z, own ? 14 : 22);
+        fx.burst(a.x, a.y, a.z, 2, 0x9aa4b0, 0.9, -0.3, 0.35);
         if (e.hit === 'wall') {
-          fx.burst(e.x2, e.y2, e.z2, 7, 0xb8b0a0, 2.2, 6, 0.35);
-          fx.burst(e.x2, e.y2, e.z2, 2, 0xffd080, 4, 9, 0.15);
+          fx.burst(e.x2, e.y2, e.z2, 9, 0xb8b0a0, 2.5, 6, 0.38);
+          fx.burst(e.x2, e.y2, e.z2, 4, 0xffd080, 4.6, 9, 0.18);
           const dx = e.x2 - e.x, dy = e.y2 - e.y, dz = e.z2 - e.z, len = Math.hypot(dx, dy, dz) || 1;
           fx.hole(e.x2 - (dx / len) * 0.012, e.y2 - (dy / len) * 0.012, e.z2 - (dz / len) * 0.012);
           const q = this.pan(e.x2, e.z2); if (q.d < 12) this.audio.impact(q.d, q.pan);
         }
-        else if (e.hit === 'actor') fx.burst(e.x2, e.y2, e.z2, 12, 0x8a0f0f, 2.4, 7, 0.5);
+        else if (e.hit === 'actor') {
+          fx.burst(e.x2, e.y2, e.z2, e.head ? 20 : 12, 0x8a0f0f, e.head ? 3.1 : 2.4, 7, 0.55);
+          if (own) {
+            this.hitFx = 1;
+            this.hitHead = !!(e.head || e.kill);
+            this.audio.hitmark(!!e.head, !!e.kill);
+          }
+        }
         break;
       }
       case 'taser': {
@@ -1050,7 +1097,7 @@ class Game {
         fx.burst(e.x2, e.y2, e.z2, 10, 0x60e0ff, 2.4, 7, 0.45);
         break;
       }
-      case 'c2': { const q = this.pan(e.x, e.z); this.audio.c2(q.d, q.pan); fx.flashAt(e.x, 1.2, e.z, 600, 0.12, 0xffa848); fx.burst(e.x, 1.1, e.z, 45, 0xffb860, 6, 4, 0.6); fx.burst(e.x, 1.1, e.z, 25, 0x8a6d48, 4, 6, 0.9); break; }
+      case 'c2': { const q = this.pan(e.x, e.z); this.audio.c2(q.d, q.pan); if (q.d < 14) this.camShake = Math.max(this.camShake, (1 - q.d / 14) * 0.045); fx.flashAt(e.x, 1.2, e.z, 600, 0.12, 0xffa848); fx.burst(e.x, 1.1, e.z, 45, 0xffb860, 6, 4, 0.6); fx.burst(e.x, 1.1, e.z, 25, 0x8a6d48, 4, 6, 0.9); break; }
       case 'glass': { const q = this.pan(e.x, e.z); this.audio.glass(q.d, q.pan); fx.burst(e.x, 1.5, e.z, 28, 0xb8e8ff, 4.2, 7, 0.7); break; }
       case 'break': {
         const q = this.pan(e.x, e.z);
@@ -1093,7 +1140,7 @@ class Game {
         if (o.kind === 'officer' && !e.shout) this.audio.radioSquelch(ms ? Math.min(1.8, ms / 1000) : 0.4);
         break;
       }
-      case 'bang': { const q = this.pan(e.x, e.z); this.audio.bang(q.d, q.pan, p.flash); fx.flashAt(e.x, 1, e.z, 900, 0.12, 0xffffff); fx.burst(e.x, 0.3, e.z, 60, 0xffffff, 7, 3, 0.5); fx.burst(e.x, 0.3, e.z, 30, 0x999999, 2, -0.5, 1.6); break; }
+      case 'bang': { const q = this.pan(e.x, e.z); this.audio.bang(q.d, q.pan, p.flash); if (q.d < 12) this.camShake = Math.max(this.camShake, (1 - q.d / 12) * 0.032); fx.flashAt(e.x, 1, e.z, 900, 0.12, 0xffffff); fx.burst(e.x, 0.3, e.z, 60, 0xffffff, 7, 3, 0.5); fx.burst(e.x, 0.3, e.z, 30, 0x999999, 2, -0.5, 1.6); break; }
       case 'throw': this.audio.step(0.3); break;
       case 'shout': if (e.a !== p) {
         const now = performance.now(), prevT = this.recentSay.get(SHOUTS[0]) ?? 0;
@@ -1197,7 +1244,8 @@ class Game {
       }
       case 'end': this.endT = 2.2; this.log(e.win ? 'The building is secure. Good work!' : 'You are down. The operation is aborted.', e.win ? 'me' : 'warn'); break;
     }
-    if (e.t === 'shot' && e.by === p && e.hit === 'actor') { this.hitFx = 1; }
+    // Note: e.t === 'shot' already sets hitFx/hitHead & plays hitmark audio above.
+    if (e.t === 'hurt' && e.a === p) { this.camShake = Math.max(this.camShake, 0.018); }
   }
   debrief() {
     const sim = this.sim!, sc = sim.score(), win = !!sim.over?.win; this.state = 'end'; this.voice.stop(); if (document.pointerLockElement) document.exitPointerLock();
@@ -1342,6 +1390,7 @@ class Game {
     const sim = this.sim!, l = sim.level, k = 4, c = document.createElement('canvas'); c.width = l.w * k; c.height = l.h * k; const g = c.getContext('2d')!;
     for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) { const v = l.cells[z * l.w + x]; g.fillStyle = v === WALL ? '#8fa3b5' : v === DOOR ? '#f2c14e' : v === WINDOW ? '#68b6e0' : v === LOW || v === HIGH ? '#33414d' : v === 1 ? '#18212a' : '#0c1116'; g.fillRect(x * k, z * k, k, k); }
     this.mapBase = c; const m = $<HTMLCanvasElement>('minimap'); m.width = c.width; m.height = c.height; m.style.width = c.width * 1.15 + 'px';
+    this.mapT = 0; this.drawMap();
   }
   drawMap() {
     const m = $<HTMLCanvasElement>('minimap'); m.style.display = this.mapOn ? '' : 'none'; if (!this.mapOn || !this.mapBase) return;
@@ -1369,10 +1418,12 @@ class Game {
   }
   updateHud(force = false) {
     const sim = this.sim; if (!sim) return; this.hudT -= 1; if (!force && this.hudT > 0) return; this.hudT = 8;
-    const p = sim.player, r = sim.remaining(), ws = this.weaponSpecs;
+    const p = sim.player, r = sim.remaining(), ws = this.weaponSpecs, curW = ws[this.weapon];
     ($('hpbar').firstElementChild as HTMLElement).style.width = Math.max(0, p.hp) + '%'; $('hptxt').textContent = String(Math.ceil(Math.max(0, p.hp)));
-    $('wname').textContent = ws[this.weapon].name + (this.reloadT > 0 ? ' – RELOADING' : ''); const ac = $('acount'); ac.innerHTML = `<b>${this.ammo[this.weapon]}</b> / ${this.reserve[this.weapon]}`; ac.className = this.ammo[this.weapon] <= 4 ? 'low' : '';
-    $('bangs').textContent = `BANG ${'◉'.repeat(p.bangs)} · C2 ${p.c2} · WEDGE ${p.wedges}`;
+    const modeTag = curW.canSemi ? ` · ${this.fireMode.toUpperCase()}` : '';
+    $('wname').textContent = curW.name + modeTag + (this.reloadT > 0 ? ' – RELOADING' : '');
+    const ac = $('acount'); ac.innerHTML = `<b>${this.ammo[this.weapon]}</b> / ${this.reserve[this.weapon]}`; ac.className = this.ammo[this.weapon] <= 4 ? 'low' : '';
+    $('bangs').textContent = `BANG ${'◉'.repeat(p.bangs)} · C2 ${p.c2} · WDG ${p.wedges}${this.laserOn && !curW.taser ? ' · LSR' : ''}${this.torchOn ? ' · LT' : ''}`;
     $('objective').innerHTML = `SUSPECTS <b>${r.suspects}</b> · CIVILIANS <b>${r.civs}</b>${sim.level.breaker ? ` · POWER <b>${sim.powerOn ? 'ON' : 'OFF'}</b>` : ''}`;
     const bt = $('bombtimer');
     if (sim.bomb && !sim.bomb.defused) {
@@ -1407,7 +1458,7 @@ class Game {
       html += '</div>';
     }
     $('team').innerHTML = html;
-    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>K</kbd> Bodycam · <kbd>P</kbd> Helmet Cam · <kbd>MMB</kbd> Ping${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
+    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · <kbd>H</kbd> Wheel · <kbd>L</kbd> Laser · ${curW.canSemi ? '<kbd>I</kbd> Mode · ' : ''}<kbd>N</kbd> NVG · <kbd>K</kbd> Bodycam · <kbd>P</kbd> Helmet Cam · <kbd>MMB</kbd> Ping${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
     const it = sim.interactTarget(), pr = $('prompt');
     if (p.downed && p.alive) {
       pr.style.opacity = '1'; pr.textContent = `DOWNED — BLEEDOUT IN ${Math.max(0, Math.ceil(p.bleedT))}s (WAIT FOR TEAMMATE)`;
@@ -1456,7 +1507,7 @@ class Game {
       this.fireCd -= dt;
       const ws = this.weaponSpecs[this.weapon];
       if (this.reloadT > 0) { this.reloadT -= dt; if (this.reloadT <= 0) { const n = Math.min(ws.mag - this.ammo[this.weapon], this.reserve[this.weapon]); this.ammo[this.weapon] += n; this.reserve[this.weapon] -= n; } }
-      else if (this.mouseDown && this.fireCd <= 0 && (ws.auto || !this.semiLock)) { this.fire(); if (!ws.auto) this.semiLock = true; }
+      else if (this.mouseDown && this.fireCd <= 0 && (this.isWeaponAuto(ws) || !this.semiLock)) { this.fire(); if (!this.isWeaponAuto(ws)) this.semiLock = true; }
       if (!this.mouseDown || this.fireCd > 0.25) this.preShot = false;
     }
     if (this.net.online) {
@@ -1509,32 +1560,55 @@ class Game {
       if (last !== undefined && ph !== last && !a.prone) { const q = this.pan(a.x, a.z); if (q.d < 14) this.audio.step((a.kind === 'officer' || a.kind === 'player' ? 0.2 : 0.14) / (1 + q.d * 0.25), q.pan); }
     }
     if (this.net.online) { const vc = $('vc'); vc.textContent = this.net.micOk ? (this.net.muted ? 'VOICE CHAT: MIC OFF (B)' : `SPATIAL RADIO ON · ${this.net.voiceCount} peers · B = mute`) : 'VOICE CHAT: no microphone – listen-only'; vc.className = this.net.muted || !this.net.micOk ? 'off' : ''; }
-    this.level!.update(dt, sim.time); for (const v of this.views.values()) v.update(dt, sim.time); this.fx.update(dt, sim);
+    this.level!.update(dt, sim.time, p.x, p.z); for (const v of this.views.values()) v.update(dt, sim.time); this.fx.update(dt, sim);
     for (const pg of this.pings) pg.t -= dt;
     this.pings = this.pings.filter(pg => pg.t > 0);
     if (this.breachBannerT > 0) { this.breachBannerT -= dt; if (this.breachBannerT <= 0 && sim.breachSyncT <= 0) show('breachBanner', false); }
-    // camera
-    this.recoil = Math.max(0, this.recoil - dt * 0.22); this.dmgFx = Math.max(0, this.dmgFx - dt * 1.4); this.hitFx = Math.max(0, this.hitFx - dt * 5);
+    // camera + recoil recovery + shockwave shake
+    this.recoil = Math.max(0, this.recoil - dt * (this.fireMode === 'semi' ? 0.3 : 0.24));
+    this.recoilPitch *= Math.max(0, 1 - dt * 11);
+    this.recoilRoll *= Math.max(0, 1 - dt * 12);
+    this.camShake = Math.max(0, this.camShake - dt * 0.085);
+    this.dmgFx = Math.max(0, this.dmgFx - dt * 1.4); this.hitFx = Math.max(0, this.hitFx - dt * 5);
     const targetEye = (!p.alive ? 0.35 : p.downed ? 0.48 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive && !p.downed ? p.jumpY : 0); this.eye += (targetEye - this.eye) * Math.min(1, dt * (p.jumpY > 0 ? 30 : 9));
     { const st = $('stance'), run = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch, t = !p.alive ? '' : p.downed ? 'DOWNED · BLEEDING OUT' : p.prone ? 'CRAWLING · SILENT' : p.crouch ? 'CROUCHING · SILENT' : run ? 'RUNNING · HEARD FAR AWAY' : this.slow ? 'SNEAKING · SILENT' : ''; if (st.textContent !== t) { st.textContent = t; st.className = run || p.downed ? 'loud' : ''; } }
     const bobScale = 1 - this.aimK * 0.85;
-    this.camera.position.set(p.x, this.eye + Math.sin(this.bob * 2) * 0.022 * bobScale, p.z); this.camera.rotation.set(this.pitch, this.yaw, !p.alive ? 0.5 : p.downed ? 0.22 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale));
+    const shkX = this.camShake > 0 ? (Math.random() - 0.5) * this.camShake : 0;
+    const shkY = this.camShake > 0 ? (Math.random() - 0.5) * this.camShake : 0;
+    this.camera.position.set(p.x + shkX, this.eye + Math.sin(this.bob * 2) * 0.022 * bobScale + shkY, p.z);
+    this.camera.rotation.set(
+      Math.min(1.45, this.pitch + this.recoilPitch + shkY * 0.4),
+      this.yaw + shkX * 0.3,
+      (!p.alive ? 0.5 : p.downed ? 0.22 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale)) + this.recoilRoll,
+    );
     { const sprint = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch && (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD'));
       const want = this.ads && p.alive && !p.downed && this.reloadT <= 0 && !sprint && !this.typing && !!document.pointerLockElement || (AUTO && this.ads) ? 1 : 0;
       this.aimK += (want - this.aimK) * Math.min(1, dt * 12); if (Math.abs(want - this.aimK) < 0.002) this.aimK = want;
       const baseFov = this.bodycamOn ? 92 : 74;
       const fov = baseFov * (1 - this.aimK * (this.weapon === 0 ? 0.45 : 0.25)); if (Math.abs(this.camera.fov - fov) > 0.01) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); } }
     this.torch.intensity = this.torchOn && p.alive && !p.downed ? 22 : 0;
-    // IFF friendly crosshair check
+    const cross = $('cross');
+    // IFF friendly crosshair check + tactical laser projection
     if (p.alive && !p.downed && !sim.over) {
       const ad = this.aimDir();
       const rh = sim.ray(p.x, this.eye, p.z, ad.x, ad.y, ad.z, 26, p, false);
-      const friendly = rh.actor && (rh.actor.kind === 'player' || rh.actor.kind === 'officer' || (rh.actor.kind === 'civ' && !rh.actor.hostile));
+      const friendly = !!(rh.actor && (rh.actor.kind === 'player' || rh.actor.kind === 'officer' || (rh.actor.kind === 'civ' && !rh.actor.hostile)));
+      cross.classList.toggle('friend', friendly);
       if (friendly) {
         $('ffWarn').textContent = rh.actor!.kind === 'civ' ? 'CIVILIAN — HOLD FIRE' : `FRIENDLY (${rh.actor!.name.toUpperCase()}) — HOLD FIRE`;
         show('ffWarn', true);
       } else show('ffWarn', false);
-    } else show('ffWarn', false);
+      const wsNow = this.weaponSpecs[this.weapon];
+      if (this.laserOn && !wsNow.taser && this.reloadT <= 0 && rh.d < 22) {
+        this.fx.setLaser(true, rh.x - ad.x * 0.03, rh.y - ad.y * 0.03, rh.z - ad.z * 0.03);
+      } else {
+        this.fx.setLaser(false);
+      }
+    } else {
+      cross.classList.remove('friend');
+      show('ffWarn', false);
+      this.fx.setLaser(false);
+    }
     // view model
     const ws0 = this.weaponSpecs[this.weapon];
     const g = this.vm.group; this.vmKick += (0 - this.vmKick) * Math.min(1, dt * 14); this.sway.multiplyScalar(Math.max(0, 1 - dt * 9));
@@ -1571,17 +1645,25 @@ class Game {
       this.hbT -= dt;
       if (this.hbT <= 0) { this.hbT = p.hp < 20 ? 0.55 : 0.78; this.audio.heartbeat(1 - p.hp / 35); }
     }
-    this.updateCensors();
+    this.censorT -= dt;
+    if (this.censorT <= 0) { this.censorT = 0.04; this.updateCensors(); }
     $('dmg').style.opacity = String(Math.max(this.dmgFx, p.hp < 35 && p.alive ? 0.35 : 0, p.alive ? 0 : 0.8)); $('flash').style.opacity = String(Math.min(1, p.flash * 1.6));
     const hm = $('hitmark'); hm.style.opacity = String(this.hitFx);
-    const cross = $('cross');
+    hm.classList.toggle('head', this.hitHead);
+    hm.classList.toggle('kill', this.hitHead && this.hitFx > 0.2);
+    const deg = (((-this.yaw * 180 / Math.PI) % 360) + 360) % 360;
+    const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    const di = Math.round(deg / 45) % 8;
+    $('compass').innerHTML = `${dirs[(di + 7) % 8]} · <b>${dirs[di]} ${String(Math.round(deg) % 360).padStart(3, '0')}°</b> · ${dirs[(di + 1) % 8]}`;
     const gap = 6 + this.recoil * 260 + (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD') ? 7 : 0) - (p.crouch ? 2 : 0);
     cross.style.setProperty('--gap', gap * (1 - this.aimK * 0.55) + 'px');
     cross.style.setProperty('--arms-op', String(1 - this.aimK));
     cross.classList.toggle('ads', this.aimK > 0.35);
     cross.style.opacity = p.alive ? '1' : '0'; // keep crisp optical center dot visible when zooming down sights
     if (this.parsedT > 0) { this.parsedT -= dt; if (this.parsedT <= 0) { $('parsed').textContent = ''; $('heard').textContent = ''; } }
-    this.updateHud(); this.drawMap();
+    this.updateHud();
+    this.mapT -= dt;
+    if (this.mapT <= 0) { this.mapT = 0.055; this.drawMap(); }
     if (this.endT > 0) { this.endT -= dt; if (this.endT <= 0) this.debrief(); }
   }
   private updateCensors() {

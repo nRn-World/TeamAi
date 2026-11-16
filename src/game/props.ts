@@ -2,6 +2,7 @@
 // See public/models/props/LICENSE.txt and Settings -> Credits for attributions.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import type { Prop } from '../sim/level';
 
 const PROP_FILES = {
@@ -80,7 +81,7 @@ function normalizeAsset(src: THREE.Object3D, spec: (typeof PROP_FILES)[PropAsset
 
 export function loadProps(base = './models/props/'): Promise<void> {
   if (loadingPromise) return loadingPromise;
-  const loader = new GLTFLoader();
+  const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   loadingPromise = Promise.allSettled(
     (Object.keys(PROP_FILES) as PropAssetKey[]).map(async key => {
       const spec = PROP_FILES[key];

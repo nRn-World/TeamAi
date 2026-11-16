@@ -31,6 +31,7 @@
   <div id="hitmark"></div>
   <div id="dmg"></div><div id="flash"></div>
   <div id="objective"></div>
+  <div id="compass">N · 000°</div>
   <div id="bombtimer" class="hidden"></div>
   <div id="vc" class="hidden"></div>
   <div id="coopHud" class="hidden"></div>
@@ -271,8 +272,8 @@
     <div><kbd>Mouse</kbd> Look · <kbd>Left click</kbd> Fire</div><div><kbd>Right click</kbd> (hold) Zoom / aim</div><div><kbd>R</kbd> Reload · <kbd>1</kbd>/<kbd>2</kbd> Weapons</div>
     <div><kbd>F</kbd> Open door / cuff / breaker / defuse / revive ally</div><div><kbd>G</kbd> Throw flashbang · <kbd>O</kbd> Share gear/ammo</div>
     <div><kbd>E</kbd> Optiwand peek door · <kbd>U</kbd> C2 charge</div><div><kbd>Y</kbd> Wedge door · <kbd>N</kbd> Night Vision (NVG)</div>
-    <div><kbd>V</kbd> (hold) Talk to your team · <kbd>Q</kbd> Shout «Police! Drop the weapon!»</div><div><kbd>T</kbd> Flashlight · <kbd>K</kbd> Bodycam · <kbd>M</kbd> Map</div>
-    <div><kbd>P</kbd> Helmet Cam PiP (cycle team/players) · <kbd>F8</kbd> Dispatch</div>
+    <div><kbd>V</kbd> (hold) Talk to your team · <kbd>Q</kbd> Shout «Police! Drop the weapon!»</div><div><kbd>T</kbd> Flashlight · <kbd>L</kbd> Tactical Laser · <kbd>K</kbd> Bodycam · <kbd>M</kbd> Map</div>
+    <div><kbd>I</kbd> Fire Mode (Auto/Semi) · <kbd>P</kbd> Helmet Cam PiP · <kbd>F8</kbd> Dispatch</div>
     <div><kbd>Middle Click</kbd> Tactical 3D Ping · <kbd>J</kbd> Sync Breach Countdown</div>
     <div><kbd>B</kbd> Voice chat: microphone on/off (online)</div><div><kbd>H</kbd> Radial Command Wheel</div>
     <div><kbd>Enter</kbd> Type an order (if you have no microphone)</div><div><kbd>Tab</kbd> Choose team for the quick keys</div>
@@ -327,7 +328,7 @@
     <label>AI Status <span><button id="btnAiLoad" type="button">Load AI model now</button></span></label>
     <div id="aiInfo" class="note"></div>
     <label>I use headphones <select id="sHead"><option value="0">No (ignore the microphone while the team talks)</option><option value="1">Yes</option></select></label>
-    <label>Graphics <select id="sQual"><option value="0">Low</option><option value="1">Medium</option><option value="2">High</option></select></label>
+    <label>Graphics <select id="sQual"><option value="0">Low (Performance)</option><option value="1">Medium</option><option value="2">High</option><option value="3">Ultra (High-End PC)</option></select></label>
     <label>Difficulty <select id="sDiff"><option value="0">Easy</option><option value="1">Normal</option><option value="2">Hard</option></select></label>
     <label>Streamer Mode (clean bodycam HUD) <select id="sStream"><option value="0">Off (standard tactical HUD)</option><option value="1">On (minimal HUD + Pro Bodycam telemetry)</option></select></label>
     <label>Bodycam face censor <select id="sCensor"><option value="1">On (blur/redact faces in Bodycam)</option><option value="0">Off</option></select></label>

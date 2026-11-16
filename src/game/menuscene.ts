@@ -113,6 +113,7 @@ export class MenuScene {
   private t = 0;
   private blue: THREE.PointLight;
   private red: THREE.PointLight;
+  private moonKey: THREE.DirectionalLight;
   private suvBlue?: THREE.PointLight;
   private suvRed?: THREE.PointLight;
   private suvBeacons: THREE.MeshStandardMaterial[] = [];
@@ -221,7 +222,7 @@ export class MenuScene {
 
     // Outdoor night lighting: cool skylight + key backlight rim on operators + emergency light bounces
     s.add(new THREE.HemisphereLight(0x6d92be, 0x101722, 1.15));
-    const moonKey = new THREE.DirectionalLight(0xc2d8ff, 1.65);
+    const moonKey = this.moonKey = new THREE.DirectionalLight(0xc2d8ff, 1.65);
     moonKey.position.set(-7.5, 13.5, 7.5);
     moonKey.castShadow = true;
     moonKey.shadow.mapSize.set(1024, 1024);
@@ -795,6 +796,19 @@ export class MenuScene {
     pm.dispose();
   }
 
+  setQuality(qual: number) {
+    this.rain.visible = qual >= 1;
+    this.mist.visible = qual >= 1;
+    this.moonKey.castShadow = qual >= 2;
+    const sz = qual >= 3 ? 2048 : 1024;
+    if (this.moonKey.shadow.mapSize.x !== sz) {
+      this.moonKey.shadow.mapSize.set(sz, sz);
+      this.moonKey.shadow.map?.dispose();
+      this.moonKey.shadow.map = null;
+    }
+    this.scene.environmentIntensity = qual >= 3 ? 0.55 : qual >= 2 ? 0.45 : 0.25;
+  }
+
   resize(aspect: number) {
     this.cam.aspect = aspect;
     this.cam.fov = aspect < 1.3 ? 44 : 31;
@@ -822,26 +836,30 @@ export class MenuScene {
     }
 
     // Animate falling rain streaks
-    const rp = this.rainPos;
-    const drop = dt * 13.5;
-    for (let i = 0; i < rp.length; i += 6) {
-      rp[i] -= drop * 0.055;
-      rp[i + 1] -= drop;
-      rp[i + 3] -= drop * 0.055;
-      rp[i + 4] -= drop;
-      if (rp[i + 4] < 0) {
-        const dy = rp[i + 1] - rp[i + 4];
-        const nx = (Math.random() - 0.5) * 24;
-        const ny = 9.5 + Math.random() * 2;
-        const nz = -14 + Math.random() * 22;
-        rp[i] = nx; rp[i + 1] = ny; rp[i + 2] = nz;
-        rp[i + 3] = nx - 0.04; rp[i + 4] = ny - dy; rp[i + 5] = nz + 0.02;
+    if (this.rain.visible) {
+      const rp = this.rainPos;
+      const drop = dt * 13.5;
+      for (let i = 0; i < rp.length; i += 6) {
+        rp[i] -= drop * 0.055;
+        rp[i + 1] -= drop;
+        rp[i + 3] -= drop * 0.055;
+        rp[i + 4] -= drop;
+        if (rp[i + 4] < 0) {
+          const dy = rp[i + 1] - rp[i + 4];
+          const nx = (Math.random() - 0.5) * 24;
+          const ny = 9.5 + Math.random() * 2;
+          const nz = -14 + Math.random() * 22;
+          rp[i] = nx; rp[i + 1] = ny; rp[i + 2] = nz;
+          rp[i + 3] = nx - 0.04; rp[i + 4] = ny - dy; rp[i + 5] = nz + 0.02;
+        }
       }
+      (this.rain.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
     }
-    (this.rain.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
 
-    this.mist.rotation.y = t * 0.008;
-    this.mist.position.y = Math.sin(t * 0.22) * 0.08;
+    if (this.mist.visible) {
+      this.mist.rotation.y = t * 0.008;
+      this.mist.position.y = Math.sin(t * 0.22) * 0.08;
+    }
     this.cx += (this.mx - this.cx) * Math.min(1, dt * 2);
     this.cy += (this.my - this.cy) * Math.min(1, dt * 2);
     const wide = this.cam.aspect >= 1.3, heroCam = this.heroes.length > 0 || this.heroMode;

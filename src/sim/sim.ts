@@ -34,7 +34,7 @@ export interface BombState {
 }
 
 export type Ev =
-  | { t: 'shot'; by: Actor; x: number; y: number; z: number; x2: number; y2: number; z2: number; hit: 'wall' | 'actor' | 'none' }
+  | { t: 'shot'; by: Actor; x: number; y: number; z: number; x2: number; y2: number; z2: number; hit: 'wall' | 'actor' | 'none'; head?: boolean; kill?: boolean }
   | { t: 'hurt'; a: Actor; head: boolean } | { t: 'death'; a: Actor }
   | { t: 'door'; door: Door; open: boolean; kick?: boolean } | { t: 'say'; a: Actor; text: string; shout?: boolean }
   | { t: 'shout'; a: Actor } | { t: 'bang'; x: number; z: number } | { t: 'throw'; x: number; z: number }
@@ -737,23 +737,48 @@ export class Sim {
     const maxD = taser ? 9.5 : 70;
     const h = this.ray(ox, oy, oz, dx, dy, dz, maxD, by, !taser);
     if (by.kind === 'player') by.shots++;
+    let headHit = false, killHit = false;
+    if (h.actor) {
+      headHit = h.head && !nonLethal;
+      if (by.kind === 'player' && (h.actor.kind === 'suspect' || h.actor.kind === 'officer')) by.hits++;
+      this.damage(h.actor, dmg * (headHit ? 3 : 1), by, headHit, nonLethal);
+      killHit = !h.actor.alive;
+    }
     if (taser) this.events.push({ t: 'taser', x: ox, y: oy, z: oz, x2: h.x, y2: h.y, z2: h.z });
     else {
-      this.events.push({ t: 'shot', by, x: ox, y: oy, z: oz, x2: h.x, y2: h.y, z2: h.z, hit: h.kind });
+      this.events.push({ t: 'shot', by, x: ox, y: oy, z: oz, x2: h.x, y2: h.y, z2: h.z, hit: h.kind, head: headHit, kill: killHit });
       if (this.replayEvents.length < 800) this.replayEvents.push({ t: this.time, kind: 'shot', x: ox, z: oz, x2: h.x, z2: h.z, team: by.kind === 'officer' ? by.team : undefined });
     }
     by.lastShotT = this.time; by.hasFired = true; this.stats.shotsFired += by.kind === 'suspect' ? 0 : 1;
-    if (!taser) this.noise(ox, oz, 20);
-    if (by.kind !== 'suspect' && !taser) for (const c of this.civs) if (c.active && !c.surrendered && Math.hypot(c.x - ox, c.z - oz) < 12 && this.rng() < 0.2) c.panicT = 0;
-    if (h.actor) {
-      if (by.kind === 'player' && (h.actor.kind === 'suspect' || h.actor.kind === 'officer')) by.hits++;
-      this.damage(h.actor, dmg * (h.head && !nonLethal ? 3 : 1), by, h.head && !nonLethal, nonLethal);
+    if (!taser) {
+      this.noise(ox, oz, 20);
+      // Suppression effect: close-passing police rounds rattle nearby active suspects
+      if (by.kind !== 'suspect') {
+        const len = Math.max(0.5, h.d);
+        for (const s of this.suspects) {
+          if (!s.active || s.surrendered || s === h.actor) continue;
+          const proj = (s.x - ox) * dx + (s.z - oz) * dz;
+          if (proj > 0 && proj < len + 0.5) {
+            const perp = Math.hypot(ox + dx * proj - s.x, oz + dz * proj - s.z);
+            if (perp < 1.35) {
+              s.alertT = Math.max(s.alertT, 9);
+              s.morale = Math.max(0.08, s.morale - 0.04);
+              s.react = Math.max(s.react, 0.2);
+            }
+          }
+        }
+      }
     }
+    if (by.kind !== 'suspect' && !taser) for (const c of this.civs) if (c.active && !c.surrendered && Math.hypot(c.x - ox, c.z - oz) < 12 && this.rng() < 0.2) c.panicT = 0;
     return h;
   }
   private aiFire(a: Actor, tg: Actor, spread: number, dmg: number) {
     if (a.reloadT > 0 || a.fireCd > 0) return;
-    if (a.ammo <= 0) { a.reloadT = 2.2; a.ammo = 30; return; }
+    if (a.ammo <= 0) {
+      a.reloadT = 2.2; a.ammo = 30;
+      if (a.kind === 'officer' && this.time - a.lastCallT > 9) { a.lastCallT = this.time; this.say(a, 'Reloading!'); }
+      return;
+    }
     const ty = tg.down ? 0.8 : tg.kind === 'player' && tg.prone ? 0.3 : tg.kind === 'player' && tg.crouch ? 0.9 : 1.2;
     let dx = tg.x - a.x, dy = ty - 1.4, dz = tg.z - a.z; const d = Math.hypot(dx, dy, dz); dx /= d; dy /= d; dz /= d;
     if (a.kind === 'officer') {
@@ -1160,7 +1185,17 @@ export class Sim {
     o.percT -= dt; if (o.percT <= 0) { o.percT = 0.12; o.target = this.pickThreat(o); }
     const th = o.target;
     if (th && th.alive && !th.down) {
-      const want = yawTo(th.x - o.x, th.z - o.z); o.yaw = turn(o.yaw, want, 10 * dt); o.moving = false;
+      const want = yawTo(th.x - o.x, th.z - o.z); o.yaw = turn(o.yaw, want, 10 * dt);
+      // During dynamic room breach (phase 2), keep clearing into the room corners instead of stopping in the fatal funnel
+      if (ord.type === 'breach' && ord.phase === 2 && ord.pts) {
+        const bp = ord.pts[this.idx(o)] ?? ord.pts[0];
+        if (bp && dist(o, bp) > 0.75) {
+          this.goTo(o, bp.x, bp.z, dt, 1.05);
+          o.yaw = turn(o.yaw, want, 12 * dt); // keep weapon oriented on threat while entering
+        } else o.moving = false;
+      } else {
+        o.moving = false;
+      }
       if (this.time - th.challengeT > 2.5) {
         const bonus = (dist(o, th) < 8 ? 0.05 : 0) + (o.role === 'Negotiator' ? 0.18 : 0);
         if (this.time - o.lastCallT > 8 && this.time - this.lastTeamShoutT > 4.5) {
@@ -1251,8 +1286,12 @@ export class Sim {
     s.percT -= dt; if (s.percT <= 0) { s.percT = 0.15; s.target = this.nearestPolice(s, 32, s.alertT > 0 ? 4.2 : 2.6); }
     const e = s.target;
     if (e && e.alive) {
-      s.lastSeen = { x: e.x, z: e.z }; s.alertT = 8; s.lostT = 0; s.moving = false; s.path = null;
+      s.lastSeen = { x: e.x, z: e.z }; s.alertT = 8; s.lostT = 0; s.path = null;
       const want = yawTo(e.x - s.x, e.z - s.z); s.yaw = turn(s.yaw, want, 7 * dt);
+      if (s.hp < 55 && s.morale > 0.5 && !s.hostage && dist(s, e) > 2.8 && this.rng() < 0.8 * dt) {
+        const rp = this.randomRoomPoint(s.room);
+        if (rp) this.goTo(s, rp.x, rp.z, dt, 0.9); else s.moving = false;
+      } else s.moving = false;
       if (s.react < 0) {
         s.react = (0.55 + this.rng() * 0.7) * [1.5, 1, 0.7][this.difficulty];
         if (this.time - s.lastSpotT > 22) { s.lastSpotT = this.time; this.events.push({ t: 'bark', a: s, kind: 'spot' }); }
