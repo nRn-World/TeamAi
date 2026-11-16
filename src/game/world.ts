@@ -249,8 +249,10 @@ export class LevelView {
     );
     scaleUV(ground.geometry, (l.w + 72) / 3, (l.h + 72) / 3); ground.rotation.x = -Math.PI / 2; ground.position.set(l.w / 2, -0.012, l.h / 2); g.add(ground);
     // rooms: floor + ceiling + lamps
-    const ceilMat = std({ map: T.floorTex('ceiling') });
+    const ceilMat = std({ map: T.floorTex('ceiling'), color: quality > 0 ? 0xa8afba : 0xffffff });
     const lampOn = this.lampOnMat = new THREE.MeshBasicMaterial({ color: l.theme === 'club' ? 0xc864ff : 0xfff4dc });
+    // push the panels above 1.0 in linear space so the bloom pass only picks up the light fittings
+    lampOn.color.multiplyScalar(l.theme === 'club' ? 1.4 : 1.5);
     const lampOff = this.lampOffMat = std({ color: 0x3a3a38 });
     const poolCount = quality >= 3 ? 16 : quality === 2 ? 11 : quality === 1 ? 7 : 0;
     for (let i = 0; i < poolCount; i++) {
@@ -272,7 +274,7 @@ export class LevelView {
         if (!dark) this.lampMeshes.push(lm);
         if ((!dark || l.theme === 'club') && poolCount > 0) {
           const col = l.theme === 'club' ? (i % 2 ? 0xff3ea5 : 0x3ea8ff) : r.kind === 'warehouse' ? 0xdfe8ff : 0xffe9c8;
-          const baseInt = l.theme === 'club' ? 12 : r.kind === 'warehouse' ? 26 : 15;
+          const baseInt = l.theme === 'club' ? 9 : r.kind === 'warehouse' ? 17 : 10.5;
           this.lightSources.push({ x, y: 2.55, z, color: col, intensity: baseInt, distance: 11, decay: 1.7, isRoom: true });
         }
       }
@@ -291,7 +293,7 @@ export class LevelView {
       if (quality >= 2) { im.castShadow = true; im.receiveShadow = true; }
       cells.forEach(([x, z], i) => { m.makeScale(1, h / 3, 1); m.setPosition(x + 0.5, h / 2, z + 0.5); im.setMatrixAt(i, m); }); g.add(im);
     };
-    const wallMat = std({ map: T.wallTex(th.wall, th.trim, l.theme) });
+    const wallMat = std({ map: T.wallTex(th.wall, th.trim, l.theme), color: quality > 0 ? 0xb2b8c2 : 0xffffff });
     const brickMat = l.theme === 'office'
       ? std({ color: 0x20252d, roughness: 0.35, metalness: 0.45 })
       : std({ map: T.brickTex(l.theme === 'bank' || l.theme === 'club' || l.theme === 'raid' ? 'office' : l.theme, th.brickA, th.brickB) });
@@ -324,7 +326,7 @@ export class LevelView {
     }
     // breakable glass windows (floor-to-ceiling curtain-wall glass on office/hotel/club ground exterior)
     const glassMat = quality > 0
-      ? new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.3, roughness: 0.08, metalness: 0.15 })
+      ? new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.2, roughness: 0.08, metalness: 0.15 })
       : std({ color: 0xaad8ee, transparent: true, opacity: 0.34, roughness: 0.15 });
     const frameAlum = std({ color: 0x161a20, roughness: 0.35, metalness: 0.65 });
     const curtainWall = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'club';

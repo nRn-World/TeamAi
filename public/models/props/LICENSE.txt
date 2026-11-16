@@ -30,3 +30,10 @@ Prop, Plant, Flower & Furniture 3D Models — Licenses & Attributions
 4. Kenney (CC0 1.0 Universal — Public Domain)
    Source: https://kenney.nl/assets/car-kit
    - traffic_cone.glb      (Traffic Cone)
+
+5. Khronos Group glTF Sample Assets — CC BY 4.0
+   License: https://creativecommons.org/licenses/by/4.0/
+   Source: https://github.com/KhronosGroup/glTF-Sample-Assets
+   - velvet_sofa.glb       "Glam Velvet Sofa" — Eric Chadwick © Wayfair, LLC (2021). Changes: normalized scale/pivot, shadow flags.
+   - silk_pouf.glb         "Specular Silk Pouf" — Eric Chadwick © Wayfair, LLC (2021). Changes: normalized scale/pivot, shadow flags.
+   - desk_lamp.glb         "Iridescence Lamp" — Eric Chadwick © Wayfair, LLC (2022). Changes: normalized scale/pivot, warm emissive added to the shade.

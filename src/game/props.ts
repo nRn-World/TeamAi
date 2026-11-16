@@ -23,6 +23,10 @@ const PROP_FILES = {
   crate: { file: 'crate.glb', fit: 'xz', size: 0.94, doubleSide: false },
   locker: { file: 'locker.glb', fit: 'h', size: 1.94, maxXZ: 1.86, doubleSide: false },
   bar: { file: 'bar.glb', fit: 'xz', size: 1.92, doubleSide: false },
+  // Khronos glTF sample assets, CC BY 4.0 (see LICENSE.txt)
+  velvet_sofa: { file: 'velvet_sofa.glb', fit: 'xz', size: 1.95, doubleSide: false },
+  silk_pouf: { file: 'silk_pouf.glb', fit: 'xz', size: 0.86, doubleSide: false },
+  desk_lamp: { file: 'desk_lamp.glb', fit: 'h', size: 0.46, maxXZ: 0.44, doubleSide: false },
 } as const;
 
 export type PropAssetKey = keyof typeof PROP_FILES;
@@ -38,6 +42,17 @@ export let propsReady = false;
 let loadingPromise: Promise<void> | null = null;
 
 function normalizeAsset(src: THREE.Object3D, spec: (typeof PROP_FILES)[PropAssetKey]): NormEntry {
+  const hide = (spec as { hide?: RegExp }).hide;
+  if (hide) {
+    const drop: THREE.Object3D[] = [];
+    src.traverse((o: any) => {
+      if (!o.isMesh) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      const tag = [o.name, ...mats.map((m: any) => m?.name ?? '')].join(' ');
+      if (hide.test(tag)) drop.push(o);
+    });
+    for (const o of drop) o.removeFromParent();
+  }
   src.updateMatrixWorld(true);
   src.traverse((o: any) => {
     if (!o.isMesh) return;
@@ -203,16 +218,31 @@ export function propModel(kind: Prop['kind'], seed: number, high: boolean): THRE
       mon.add(bezel, scr, stand, base, kb);
       g.add(mon);
       g.userData.deskMonitor = { group: mon, scrMat };
+      if (seed % 3 === 1) {
+        const lp = cloneAsset('desk_lamp');
+        if (lp) {
+          lp.obj.position.set(-0.66, topY, -0.02);
+          lp.obj.rotation.y = 0.7;
+          lp.obj.traverse((o: any) => {
+            const m = o.material;
+            if (o.isMesh && m && 'emissive' in m && /iridescence|transmission/i.test(m.name || '')) {
+              m.emissive = new THREE.Color(0xffd9a0);
+              m.emissiveIntensity = 0.3;
+            }
+          });
+          g.add(lp.obj);
+        }
+      }
       return g;
     }
     case 'sofa': {
-      const c = cloneAsset('sofa');
+      const c = cloneAsset(seed % 3 === 1 ? 'velvet_sofa' : 'sofa');
       if (!c) return null;
       g.add(c.obj);
       return g;
     }
     case 'chair': {
-      const c = cloneAsset(seed % 2 === 0 ? 'armchair' : 'greenchair');
+      const c = cloneAsset(seed % 4 === 3 ? 'silk_pouf' : seed % 2 === 0 ? 'armchair' : 'greenchair');
       if (!c) return null;
       g.add(c.obj);
       return g;
