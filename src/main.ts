@@ -1,7 +1,7 @@
 import { loadModels, modelsReady } from './game/models';
 import * as THREE from 'three';
 import { Sim, Actor, Command, Team, Ev, fwd, PrimaryLoadout, SecondaryLoadout, CoopMods, PrePlan } from './sim/sim';
-import { MISSIONS, WALL, DOOR, LOW, HIGH, WINDOW, buildLevel, Level, Door, roomAt } from './sim/level';
+import { MISSIONS, WALL, DOOR, LOW, HIGH, WINDOW, buildLevel, Level, Door, Room, roomAt } from './sim/level';
 import { MenuScene } from './game/menuscene';
 import { operatorEnv } from './game/operator';
 import { loadWeapons, weaponsReady, FpsArms, studioEnv, setShieldCracks } from './game/weapons';
@@ -37,6 +37,8 @@ const getRank = (xp: number) => [...RANKS].reverse().find(r => xp >= r[0])![1];
 if (params.has('q')) S.qual = +params.get('q')!;
 /** The ten selectable looks for the mission briefing (#brief[data-brief] in style.css). */
 const BRIEF_STYLES: { id: string; label: string }[] = [
+  { id: 'cctv', label: 'CCTV Wall' },
+  { id: 'keyart', label: 'Key Art' },
   { id: 'ops', label: 'Ops Board' },
   { id: 'blueprint', label: 'Blueprint' },
   { id: 'dossier', label: 'Dossier' },
@@ -118,7 +120,7 @@ class Game {
   preplan: PrePlan = { entry: 0, teamA: [], teamB: [], pins: [] };
   planTool: 'B' | 'A' | 'c2' | 'flash' = 'B';
   briefLevel: Level | null = null;
-  briefStyle = BRIEF_STYLES.some(b => b.id === localStorage.getItem('teamai.briefStyle')) ? localStorage.getItem('teamai.briefStyle')! : 'ops';
+  briefStyle = BRIEF_STYLES.some(b => b.id === localStorage.getItem('teamai.briefStyle')) ? localStorage.getItem('teamai.briefStyle')! : 'cctv';
   dispatchPlaying = false;
   dispatchOn = false; isDaily = false; stress = 0; clubBeatT = 0; hbT = 0; breathT = 0; acousticT = 0; sensorPingSfxT = 0; radioCardT = 0;
   shieldHits = 0; suppressFx = 0; highReadyK = 0; lastRT = 0; speedReload = false; reloadShell = false; reloadDur = 2;
@@ -348,7 +350,15 @@ class Game {
       intel.innerHTML = rows.map(([k, v]) => `<div><b>${k}</b><span>${v}</span></div>`).join('');
     }
 
-    // Briefing look picker — ten styles, remembered between sessions.
+    this.buildCamWall();
+    const camList = $('briefCamList');
+    if (camList && bl) {
+      const roomName = (i: number) => (bl.rooms[i]?.name ?? 'unknown room').toUpperCase();
+      camList.innerHTML = bl.suspects.slice(0, 6)
+        .map((sp, i) => `<div>S-${String(i + 1).padStart(2, '0')} · ${roomName(sp.room)}</div>`).join('');
+    }
+
+    // Briefing look picker — the looks below are remembered between sessions.
     const stylesBox = $('briefStyles');
     if (stylesBox) {
       stylesBox.innerHTML = BRIEF_STYLES.map((st, i) => `<button type="button" class="bsty ${st.id === this.briefStyle ? 'on' : ''}" data-bsty="${st.id}" title="${st.label}">${i + 1} ${st.label}</button>`).join('');
@@ -390,6 +400,7 @@ class Game {
     if (save) localStorage.setItem('teamai.briefStyle', id);
     document.querySelectorAll<HTMLElement>('#briefStyles .bsty').forEach(b => b.classList.toggle('on', b.dataset.bsty === id));
     this.drawBriefPlan();
+    this.drawCamFeeds();
   }
   /** Reads one of the --map-* colours the briefing look defines for the floorplan. */
   private briefVar(name: string, fallback: string) {
@@ -450,6 +461,85 @@ class Game {
       g.fillStyle = '#fff'; g.font = 'bold 8px sans-serif'; g.textAlign = 'center';
       g.fillText(mk.kind === 'c2' ? 'C2' : 'FB', mk.x * k, mk.z * k - 7);
     }
+  }
+
+  /** Four camera tiles for the CCTV briefing look — one cropped view per room. */
+  private buildCamWall() {
+    const wall = $('briefCams');
+    if (!wall || wall.childElementCount) return;
+    wall.innerHTML = Array.from({ length: 4 }, (_, i) => `
+      <figure class="cam">
+        <canvas width="340" height="200"></canvas>
+        <figcaption><b>CAM ${String(i + 1).padStart(2, '0')}</b><span class="camroom"></span></figcaption>
+        <span class="camtime">02:14:0${i}</span>
+        <span class="camrec">REC</span>
+      </figure>`).join('');
+  }
+  /** Picks the four rooms worth watching: wherever the suspects and civilians are. */
+  private camRooms(l: Level): Room[] {
+    const heads = new Map<number, number>();
+    for (const p of [...l.suspects, ...l.civs]) heads.set(p.room, (heads.get(p.room) ?? 0) + 1);
+    const scored = l.rooms
+      .filter(r => r.w >= 3 && r.h >= 3 && r.kind !== 'corridor')
+      .map(r => ({ r, score: (heads.get(r.id) ?? 0) * 20 + Math.min(r.w * r.h, 80) / 8 }));
+    scored.sort((a, b) => b.score - a.score);
+    const picked = scored.slice(0, 4).map(o => o.r);
+    for (const r of l.rooms) { if (picked.length >= 4) break; if (!picked.includes(r)) picked.push(r); }
+    return picked;
+  }
+  /** Renders the security-camera feeds (green tint, crop around the room). */
+  drawCamFeeds() {
+    const l = this.briefLevel; if (!l) return;
+    const wall = $('briefCams'); if (!wall) return;
+    const cams = wall.querySelectorAll<HTMLCanvasElement>('.cam canvas'); if (!cams.length) return;
+    const rooms = this.camRooms(l);
+    const cap = wall.querySelectorAll<HTMLElement>('.camroom');
+    const pal = { floor: '#0d2a1a', wall: '#8fdc9f', door: '#ffd166', win: '#7fd4ff', prop: '#12341f' };
+    cams.forEach((c, i) => {
+      const room = rooms[i % rooms.length];
+      if (!room) return;
+      if (cap[i]) cap[i].textContent = room.name;
+      const cw = 340, ch = 200;
+      if (c.width !== cw) { c.width = cw; c.height = ch; }
+      const g = c.getContext('2d'); if (!g) return;
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.fillStyle = '#05100a'; g.fillRect(0, 0, cw, ch);
+      // wide enough to read the layout, tight enough that each camera frames its own room
+      // each camera has its own spread so the four feeds do not look alike
+      const spread = [0.40, 0.50, 0.62, 0.74][i % 4];
+      const k = Math.max(4, Math.min(cw / (l.w * spread), ch / (l.h * spread)));
+      const ox = cw / 2 - (room.x + room.w / 2) * k, oz = ch / 2 - (room.z + room.h / 2) * k;
+      g.save(); g.translate(ox, oz); g.scale(k, k);
+      g.fillStyle = pal.floor;
+      for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) {
+        const v = l.cells[z * l.w + x]; if (v === 0) continue;
+        g.fillStyle = v === WALL ? pal.wall : v === DOOR ? pal.door : v === WINDOW ? pal.win : v === LOW || v === HIGH ? pal.prop : pal.floor;
+        g.fillRect(x, z, 1.02, 1.02);
+      }
+      const ep = l.entries[this.preplan.entry ?? 0];
+      if (ep) {
+        g.fillStyle = '#7ef2a8'; g.beginPath(); g.arc(ep.x, ep.z, 0.9, 0, 6.28); g.fill();
+        g.strokeStyle = '#7ef2a8'; g.lineWidth = 0.18;
+        g.beginPath(); g.arc(ep.x, ep.z, 1.5, 0, 6.28); g.stroke();
+      }
+      g.restore();
+      // fade everything the camera is not watching, and frame the watched room
+      const rx = ox + room.x * k, rz = oz + room.z * k, rw = room.w * k, rh = room.h * k;
+      const dim = 'rgba(3,9,6,.55)';
+      g.fillStyle = dim;
+      g.fillRect(0, 0, cw, Math.max(0, rz));
+      g.fillRect(0, rz + rh, cw, Math.max(0, ch - rz - rh));
+      g.fillRect(0, rz, Math.max(0, rx), rh);
+      g.fillRect(rx + rw, rz, Math.max(0, cw - rx - rw), rh);
+      g.strokeStyle = 'rgba(126,242,168,.55)'; g.lineWidth = 1.5;
+      g.strokeRect(Math.max(1, rx) + 0.5, Math.max(1, rz) + 0.5, Math.min(rw, cw - 2), Math.min(rh, ch - 2));
+      // lens vignette + a slow scan band, so it reads as video and not as a map
+      const vg = g.createRadialGradient(cw / 2, ch / 2, ch * 0.25, cw / 2, ch / 2, ch * 0.95);
+      vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.62)');
+      g.fillStyle = vg; g.fillRect(0, 0, cw, ch);
+      g.fillStyle = 'rgba(150,255,190,.05)';
+      g.fillRect(0, (i * 43) % ch, cw, 2);
+    });
   }
   buildWheel() {
     const ring = document.querySelector('#wheel .wring')!;
