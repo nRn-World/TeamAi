@@ -8,3 +8,6 @@ dist
 
 # generated graphics-preview screenshots
 .graf-preview/
+
+# generated furniture-placement screenshots
+.furn-preview/

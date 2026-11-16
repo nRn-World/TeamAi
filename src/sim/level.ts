@@ -136,13 +136,14 @@ class Builder {
     if (x + w === r.x + r.w - 1) return 3;
     return null;
   }
-  private tryPlace(r: Room, x: number, z: number, kind: PropKind, high: boolean, rot: number, sx: number, sz: number, needFrontClear = true): boolean {
+  private tryPlace(r: Room, x: number, z: number, kind: PropKind, high: boolean, rot: number, sx: number, sz: number, needFrontClear = true, requireWall = false): boolean {
     const [w, d] = this.propSpan(kind, rot);
     // Clamp multi-cell anchor inward by 1 cell if near room East/South wall so edge hits still succeed
     const cx = Math.min(x, r.x + r.w - 1 - w), cz = Math.min(z, r.z + r.h - 1 - d);
     if (cx < r.x + 1 || cz < r.z + 1) return false;
     // Align orientation to any contacted wall if square or compatible parity
     const wallSide = this.boxWallRot(r, cx, cz, w, d);
+    if (wallSide === null && requireWall) return false;
     if (wallSide !== null) {
       const [ww, wd] = this.propSpan(kind, wallSide);
       if (ww === w && wd === d) rot = wallSide;
@@ -164,61 +165,135 @@ class Builder {
     this.props.push({ cx, cz, kind, rot, w, d });
     return true;
   }
+  /** Rot that puts a prop's back against the wall on that side (0 north, 1 east, 2 south, 3 west). */
+  private backToWall(side: number): number {
+    return [0, 3, 2, 1][side] ?? 0;
+  }
+  /** Rot that turns a prop towards the middle of its room, so nothing stares at a wall. */
+  private faceRoom(r: Room, x: number, z: number): number {
+    const cx = r.x + r.w / 2 - (x + 0.5), cz = r.z + r.h / 2 - (z + 0.5);
+    if (Math.abs(cx) > Math.abs(cz)) return cx > 0 ? 1 : 3;
+    return cz > 0 ? 0 : 2;
+  }
+  /** Free floor cells of a room, split into cells that touch a wall and cells that do not. */
+  private freeCells(r: Room, rng: () => number) {
+    const wall: { x: number; z: number; side: number }[] = [];
+    const open: { x: number; z: number }[] = [];
+    for (let z = r.z + 1; z < r.z + r.h - 1; z++) {
+      for (let x = r.x + 1; x < r.x + r.w - 1; x++) {
+        if (this.get(x, z) !== FLOOR) continue;
+        const side = this.wallSide(x, z);
+        if (side < 0) open.push({ x, z });
+        else wall.push({ x, z, side });
+      }
+    }
+    const shuffle = <T,>(a: T[]) => {
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    };
+    return { wall: shuffle(wall), open: shuffle(open) };
+  }
+  /** The side a wall touches a free cell, or -1 when the cell stands in the open. */
+  private wallSide(x: number, z: number): number {
+    const n = this.get(x, z - 1) === WALL, e = this.get(x + 1, z) === WALL;
+    const s = this.get(x, z + 1) === WALL, w = this.get(x - 1, z) === WALL;
+    if (n && !s) return 0;
+    if (s && !n) return 2;
+    if (e && !w) return 1;
+    if (w && !e) return 3;
+    if (n) return 0;
+    if (s) return 2;
+    if (e) return 1;
+    if (w) return 3;
+    return -1;
+  }
+  /**
+   * Furniture that belongs against a wall (sofas, desks, beds, shelves, lockers, bars) is only
+   * ever placed on a cell that touches a wall, with its back to it and its front into the room.
+   * Floor pieces (chairs, poufs, crates, plants) are placed afterwards and turn towards the room.
+   */
   furnish(rng: () => number, spawn: Pt) {
     const sx = Math.floor(spawn.x), sz = Math.floor(spawn.z);
+    /** What belongs against a wall, in the order we would like to see it. */
+    const wallKit: Record<RoomKind, [PropKind, boolean][]> = {
+      office: [['pc', true], ['desk', false], ['shelf', true], ['server', true], ['plant', false], ['chair', false]],
+      lobby: [['sofa', false], ['plant', false], ['shelf', true], ['chair', false]],
+      club: [['bar', false], ['sofa', false], ['plant', false], ['chair', false]],
+      bedroom: [['bed', false], ['locker', true], ['shelf', true], ['sofa', false], ['plant', false]],
+      storage: [['shelf', true], ['shelf', true], ['crate', false]],
+      vault: [['locker', true], ['locker', true], ['crate', false]],
+      warehouse: [['crate', false], ['crate', false], ['shelf', true]],
+      corridor: [['plant', false]],
+    };
+    /** Free-standing pieces that are happy in the middle of a room. */
+    const floorKit: Record<RoomKind, [PropKind, boolean][]> = {
+      office: [['chair', false], ['plant', false]],
+      lobby: [['chair', false], ['plant', false]],
+      club: [['chair', false]],
+      bedroom: [['chair', false]],
+      storage: [['crate', false]],
+      vault: [['crate', false]],
+      warehouse: [['crate', false], ['crate', true]],
+      corridor: [],
+    };
     for (const r of this.rooms) {
       const area = (r.w - 2) * (r.h - 2);
-      let n = r.kind === 'corridor' ? Math.floor(area / 40)
+      let budget = r.kind === 'corridor' ? Math.floor(area / 40)
         : r.kind === 'warehouse' ? Math.floor(area / 9)
         : r.kind === 'club' ? Math.floor(area / 12)
         : r.kind === 'vault' ? Math.floor(area / 9)
         : r.kind === 'lobby' ? Math.floor(area / 12)
         : Math.floor(area / 8);
-      for (let t = 0; t < n * 6 && n > 0; t++) {
-        const x = r.x + 1 + Math.floor(rng() * (r.w - 2)), z = r.z + 1 + Math.floor(rng() * (r.h - 2));
-        const nWall = this.get(x, z - 1) === WALL, sWall = this.get(x, z + 1) === WALL;
-        const wWall = this.get(x - 1, z) === WALL, eWall = this.get(x + 1, z) === WALL;
-        const atWall = nWall || sWall || wWall || eWall;
-        const wallRot = nWall ? 0 : sWall ? 2 : wWall ? 1 : eWall ? 3 : Math.floor(rng() * 4);
-        let placed = false;
-        if (r.kind === 'warehouse') {
-          placed = this.tryPlace(r, x, z, 'crate', rng() < 0.65, Math.floor(rng() * 4), sx, sz);
-        } else if (r.kind === 'corridor') {
-          if (atWall) placed = this.tryPlace(r, x, z, 'plant', false, wallRot, sx, sz);
-        } else if (r.kind === 'storage') {
-          if (atWall) placed = this.tryPlace(r, x, z, 'shelf', true, wallRot, sx, sz);
-          else placed = this.tryPlace(r, x, z, 'crate', rng() < 0.5, Math.floor(rng() * 4), sx, sz);
-        } else if (r.kind === 'vault') {
-          if (atWall) placed = this.tryPlace(r, x, z, 'locker', true, wallRot, sx, sz);
-          if (!placed) placed = this.tryPlace(r, x, z, 'crate', rng() < 0.4, Math.floor(rng() * 4), sx, sz);
-        } else if (r.kind === 'club') {
-          if (atWall) placed = this.tryPlace(r, x, z, 'bar', false, wallRot, sx, sz);
-          else placed = this.tryPlace(r, x, z, 'sofa', false, wallRot, sx, sz)
-            || this.tryPlace(r, x, z, 'chair', false, Math.floor(rng() * 4), sx, sz);
-        } else if (r.kind === 'bedroom') {
-          if (atWall && rng() < 0.55) {
-            placed = this.tryPlace(r, x, z, 'bed', false, wallRot, sx, sz)
-              || this.tryPlace(r, x, z, 'locker', true, wallRot, sx, sz);
-          } else {
-            placed = this.tryPlace(r, x, z, 'sofa', false, wallRot, sx, sz)
-              || this.tryPlace(r, x, z, 'chair', false, wallRot, sx, sz);
-          }
-        } else if (r.kind === 'lobby') {
-          if (atWall) placed = this.tryPlace(r, x, z, 'plant', false, wallRot, sx, sz);
-          else placed = this.tryPlace(r, x, z, 'sofa', false, wallRot, sx, sz)
-            || this.tryPlace(r, x, z, 'chair', false, Math.floor(rng() * 4), sx, sz);
-        } else {
-          if (atWall && rng() < 0.32) placed = this.tryPlace(r, x, z, 'server', true, wallRot, sx, sz);
-          else if (atWall && rng() < 0.5) placed = this.tryPlace(r, x, z, 'shelf', true, wallRot, sx, sz);
-          else {
-            const wantPc = rng() < 0.6;
-            placed = (wantPc && this.tryPlace(r, x, z, 'pc', false, wallRot, sx, sz))
-              || this.tryPlace(r, x, z, 'desk', false, wallRot, sx, sz)
-              || this.tryPlace(r, x, z, rng() < 0.5 ? 'chair' : 'plant', false, wallRot, sx, sz);
+      if (budget <= 0) continue;
+      const { wall, open } = this.freeCells(r, rng);
+
+      // 1. wall furniture: back to the wall, facing the room
+      for (const c of wall) {
+        if (budget <= 0) break;
+        if (this.get(c.x, c.z) !== FLOOR) continue;
+        const kit = wallKit[r.kind];
+        const start = Math.floor(rng() * kit.length);
+        for (let i = 0; i < kit.length; i++) {
+          const [kind, high] = kit[(start + i) % kit.length];
+          // the first choice at a wall is usually the biggest piece that fits the room
+          if (this.tryPlace(r, c.x, c.z, kind, high, this.backToWall(c.side), sx, sz, true, true)) {
+            budget--;
+            // a desk chair in front of a desk, turned towards it
+            if (kind === 'desk' || kind === 'pc') this.addDeskChair(r, c.x, c.z, c.side, sx, sz);
+            break;
           }
         }
-        if (placed) n--;
       }
+
+      // 2. free-standing pieces left over, facing into the room
+      for (const c of open) {
+        if (budget <= 0) break;
+        if (this.get(c.x, c.z) !== FLOOR) continue;
+        const kit = floorKit[r.kind];
+        if (!kit.length) break;
+        const start = Math.floor(rng() * kit.length);
+        for (let i = 0; i < kit.length; i++) {
+          const [kind, high] = kit[(start + i) % kit.length];
+          if (this.tryPlace(r, c.x, c.z, kind, high, this.faceRoom(r, c.x, c.z), sx, sz, true, false)) {
+            budget--;
+            break;
+          }
+        }
+      }
+    }
+  }
+  /** Pulls a chair up to a desk that stands against a wall, facing the desk. */
+  private addDeskChair(r: Room, x: number, z: number, side: number, sx: number, sz: number) {
+    const [dx, dz] = side === 0 ? [0, 1] : side === 2 ? [0, -1] : side === 1 ? [-1, 0] : [1, 0];
+    for (const [ox, oz] of [[0, 0], [dx, dz], [dx * 2, dz * 2]]) {
+      const cx = x + ox, cz = z + oz;
+      if (this.get(cx, cz) !== FLOOR || this.nearDoor(cx, cz)) continue;
+      // chair looks back at the desk: face opposite the desk's facing direction
+      const back = side === 0 ? 2 : side === 2 ? 0 : side === 1 ? 3 : 1;
+      if (this.tryPlace(r, cx, cz, 'chair', false, back, sx, sz, false, false)) return;
     }
   }
 }
