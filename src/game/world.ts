@@ -1,7 +1,7 @@
 // three.js presentation of the simulation: level geometry, characters, effects. All geometry is procedural.
 import * as THREE from 'three';
 import { Sim, Actor, Team } from '../sim/sim';
-import { WALL, OUT, WINDOW, Door, Prop } from '../sim/level';
+import { WALL, OUT, WINDOW, FLOOR, Door, Prop } from '../sim/level';
 import * as T from './textures';
 import { modelsReady, Rig, droppedPistol } from './models';
 import { weaponModel, buildBallisticShield } from './weapons';
@@ -9,6 +9,7 @@ import { OperatorBody, operatorReady } from './operator';
 import { propsReady, onPropsReady, propModel, exteriorPlanterModel, exteriorTreeModel } from './props';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const BOX = new THREE.BoxGeometry(1, 1, 1);
 const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...o });
@@ -32,6 +33,20 @@ function loadCityAsset(name: string): Promise<THREE.Group | null> {
             m.emissive = new THREE.Color(0xffe4b5);
             m.emissiveIntensity = 3.2;
           }
+          // GLB textures default to anisotropy 1, which smears facades into soft blobs when you
+          // stand next to a building and look up. Ask for the sharpest mip filtering we can get.
+          for (const slot of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) {
+            const tex = (m as any)[slot] as THREE.Texture | undefined;
+            if (!tex) continue;
+            tex.anisotropy = 16;
+            if (tex.minFilter === THREE.LinearFilter) tex.minFilter = THREE.LinearMipmapLinearFilter;
+          }
+          // Lit interiors / neon: let those materials emit instead of rendering as flat paint.
+          if (/glow|neon|lit/i.test(m.name || '') && m.map && !m.emissiveMap) {
+            m.emissiveMap = m.map;
+            if (!m.emissive || (m.emissive.r + m.emissive.g + m.emissive.b) === 0) m.emissive = new THREE.Color(0xffffff);
+            m.emissiveIntensity = Math.max(m.emissiveIntensity || 1, 0.55);
+          }
         }
       });
       return sc;
@@ -39,6 +54,146 @@ function loadCityAsset(name: string): Promise<THREE.Group | null> {
     CITY_CACHE.set(name, p);
   }
   return p;
+}
+
+// ---------------- modular facades (Poly Haven CC0, already credited in public/models/city/LICENSE.txt) ----------------
+// The baked-texture building models read as blurry orange blobs when you stand on the pavement and
+// look up, so the street-facing mass is assembled from the real modular facade kits instead: actual
+// window recesses, sills, plaster, trim and 1024px PBR textures.
+interface FacadeModule { nodes: THREE.Object3D[]; origin: THREE.Matrix4; width: number }
+const FACADE_CACHE = new Map<string, FacadeModule | null>();
+
+function facadeModule(kit: THREE.Group | null, wallName: string): FacadeModule | null {
+  if (!kit) return null;
+  const key = kit.name + '/' + wallName;
+  const hit = FACADE_CACHE.get(key);
+  if (hit !== undefined) return hit;
+  const wall = kit.getObjectByName(wallName);
+  if (!wall) { FACADE_CACHE.set(key, null); return null; }
+  wall.updateWorldMatrix(true, true);
+  const wb = new THREE.Box3().setFromObject(wall);
+  const nodes: THREE.Object3D[] = [wall];
+  for (const c of kit.children) {
+    if (c === wall || /^(wall_|cornice|crown|dado|base)/.test(c.name)) continue;
+    const b = new THREE.Box3().setFromObject(c);
+    const ctr = b.getCenter(new THREE.Vector3());
+    if (ctr.x > wb.min.x && ctr.x < wb.max.x && ctr.y > wb.min.y && ctr.y < wb.max.y && ctr.z > wb.max.z - 1.2 && ctr.z < wb.max.z + 0.6) nodes.push(c);
+  }
+  const mod: FacadeModule = {
+    nodes,
+    origin: new THREE.Matrix4().makeTranslation(wb.min.x, wb.min.y, wb.max.z),
+    width: Math.max(1, Math.round(wb.max.x - wb.min.x)),
+  };
+  FACADE_CACHE.set(key, mod);
+  return mod;
+}
+
+/**
+ * KHR_mesh_quantization stores positions/normals/uvs as normalised integers, which
+ * BufferGeometry.applyMatrix4 silently ignores. Widen them to float before baking a placement in.
+ */
+function dequantize(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  for (const name of Object.keys(g.attributes)) {
+    const a = g.getAttribute(name) as THREE.BufferAttribute;
+    if (!a || (a.array instanceof Float32Array && !a.normalized)) continue;
+    const size = a.itemSize, arr = new Float32Array(a.count * size);
+    for (let i = 0; i < a.count; i++) {
+      arr[i * size] = a.getX(i);
+      if (size > 1) arr[i * size + 1] = a.getY(i);
+      if (size > 2) arr[i * size + 2] = a.getZ(i);
+      if (size > 3) arr[i * size + 3] = (a as any).getW ? (a as any).getW(i) : 0;
+    }
+    g.setAttribute(name, new THREE.Float32BufferAttribute(arr, size));
+  }
+  return g;
+}
+
+/** Bake a kit module (wall + its window/door dressing) into world-space geometry buckets. */
+function collectModule(mod: FacadeModule, M: THREE.Matrix4, out: Map<THREE.Material, THREE.BufferGeometry[]>) {
+  const inv = mod.origin.clone().invert();
+  for (const n of mod.nodes) {
+    n.updateWorldMatrix(true, true);
+    n.traverse((o: any) => {
+      if (!o.isMesh || !o.geometry) return;
+      const g = dequantize((o.geometry as THREE.BufferGeometry).clone());
+      g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(M, inv).multiply(o.matrixWorld));
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (!m) continue;
+        const bucket = out.get(m);
+        if (bucket) bucket.push(g); else out.set(m, [g]);
+      }
+    });
+  }
+}
+
+/**
+ * Build one building shell out of modular facade tiles. Rises `floors` storeys of 3 m from `y0`.
+ */
+async function buildFacadeBlock(
+  kitName: 'modular_urban_apartments_facade' | 'modular_factory_facade',
+  box: { x0: number; z0: number; x1: number; z1: number; y0: number; floors: number; seed: number },
+  group: THREE.Group,
+  quality: number,
+): Promise<void> {
+  const kit = await loadCityAsset(kitName);
+  if (!kit) return;
+  const apt = kitName === 'modular_urban_apartments_facade';
+  const upper = apt
+    ? ['wall_window_centered_large_01', 'wall_window_centered_double_01', 'wall_window_centered_small_01', 'wall_window_offset_small_01']
+    : ['wall_window_centered_large_01', 'wall_window_tall_large_01', 'wall_window_centered_medium_01', 'wall_window_centered_double_01'];
+  // no door modules up here: their leaves swing out over the pavement
+  const ground = apt
+    ? ['wall_window_centered_large_01', 'wall_window_centered_double_01', 'wall_window_offset_small_01']
+    : ['wall_window_centered_large_01', 'wall_window_centered_medium_01', 'wall_window_offset_small_01'];
+  let rs = box.seed * 9301 + 49297;
+  const rnd = () => ((rs = (rs * 9301 + 49297) % 233280) / 233280);
+  const { x0, z0, x1, z1, y0, floors } = box;
+  const parts = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
+  const faces = [
+    { len: x1 - x0, at: (i: number) => new THREE.Vector3(x0 + i, 0, z1), rot: 0 },
+    { len: x1 - x0, at: (i: number) => new THREE.Vector3(x1 - i, 0, z0), rot: Math.PI },
+    { len: z1 - z0, at: (i: number) => new THREE.Vector3(x1, 0, z1 - i), rot: Math.PI / 2 },
+    { len: z1 - z0, at: (i: number) => new THREE.Vector3(x0, 0, z0 + i), rot: -Math.PI / 2 },
+  ];
+  const fallback = facadeModule(kit, 'wall_standard_standard_01');
+  for (const f of faces) {
+    q.setFromAxisAngle(up, f.rot);
+    for (let fl = 0; fl < floors; fl++) {
+      let u = 0, guard = 0;
+      while (u < f.len - 0.01 && guard++ < 64) {
+        const pool = fl === 0 ? ground : upper;
+        let m = facadeModule(kit, pool[(rnd() * pool.length) | 0] ?? upper[fl % 2]);
+        // never let a module hang past the corner: that stuck a 3 m slab out of every storey
+        if (!m || u + m.width > f.len + 0.01) m = u === 0 ? (fallback ?? null) : null;
+        if (!m) break;
+        const p = f.at(u); p.y = y0 + fl * 3;
+        collectModule(m, new THREE.Matrix4().compose(p, q, one), parts);
+        u += m.width;
+      }
+    }
+  }
+  // one merged mesh per material keeps the draw calls down
+  for (const [mat, geos] of parts) {
+    let mesh: THREE.Mesh | null = null;
+    try {
+      const merged = mergeGeometries(geos, false);
+      if (merged) mesh = new THREE.Mesh(merged, mat);
+    } catch { mesh = null; }
+    if (!mesh) { for (const g of geos) group.add(new THREE.Mesh(g, mat)); continue; }
+    // no shadow casting from the street facades: 140k triangles through the torch shadow pass is not worth it
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+  // flat roof slab so the block reads as a finished building from street level
+  const roof = new THREE.Mesh(
+    new THREE.BoxGeometry(x1 - x0, 0.34, z1 - z0),
+    new THREE.MeshStandardMaterial({ color: 0x23282f, roughness: 0.92 }),
+  );
+  roof.position.set((x0 + x1) / 2, y0 + floors * 3 + 0.17, (z0 + z1) / 2);
+  roof.castShadow = quality >= 2; roof.receiveShadow = true;
+  group.add(roof);
 }
 
 const MARAUDER_PAINT: Record<string, [number, number, number]> = { Body_2: [0x3d485e, 0.45, 0.58], Metal_UP_5: [0x4b5363, 0.5, 0.62] };
@@ -143,6 +298,30 @@ export class LevelView {
     const curbMat = std({ color: 0x262a31, roughness: 0.72, metalness: 0.25 });
     const perimH = l.theme === 'club' ? 2.6 : 0.85;
     mk(inner, wallMat); mk(outer.filter(([x, z]) => !(x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1)), brickMat, 3.2); mk(outer.filter(([x, z]) => x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1), l.theme === 'club' ? brickMat : curbMat, perimH);
+    // Perimeter cells are drawn with the dark exterior brick/curb material, but many of them also
+    // face a playable room. Skin those faces in the interior plaster so the level does not end in
+    // a matte-black wall like the corridor corner did.
+    const skins: { x: number; z: number; ry: number }[] = [];
+    for (const [x, z] of outer) {
+      for (const [dx, dz] of [[0, -1], [0, 1], [-1, 0], [1, 0]] as const) {
+        const nx = x + dx, nz = z + dz;
+        if (nx < 0 || nz < 0 || nx >= l.w || nz >= l.h) continue;
+        if (sim.cell(nx, nz) !== FLOOR) continue;   // only open floor gets a plaster face; frames dress themselves
+        skins.push({ x: x + 0.5 + dx * 0.503, z: z + 0.5 + dz * 0.503, ry: Math.atan2(dx, dz) });
+      }
+    }
+    if (skins.length) {
+      const skinGeo = new THREE.PlaneGeometry(1, 3);
+      const im = new THREE.InstancedMesh(skinGeo, wallMat, skins.length);
+      const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), pos = new THREE.Vector3();
+      im.receiveShadow = quality >= 2;
+      skins.forEach((s, i) => {
+        q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), s.ry);
+        m4.compose(pos.set(s.x, 1.5, s.z), q, one);
+        im.setMatrixAt(i, m4);
+      });
+      g.add(im);
+    }
     // breakable glass windows (floor-to-ceiling curtain-wall glass on office/hotel/club ground exterior)
     const glassMat = quality > 0
       ? new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.3, roughness: 0.08, metalness: 0.15 })
@@ -413,10 +592,13 @@ export class LevelView {
 
       // Photorealistic 3D office upper stories on y=3.12 + distinct corporate tower & neighboring complex
       g.add(box(24.4, 0.25, 18.2, darkSteel, 16.0, 3.22, 11.9));
-      placeCityModel('office_main', { x: 16.0, y: 3.18, z: 11.9, w: 24.4, h: 15.8, d: 18.2 });
-      placeCityModel('office_tower', { x: 39.5, y: 0, z: 10.5, w: 13.5, h: 28.0, d: 11.0, ry: -0.14 });
-      placeCityModel('office_neighbor', { x: -13.5, y: 0, z: 11.5, w: 26.0, h: 12.5, d: 14.0, ry: Math.PI / 2 });
-      placeCityModel('city_clinic', { x: 18.0, y: 0, z: -12.0, w: 24.0, h: 11.5, d: 12.0 });
+      // Street-facing storeys are built from real modular facade tiles (real window recesses and
+      // 1K PBR plaster/stone) instead of the old single baked-texture building.
+      g.add(box(23.6, 12.2, 17.4, std({ color: 0x1a1f26, roughness: 0.9, emissive: 0x1d1409, emissiveIntensity: 0.55 }), 16.0, 9.5, 11.9));
+      extPromises.push(buildFacadeBlock('modular_urban_apartments_facade', { x0: 3.9, z0: 2.9, x1: 28.1, z1: 21.05, y0: 3.34, floors: quality >= 2 ? 4 : 3, seed: 11 }, g, quality));
+      placeCityModel('hotel_neighbor', { x: 39.5, y: 0, z: 10.5, w: 13.5, h: 28.0, d: 11.0, ry: -0.14 });
+      placeCityModel('office_tower', { x: -13.5, y: 0, z: 11.5, w: 26.0, h: 12.5, d: 14.0, ry: Math.PI / 2 });
+      placeCityModel('hotel_neighbor', { x: 18.0, y: 0, z: -12.0, w: 24.0, h: 11.5, d: 12.0 });
       placeCityModel('metal_trash_can', { x: 9.2, y: 0, z: 24.2 });
       placeCityModel('fire_hydrant', { x: 4.9, y: 0, z: 25.4 });
       placeCityModel('concrete_road_barrier_02', { x: 26.2, y: 0, z: 26.2, ry: 0.18 });
@@ -469,7 +651,7 @@ export class LevelView {
       placeCityModel('hotel_main', { x: 23.0, y: 3.26, z: 14.4, w: 38.4, h: 24.0, d: 21.4 });
       placeCityModel('hotel_neighbor', { x: -5.5, y: 0, z: 15.5, w: 12.0, h: 15.5, d: 13.0, ry: Math.PI / 2 });
       placeCityModel('hotel_neighbor', { x: 50.5, y: 0, z: 15.5, w: 12.0, h: 15.5, d: 13.0, ry: -Math.PI / 2 });
-      placeCityModel('office_neighbor', { x: 23.0, y: 0, z: -12.0, w: 30.0, h: 12.5, d: 14.0 });
+      placeCityModel('hotel_neighbor', { x: 23.0, y: 0, z: -12.0, w: 30.0, h: 12.5, d: 14.0 });
       placeCityModel('fire_hydrant', { x: 14.4, y: 0, z: 26.8 });
       placeCityModel('metal_trash_can', { x: 28.4, y: 0, z: 25.8 });
       addStreetLamp(13.5, 26.4, 0xffd59e);
@@ -487,10 +669,10 @@ export class LevelView {
       ped.rotation.y = Math.PI / 6; ped.scale.set(1.0, 1.0, 0.35); ped.position.set(15.5, 8.6, 25.1); g.add(ped);
       // Stone upper bank building on y=3.24 + classical historic annex buildings flanking the street
       g.add(box(36.2, 0.28, 21.2, limestone, 22.0, 3.24, 14.4));
-      placeCityModel('bank_main', { x: 22.0, y: 3.26, z: 14.4, w: 36.2, h: 14.5, d: 21.2 });
+      placeCityModel('office_tower', { x: 22.0, y: 3.26, z: 14.4, w: 36.2, h: 14.5, d: 21.2 });
       placeCityModel('bank_annex', { x: -6.5, y: 0, z: 17.0, w: 18.5, h: 12.5, d: 12.0, ry: Math.PI / 2 });
       placeCityModel('bank_annex', { x: 50.5, y: 0, z: 17.0, w: 18.5, h: 12.5, d: 12.0, ry: -Math.PI / 2 });
-      placeCityModel('office_main', { x: 22.0, y: 0, z: -13.0, w: 26.0, h: 16.0, d: 15.0 });
+      placeCityModel('hotel_neighbor', { x: 22.0, y: 0, z: -13.0, w: 26.0, h: 16.0, d: 15.0 });
       for (const bx of [9.6, 11.2, 12.8, 18.2, 19.8]) addBollard(bx, 27.1);
       addShrub(12.3, 25.7); addShrub(18.7, 25.7);
       addTree(7.8, 26.2, 1.6); addTree(30.8, 26.2, 1.6);
@@ -505,7 +687,7 @@ export class LevelView {
       placeCityModel('club_main', { x: 20.0, y: 3.24, z: 13.4, w: 32.2, h: 13.5, d: 21.2 });
       placeCityModel('club_alley', { x: -4.2, y: 0, z: 22.0, w: 14.0, h: 12.0, d: 14.0, ry: Math.PI / 2 });
       placeCityModel('club_alley', { x: 34.5, y: 0, z: 24.5, w: 14.0, h: 12.0, d: 14.0, ry: -Math.PI / 2 });
-      placeCityModel('city_clinic', { x: 48.0, y: 0, z: 12.0, w: 18.0, h: 11.0, d: 11.0, ry: -Math.PI / 2 });
+      placeCityModel('hotel_neighbor', { x: 48.0, y: 0, z: 12.0, w: 18.0, h: 11.0, d: 11.0, ry: -Math.PI / 2 });
       placeCityModel('modular_fire_escape', { x: 4.8, y: 2.6, z: 27.0, ry: Math.PI / 2, scale: 0.72 });
       placeCityModel('metal_trash_can', { x: 6.8, y: 0, z: 28.4, ry: Math.PI / 2 });
       placeCityModel('street_lamp_02', { x: 6.2, y: 3.4, z: 26.6, ry: Math.PI / 2 });

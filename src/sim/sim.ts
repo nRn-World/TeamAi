@@ -121,6 +121,8 @@ export const yawTo = (dx: number, dz: number) => Math.atan2(-dx, -dz);
 export const angDiff = (a: number, b: number) => { let d = (b - a) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d; };
 const turn = (a: number, b: number, max: number) => { const d = angDiff(a, b); return a + Math.max(-max, Math.min(max, d)); };
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.z - b.z);
+/** Extra elbow room police keep from each other so bodies and rifles do not intersect. */
+const PERSONAL_SPACE = 0.26;
 
 /** World-space hinged door leaf segment matching LevelView's 3D pivot & swing angle. */
 export function doorLeafSegment(d: Door) {
@@ -744,10 +746,58 @@ export class Sim {
     }
     a.yaw = turn(a.yaw, yawTo(dx, dz), 9 * dt);
     const sp = a.speed * speedMul * dt, mv = Math.min(sp, d), bx = a.x, bz = a.z;
-    this.moveCircle(a, f.x * mv, f.z * mv);
+    // Never walk into a teammate: try the straight step, then slide around, else stand still.
+    let mx = f.x * mv, mz = f.z * mv;
+    if (this.actorInWay(a, bx + mx, bz + mz)) {
+      let clear = false;
+      for (const ang of [0.65, -0.65, 1.25, -1.25]) {
+        const sx = mx * Math.cos(ang) - mz * Math.sin(ang), sz = mx * Math.sin(ang) + mz * Math.cos(ang);
+        if (!this.actorInWay(a, bx + sx, bz + sz)) { mx = sx; mz = sz; clear = true; break; }
+      }
+      if (!clear) { mx = 0; mz = 0; }
+    }
+    if (mx || mz) this.moveCircle(a, mx, mz);
     const moved = Math.hypot(a.x - bx, a.z - bz);
-    a.moving = true; a.walk += moved * 2.4;
-    if (moved < mv * 0.3) a.stuckT += dt; else a.stuckT = Math.max(0, a.stuckT - dt * 0.5);
+    if (moved > 1e-4) { a.moving = true; a.walk += moved * 2.4; } else a.moving = false;
+    if (moved < mv * 0.3) a.stuckT += dt * (mx || mz ? 1 : 0.4); else a.stuckT = Math.max(0, a.stuckT - dt * 0.5);
+  }
+  /** A standing operator whose body would be entered by stepping to (x, z). */
+  private actorInWay(a: Actor, x: number, z: number): Actor | null {
+    for (const b of this.actors) {
+      if (b === a || !b.alive || b.down) continue;
+      if (b.kind === 'suspect' || b.kind === 'civ') continue; // people we are clearing may still be approached
+      const dx = b.x - x, dz = b.z - z, min = a.r + b.r + PERSONAL_SPACE;
+      if (dx * dx + dz * dz < min * min) return b;
+    }
+    return null;
+  }
+  /**
+   * Push two overlapping bodies apart. A plain reciprocal push is enough in the open, but in a
+   * corner the wall eats it and the pair stays fused while both keep being shoved every frame —
+   * that is what made squads vibrate. When the push is blocked we look for a free direction
+   * that actually opens the gap and take that instead.
+   */
+  private separatePair(a: Actor, b: Actor, ux: number, uz: number, push: number) {
+    const want = push * 0.5;
+    const shove = (k: Actor, dx: number, dz: number) => {
+      const x0 = k.x, z0 = k.z;
+      k.x += dx; k.z += dz;
+      this.resolve(k);
+      return Math.hypot(k.x - x0, k.z - z0);
+    };
+    const got = shove(a, -ux * want, -uz * want) + shove(b, ux * want, uz * want);
+    if (got > want * 0.75) return;
+    // Wedged: search the free directions around a and keep the one that separates most.
+    const ax = a.x, az = a.z;
+    let bx = a.x, bz = a.z, best = Math.hypot(a.x - b.x, a.z - b.z);
+    for (let i = 0; i < 8; i++) {
+      const ang = (i / 8) * Math.PI * 2;
+      a.x = ax + Math.cos(ang) * want; a.z = az + Math.sin(ang) * want;
+      this.resolve(a);
+      const gap = Math.hypot(a.x - b.x, a.z - b.z);
+      if (gap > best + 1e-3) { best = gap; bx = a.x; bz = a.z; }
+    }
+    a.x = bx; a.z = bz;
   }
   setDoor(door: Door, open: boolean, kick = false, force = false, quiet = false, by?: Actor): boolean {
     const t = open ? 1 : 0;
@@ -1415,7 +1465,14 @@ export class Sim {
           const tg = this.dirTarget(cmd.dir ?? 'forward', aim, by);
           if (!tg) { reply(lead, tag + "Can't get there."); break; }
           const f = fwd(tg.face), side = { x: -f.z, z: f.x }; const pts: Pt[] = [];
-          for (let i = 0; i < count; i++) { const k = count === 1 ? 0 : (i - (count - 1) / 2) * (off ? 1.4 : 1.2); const q = { x: tg.p.x + side.x * k, z: tg.p.z + side.z * k }; pts.push(!this.solidCell(Math.floor(q.x), Math.floor(q.z)) && walkLine(this.level, tg.p, q) ? q : tg.p); }
+          for (let i = 0; i < count; i++) {
+            const k = count === 1 ? 0 : (i - (count - 1) / 2) * (off ? 1.4 : 1.2);
+            const q = { x: tg.p.x + side.x * k, z: tg.p.z + side.z * k };
+            // Keep every operator on their own spot: falling back to the shared target stacked
+            // teammates on top of each other, where they then pushed and shuddered.
+            const free = !this.solidCell(Math.floor(q.x), Math.floor(q.z)) && walkLine(this.level, tg.p, q);
+            pts.push(free ? q : (nearestWalkable(this.level, q.x, q.z, 1.6) ?? q));
+          }
           set({ type: 'move', phase: 0, t: 0, pts, face: tg.face }); this.events.push({ t: 'marker', x: tg.p.x, z: tg.p.z, team });
           reply(lead, tag + ({ left: 'Moving left.', right: 'Moving right.', forward: 'Moving up.', back: 'Falling back.', there: 'Moving to that position.' } as const)[cmd.dir ?? 'forward']); break;
         }
@@ -2162,10 +2219,12 @@ export class Sim {
       if (a.restrained) continue;
       if (a.kind === 'officer') this.updateOfficer(a, dt); else if (a.kind === 'suspect') this.updateSuspect(a, dt); else if (a.kind === 'civ') this.updateCiv(a, dt);
     }
-    const A = this.actors;
+    const A = this.actors, police = (p: Actor) => p.kind === 'player' || p.kind === 'officer';
     for (let i = 0; i < A.length; i++) for (let j = i + 1; j < A.length; j++) {
       const a = A[i], b = A[j]; if (!a.alive || !b.alive) continue;
-      const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz), min = a.r + b.r; if (d >= min || d < 1e-5) continue;
+      const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
+      const min = a.r + b.r + (police(a) && police(b) ? PERSONAL_SPACE : 0);
+      if (d >= min || d < 1e-5) continue;
       if (a.down !== b.down) {
         const k = a.down ? a : b, o = a.down ? b : a;
         if (o.kind === 'player' || o.kind === 'officer') this.giveWay(k, o);
@@ -2189,9 +2248,7 @@ export class Sim {
         }
         continue;
       }
-      a.x -= (dx / d) * push * 0.5; a.z -= (dz / d) * push * 0.5;
-      b.x += (dx / d) * push * 0.5; b.z += (dz / d) * push * 0.5;
-      this.resolve(a); this.resolve(b);
+      this.separatePair(a, b, dx / d, dz / d, push);
     }
     this.updateGrenades(dt);
     this.updateClouds(dt);
