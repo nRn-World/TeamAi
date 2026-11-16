@@ -502,7 +502,11 @@ ok(wins >= 4, 'bot should be able to win across missions');
   ok(sim.events.some(e => e.t === 'optiwand'), 'peekDoor emits optiwand event for player PiP camera');
 
   // 5) Wallbang penetration through solid wood door (exclude glass doors)
-  const woodDoor = sim.level.doors.find(d => d.horiz && !sim.isMetalDoor(d) && !sim.isGlassDoor(d))!;
+  // pick a wood door with nobody standing in the firing line (actors have been moving for a while)
+  const clearOfActors = (d: typeof sim.level.doors[number]) =>
+    !sim.actors.some(a => a !== pl && Math.hypot(a.x - (d.cx + 0.5), a.z - (d.cz + 1.7)) < 3);
+  const woodDoor = sim.level.doors.find(d => d.horiz && !sim.isMetalDoor(d) && !sim.isGlassDoor(d) && clearOfActors(d))
+    ?? sim.level.doors.find(d => d.horiz && !sim.isMetalDoor(d) && !sim.isGlassDoor(d))!;
   woodDoor.open = 0; woodDoor.target = 0;
   const wx = woodDoor.cx + 0.5, wz = woodDoor.cz + 0.5;
   sim.events.length = 0;

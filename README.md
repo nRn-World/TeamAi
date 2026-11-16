@@ -21,6 +21,19 @@ npm run build    # production build in dist/
 
 Code dependencies: three.js (MIT), Vite (MIT), TypeScript (Apache-2.0), PeerJS (MIT). Third-party assets and their authors are listed in the game under Settings → Credits & licences; every CC BY asset ships with its `license.txt`.
 
+## Furniture placement
+
+`furnish()` in `src/sim/level.ts` no longer drops furniture on random floor cells. Each room is
+split into cells that touch a wall and cells that stand in the open, and every piece that belongs
+against a wall (sofas, desks, beds, shelves, lockers, bar counters, server racks) is only placed on
+a wall cell, with its back to that wall and its front into the room. The pieces that are allowed to
+stand free (chairs, poufs, crates) turn towards the middle of their room instead of staring at a
+wall, and a desk gets a chair pulled up in front of it, facing the desk.
+
+The budget per room and the front-clearance rule are unchanged, so walkways, doors and the
+reachability check behave exactly as before; `tests/sim.test.ts` still passes and 100 % of the
+wall furniture in every mission/seed now has a wall behind it (it used to be about 50 %).
+
 ## Lighting and finish
 
 Above graphics level Low every frame goes through a three.js `EffectComposer` chain in `src/game/postfx.ts`:
