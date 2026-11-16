@@ -22,8 +22,9 @@
     </div>
   </div>
   <div id="pipFrame" class="hidden">
-    <div class="pip-head"><span class="pip-dot">●</span><span id="pipLabel">HELMET CAM · KEN</span><small>P</small></div>
+    <div class="pip-head"><span class="pip-dot">●</span><span id="pipLabel">HELMET CAM · KEN</span><small id="pipKey">P</small></div>
     <div class="pip-scan"></div>
+    <div id="pipMeta" class="pip-meta hidden"></div>
   </div>
   <div id="cross"><i></i><i></i><i></i><i></i><b></b></div>
   <div id="ffWarn" class="hidden">FRIENDLY — HOLD FIRE</div>
@@ -43,7 +44,7 @@
   <div id="progress"><div></div></div>
   <div id="stance"></div>
   <div id="status"><div id="hpbar"><div></div></div><div id="hptxt">100</div></div>
-  <div id="ammo"><div id="wname">CARBINE</div><div id="acount"><b>30</b> / 150</div><div id="bangs">◉◉◉</div></div>
+  <div id="ammo"><div id="wname">CARBINE</div><div id="acount"><b>30</b> / 150</div><div id="bangs"></div><div id="magBadge" class="hidden">3× MAG [SHIFT]</div></div>
   <div id="quick"></div>
   <div id="dispatchPanel" class="hidden">
     <div class="dp-head"><span>DISPATCH // CHAT CHAOS</span><button type="button" id="btnCloseDispatch">×</button></div>
@@ -229,13 +230,31 @@
 </div></div>
 
 <div id="brief" class="screen hidden"><div class="panel wide briefp">
-  <div class="kicker">Mission briefing</div>
-  <h2 id="briefTitle"></h2>
-  <div class="briefgrid"><div class="plan"><canvas id="briefMap"></canvas><div class="planlbl">Floor plan · <i class="dotE"></i> entrance</div></div>
-  <div>
-    <p id="briefText"></p>
-    <div id="briefFacts" class="facts"></div>
-  </div></div>
+  <div class="brief-top">
+    <div><div class="kicker">Mission briefing · Pre-Planning</div><h2 id="briefTitle"></h2></div>
+    <button type="button" id="btnPlayDispatch" class="dispatch-play">▶ PLAY 911 DISPATCH</button>
+  </div>
+  <div class="briefgrid">
+    <div class="plan">
+      <div class="plan-tools">
+        <button type="button" class="ptool on" data-pt="A">Team A Route</button>
+        <button type="button" class="ptool" data-pt="B">Team B Route</button>
+        <button type="button" class="ptool" data-pt="c2">C2 Pin</button>
+        <button type="button" class="ptool" data-pt="flash">Flash Pin</button>
+        <button type="button" id="btnClearPlan">Clear</button>
+      </div>
+      <canvas id="briefMap"></canvas>
+      <div class="planlbl">Click or drag on floorplan · <i class="dotE"></i> Entry · <span style="color:#ff5a5a">━</span> Team A · <span style="color:#4a9eff">━</span> Team B</div>
+    </div>
+    <div>
+      <p id="briefText"></p>
+      <div class="brief-entry-box">
+        <div class="clabel">ENTRY POINT</div>
+        <div id="briefEntries" class="brief-entries"></div>
+      </div>
+      <div id="briefFacts" class="facts"></div>
+    </div>
+  </div>
   <div class="tips"><b>Say for example:</b> «Team A go left» · «Team B cover me» · «Everyone stack up on the door» · «Bravo bang and clear» · «Ken, you cover us» · «Jack, throw flash» · «Police! Drop the weapon!» · «Team A cuff them»</div>
   <div class="row"><button id="btnBack">Back</button><button id="btnGo" class="primary">Begin operation</button></div>
 </div></div>
@@ -268,11 +287,11 @@
 <div id="help" class="screen hidden"><div class="panel wide scroll">
   <h2>Controls</h2>
   <div class="grid2">
-    <div><kbd>W A S D</kbd> Walk</div><div><kbd>Shift</kbd> Run (heard far away)</div><div><kbd>X</kbd> Sneak on/off (silent)</div><div><kbd>C</kbd> Crouch · <kbd>Z</kbd> Crawl (silent)</div><div><kbd>Space</kbd> Jump / stand up</div>
-    <div><kbd>Mouse</kbd> Look · <kbd>Left click</kbd> Fire</div><div><kbd>Right click</kbd> (hold) Zoom / aim</div><div><kbd>R</kbd> Reload · <kbd>1</kbd>/<kbd>2</kbd> Weapons</div>
-    <div><kbd>F</kbd> Open door / cuff / breaker / defuse / revive ally</div><div><kbd>G</kbd> Throw flashbang · <kbd>O</kbd> Share gear/ammo</div>
-    <div><kbd>E</kbd> Optiwand peek door · <kbd>U</kbd> C2 charge</div><div><kbd>Y</kbd> Wedge door · <kbd>N</kbd> Night Vision (NVG)</div>
-    <div><kbd>V</kbd> (hold) Talk to your team · <kbd>Q</kbd> Shout «Police! Drop the weapon!»</div><div><kbd>T</kbd> Flashlight · <kbd>L</kbd> Tactical Laser · <kbd>K</kbd> Bodycam · <kbd>M</kbd> Map</div>
+    <div><kbd>W A S D</kbd> Walk</div><div><kbd>Shift</kbd> Run · 3× Magnifier (while ADS)</div><div><kbd>X</kbd> Sneak on/off (silent)</div><div><kbd>C</kbd> Crouch · <kbd>Z</kbd> Crawl (silent)</div><div><kbd>Space</kbd> Jump / stand up</div>
+    <div><kbd>Q</kbd> / <kbd>E</kbd> Lean / Peek around corners</div><div><kbd>Mouse</kbd> Look · <kbd>Left click</kbd> Fire</div><div><kbd>Right click</kbd> (hold) Aim down sights</div><div><kbd>R</kbd> Reload · <kbd>1</kbd>/<kbd>2</kbd> Weapons</div>
+    <div><kbd>F</kbd> Open door / cuff / breaker / defuse / revive / shout</div><div><kbd>G</kbd> Throw grenade · <kbd>`</kbd> Cycle Flash / Smoke / CS Gas</div>
+    <div><kbd>O</kbd> Optiwand Live Cam (door) / Share gear</div><div><kbd>U</kbd> C2 charge · <kbd>Y</kbd> Wedge door</div><div><kbd>N</kbd> Night Vision (NVG)</div>
+    <div><kbd>V</kbd> (hold) Talk to your team · <kbd>CapsLock</kbd> Shout compliance</div><div><kbd>T</kbd> Flashlight · <kbd>L</kbd> Tactical Laser · <kbd>K</kbd> Bodycam · <kbd>M</kbd> Map</div>
     <div><kbd>I</kbd> Fire Mode (Auto/Semi) · <kbd>P</kbd> Helmet Cam PiP · <kbd>F8</kbd> Dispatch</div>
     <div><kbd>Middle Click</kbd> Tactical 3D Ping · <kbd>J</kbd> Sync Breach Countdown</div>
     <div><kbd>B</kbd> Voice chat: microphone on/off (online)</div><div><kbd>H</kbd> Radial Command Wheel</div>
@@ -358,6 +377,7 @@
       <li><div><b>Outdoor Urban Textures</b><span>wet asphalt, concrete sidewalks, brick and modern glass building facades</span></div><div class="by">Poly Haven (polyhaven.com) · mohammedemara48-code/police-command</div><em>CC0</em></li>
       <li><div><b>Low-Poly M4a1</b><span>the officers’ carbine on the lowest graphics setting</span></div><div class="by">TastyTony · sketchfab.com/TastyTony</div><div class="src">sketchfab.com/3d-models/low-poly-m4a1-8cab1cbeb82c4396a154f9fc8771417b</div><div class="src">Changes: scaled, rotated, brighter materials</div><em>CC BY 4.0</em></li>
       <li><div><b>Glock17</b><span>SWAT tactical pistol</span></div><div class="by">sigmuuus · sketchfab.com/sigmuuus</div><div class="src">sketchfab.com/3d-models/glock17-0ed3cb4fe262459f978bb3d4893f5d2b</div><div class="src">Changes: scaled, two-tone nitride/polymer finish, RMR optic, tritium sights, X300 weapon light</div><em>CC BY 4.0</em></li>
+      <li><div><b>Pump Shotgun (Guns &amp; Explosives)</b><span>M870 / Beanbag tactical pump shotgun</span></div><div class="by">3dmodelscc0 · 3dmodelscc0.com (adapted via madeyexz/turfwar)</div><div class="src">github.com/madeyexz/turfwar</div><div class="src">Changes: extracted M1014 mesh, packed 512px WebP PBR textures, added side-saddle shells and orange less-lethal variant</div><em>CC0</em></li>
       <li><div><b>Animated FPS hands (rifle animation pack)</b><span>first-person arms and rifle</span></div><div class="by">Cransh · sketchfab.com/ccransh</div><div class="src">sketchfab.com/3d-models/animated-fps-hands-rifle-animation-pack-5f2d0ed780a94724b36ab505f7564057</div><div class="src">Changes: textures downscaled, suppressor hidden, left arm hidden in pistol mode</div><em>CC BY 4.0</em></li>
       <li><div><b>Ultimate Modular Men · Ultimate Modular Women</b><span>suspects, civilians and the animations</span></div><div class="by">Quaternius · quaternius.com</div><em>CC0</em></li>
       <li><div><b>Plants, Furniture &amp; Crates</b><span>potted trees, planters, desks, sofas, chairs, shelf, crate</span></div><div class="by">Poly Haven · polyhaven.com · Khronos Group (GlassVaseFlowers)</div><em>CC0</em></li>
@@ -368,7 +388,7 @@
       <li><div><b>«Digital Blackout»</b><span>main menu tactical ambient music</span></div><div class="by">Music by CO.AG · coagmusic@gmail.com</div><div class="src">youtube.com/@coagmusic · via Fris0uman/CDDA-Music-Packs (written authorization for free &amp; CC BY 4.0 use with credit)</div><em>CC BY 4.0</em></li>
       <li><div><b>Rain (loopable)</b><span>outdoor rainy night ambience in the main menu</span></div><div class="by">Ylmir · opengameart.org/content/rain-loopable</div><em>CC0</em></li>
       <li><div><b>The Free Firearm Sound Library</b><span>gunshots – recordings of real firearms</span></div><div class="by">Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney</div><div class="src">opengameart.org/content/the-free-firearm-sound-library</div><em>CC0</em></li>
-      <li><div><b>Reload and handling sounds</b><span>«Gun Reload Sounds», «Gun Reload Sound Effects», «Handgun Reload Sound Effect», «Equipment Clicks III»</span></div><div class="by">SpringySpringo · BMacZero (Brian MacIntosh) · zer0_sol · LFA</div><div class="src">opengameart.org · cut and normalised in the project Turf War (github.com/madeyexz/turfwar, MIT)</div><em>CC0</em></li>
+      <li><div><b>Reload and handling sounds</b><span>«Gun Reload Sounds», «Gun Reload Sound Effects», «Handgun Reload Sound Effect», «Shotgun Reload Sound Effects», «Equipment Clicks III»</span></div><div class="by">SpringySpringo · BMacZero (Brian MacIntosh) · zer0_sol · LFA</div><div class="src">opengameart.org · cut and normalised in the project Turf War (github.com/madeyexz/turfwar, MIT)</div><em>CC0</em></li>
       <li><div><b>RPG Audio</b><span>doors – recorded handle, latch, hinge creak and the door meeting its frame</span></div><div class="by">Kenney (kenney.nl)</div><div class="src">kenney.nl/assets/rpg-audio · mixed to mono and levelled</div><em>CC0</em></li>
       <li><div><b>Kokoro-82M</b><span>speech model behind every spoken line</span></div><div class="by">hexgrad · huggingface.co/hexgrad/Kokoro-82M</div><div class="src">Changes: shouted lines are sped up, compressed and given a room echo</div><em>Apache-2.0</em></li>
       <li><div><b>kokoro-onnx</b><span>runs the speech model</span></div><div class="by">thewh1teagle</div><em>MIT</em></li>

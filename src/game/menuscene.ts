@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import * as T from './textures';
 import { ActorView } from './world';
 import { Actor } from '../sim/sim';
-import { loadOperator, menuOperator } from './operator';
+import { loadOperator, menuOperator, equipOperatorLoadout } from './operator';
+import type { PrimaryLoadout, SecondaryLoadout } from '../sim/sim';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
@@ -609,6 +610,8 @@ export class MenuScene {
   }
 
   /** Replace stand-in squad with detailed SWAT operator models. */
+  private curLoadout: { primary: PrimaryLoadout; secondary: SecondaryLoadout } = { primary: 'carbine', secondary: 'pistol' };
+
   async hero(count: number) {
     this.heroMode = true;
     if (!(await loadOperator())) { this.heroMode = false; return false; }
@@ -623,7 +626,16 @@ export class MenuScene {
       this.scene.add(w); this.heroes.push(w);
       if (m.mixer) this.mixers.push(m.mixer);
     }
+    this.setHeroLoadout(this.curLoadout.primary, this.curLoadout.secondary);
     return true;
+  }
+
+  setHeroLoadout(primary: PrimaryLoadout, secondary: SecondaryLoadout) {
+    this.curLoadout = { primary, secondary };
+    const lead = this.heroes[0];
+    if (lead && lead.children[0]) {
+      equipOperatorLoadout(lead.children[0], primary, secondary);
+    }
   }
 
   /** Armored SWAT truck («Paramount Marauder») + Police SUV cruiser behind the squad on the wet street. */
@@ -776,7 +788,7 @@ export class MenuScene {
     }
   }
 
-  upgradeWeapons() { /* kept for compatibility */ }
+  upgradeWeapons() { this.setHeroLoadout(this.curLoadout.primary, this.curLoadout.secondary); }
 
   env(r: THREE.WebGLRenderer) {
     if (this.scene.environment) return;

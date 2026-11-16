@@ -1,7 +1,7 @@
 import { loadModels, modelsReady } from './game/models';
 import * as THREE from 'three';
-import { Sim, Actor, Command, Team, Ev, fwd, PrimaryLoadout, SecondaryLoadout, CoopMods } from './sim/sim';
-import { MISSIONS, WALL, DOOR, LOW, HIGH, WINDOW, buildLevel } from './sim/level';
+import { Sim, Actor, Command, Team, Ev, fwd, PrimaryLoadout, SecondaryLoadout, CoopMods, PrePlan } from './sim/sim';
+import { MISSIONS, WALL, DOOR, LOW, HIGH, WINDOW, buildLevel, Level, Door } from './sim/level';
 import { MenuScene } from './game/menuscene';
 import { operatorEnv } from './game/operator';
 import { loadWeapons, weaponsReady, FpsArms, studioEnv } from './game/weapons';
@@ -44,20 +44,26 @@ const dailyInfo = () => {
 };
 const SECTOR_LOCS = ['KISTA SECTOR · SE', 'DOCKLANDS · HARBOR', 'CITY CENTER · SE', 'FINANCIAL DIST · SE', 'SUBWAY CLUB · SE', 'OUTSKIRTS COMPOUND'];
 
-// where the animated arms move to when aiming: x, y, z offset and pitch, yaw; carbine then pistol
-const AIMPOS = [[-0.113, 0.036, 0, 0, 0], [-0.0936, 0.0813, -0.02, 0, 0]];
+// where the animated arms move to when aiming: x, y, z offset and pitch, yaw; carbine, pistol, shotgun, beanbag, taser
+const AIMPOS = [
+  [-0.113, 0.036, 0, 0, 0],
+  [-0.0936, 0.0813, -0.02, 0, 0],
+  [-0.105, 0.042, 0.01, 0, 0],
+  [-0.105, 0.042, 0.01, 0, 0],
+  [-0.0936, 0.0813, -0.02, 0, 0],
+];
 // the challenges the player and the officers yell; one is picked at random each time
 const SHOUTS = ['Police! Drop the weapon!', 'Police! Get on the ground!', 'Police! Hands up! Now!', 'Get down! Get down on the ground!', 'Drop it! Drop it now!', 'Show me your hands!'];
-interface WeaponSpec { name: string; mag: number; res: number; rate: number; dmg: number; auto: boolean; spread: number; reload: number; kick: number; pellets?: number; nonLethal?: boolean; taser?: boolean; shield?: boolean; gun?: 'rifle' | 'pistol' | 'shotgun'; canSemi?: boolean }
+interface WeaponSpec { name: string; mag: number; res: number; rate: number; dmg: number; auto: boolean; spread: number; reload: number; kick: number; pellets?: number; nonLethal?: boolean; taser?: boolean; shield?: boolean; gun?: 'rifle' | 'pistol' | 'shotgun'; canSemi?: boolean; pen?: number }
 const PRIMARY_SPECS: Record<PrimaryLoadout, WeaponSpec> = {
-  carbine: { name: 'M4 CARBINE', mag: 30, res: 150, rate: 0.095, dmg: 34, auto: true, spread: 0.004, reload: 2.0, kick: 0.011, gun: 'rifle', canSemi: true },
-  shotgun: { name: 'M870 SHOTGUN', mag: 8, res: 40, rate: 0.58, dmg: 16, pellets: 8, auto: false, spread: 0.045, reload: 2.2, kick: 0.038, gun: 'shotgun' },
-  beanbag: { name: 'BEANBAG SHOTGUN', mag: 8, res: 40, rate: 0.55, dmg: 8, pellets: 1, nonLethal: true, auto: false, spread: 0.012, reload: 2.1, kick: 0.024, gun: 'shotgun' },
-  shield: { name: 'SHIELD + PISTOL', mag: 15, res: 90, rate: 0.16, dmg: 26, auto: false, spread: 0.01, reload: 1.5, kick: 0.015, shield: true, gun: 'pistol' },
+  carbine: { name: 'M4 CARBINE', mag: 30, res: 150, rate: 0.095, dmg: 34, auto: true, spread: 0.004, reload: 2.0, kick: 0.011, gun: 'rifle', canSemi: true, pen: 1 },
+  shotgun: { name: 'M870 SHOTGUN', mag: 8, res: 40, rate: 0.58, dmg: 16, pellets: 8, auto: false, spread: 0.045, reload: 2.2, kick: 0.038, gun: 'shotgun', pen: 1 },
+  beanbag: { name: 'BEANBAG SHOTGUN', mag: 8, res: 40, rate: 0.55, dmg: 8, pellets: 1, nonLethal: true, auto: false, spread: 0.012, reload: 2.1, kick: 0.024, gun: 'shotgun', pen: 0 },
+  shield: { name: 'SHIELD + PISTOL', mag: 15, res: 90, rate: 0.16, dmg: 26, auto: false, spread: 0.01, reload: 1.5, kick: 0.015, shield: true, gun: 'pistol', pen: 0 },
 };
 const SECONDARY_SPECS: Record<SecondaryLoadout, WeaponSpec> = {
-  pistol: { name: 'GLOCK 17 SWAT', mag: 17, res: 68, rate: 0.15, dmg: 26, auto: false, spread: 0.008, reload: 1.4, kick: 0.016, gun: 'pistol' },
-  taser: { name: 'X26 TASER', mag: 2, res: 12, rate: 0.45, dmg: 4, auto: false, spread: 0.006, reload: 1.5, kick: 0.008, nonLethal: true, taser: true, gun: 'pistol' },
+  pistol: { name: 'GLOCK 17 SWAT', mag: 17, res: 68, rate: 0.15, dmg: 26, auto: false, spread: 0.008, reload: 1.4, kick: 0.016, gun: 'pistol', pen: 0 },
+  taser: { name: 'X26 TASER', mag: 2, res: 12, rate: 0.45, dmg: 4, auto: false, spread: 0.006, reload: 1.5, kick: 0.008, nonLethal: true, taser: true, gun: 'pistol', pen: 0 },
 };
 const ORDER_LABEL: Record<string, string> = {
   follow: 'FOLLOWING', hold: 'HOLDING', move: 'MOVING', cover: 'COVERING YOU',
@@ -91,6 +97,14 @@ class Game {
   recoilPitch = 0; recoilRoll = 0; camShake = 0; hitHead = false;
   pipCam = new THREE.PerspectiveCamera(78, 240 / 146, 0.08, 55);
   pipOn = false; pipActorIdx = 0; pipTimer = 0; pipManual = false;
+  pipKind: 'ally' | 'optiwand' = 'ally'; optiwandDoor: Door | null = null; optiwandSide = 1; optiwandMeta = '';
+  lean = 0; leanTarget = 0;
+  grenadeType: 'bang' | 'smoke' | 'gas' = 'bang';
+  magnifier = false;
+  preplan: PrePlan = { entry: 0, teamA: [], teamB: [], pins: [] };
+  planTool: 'B' | 'A' | 'c2' | 'flash' = 'B';
+  briefLevel: Level | null = null;
+  dispatchPlaying = false;
   dispatchOn = false; isDaily = false; stress = 0; clubBeatT = 0; hbT = 0; radioCardT = 0;
   private censorBoxes: HTMLDivElement[] = [];
   private replayRaf = 0; private replayPlaying = false; private replayTime = 0; private replayLast = 0; private replayBase: HTMLCanvasElement | null = null;
@@ -238,7 +252,7 @@ class Game {
         document.querySelectorAll<HTMLElement>('#mDiffPips [data-diff]').forEach(o => o.classList.toggle('on', o === b));
       };
     });
-    $('btnStartMission').onclick = () => { this.audio.init(); this.audio.ui(); this.isDaily = false; this.newRound(this.mission); };
+    $('btnStartMission').onclick = () => { this.audio.init(); this.audio.ui(); this.isDaily = false; this.openBrief(this.mission); };
     const di = dailyInfo();
     const db = dailyBest[di.key];
     $('dailyBestBadge').textContent = db != null ? `${MISSIONS[di.mission].name} · BEST ${db}/100` : `${di.key} · ${MISSIONS[di.mission].name}`;
@@ -253,8 +267,9 @@ class Game {
     const done = MISSIONS.filter((_, i) => best[i] != null).length; $('mBest').textContent = `${done}/${MISSIONS.length} Ops Completed`;
     this.updateRankDock();
     ($('lPrimary') as HTMLSelectElement).value = S.primary; ($('lSecondary') as HTMLSelectElement).value = S.secondary;
-    ($('lPrimary') as HTMLSelectElement).onchange = () => { S.primary = ($('lPrimary') as HTMLSelectElement).value as PrimaryLoadout; saveSettings(); };
-    ($('lSecondary') as HTMLSelectElement).onchange = () => { S.secondary = ($('lSecondary') as HTMLSelectElement).value as SecondaryLoadout; saveSettings(); };
+    ($('lPrimary') as HTMLSelectElement).onchange = () => { S.primary = ($('lPrimary') as HTMLSelectElement).value as PrimaryLoadout; saveSettings(); this.menu.setHeroLoadout(S.primary, S.secondary); };
+    ($('lSecondary') as HTMLSelectElement).onchange = () => { S.secondary = ($('lSecondary') as HTMLSelectElement).value as SecondaryLoadout; saveSettings(); this.menu.setHeroLoadout(S.primary, S.secondary); };
+    this.menu.setHeroLoadout(S.primary, S.secondary);
     const canVoice = Voice.supported || LocalVoice.supported; $('mMic').textContent = canVoice ? 'Voice Ready' : 'No Mic'; $('mMic').className = canVoice ? 'ok' : 'bad';
     document.querySelectorAll<HTMLElement>('.docknav [data-tab]').forEach(n => n.onclick = () => {
       this.audio.init(); this.audio.ui();
@@ -273,6 +288,89 @@ class Game {
     for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) { const v = l.cells[z * l.w + x]; if (v === 0) continue; g.fillStyle = v === WALL ? '#9db4c8' : v === DOOR ? '#f2c14e' : v === WINDOW ? '#68b6e0' : v === LOW || v === HIGH ? '#263645' : '#152130'; g.fillRect(x * k, z * k, k, k); }
     const s = l.playerSpawn; g.fillStyle = '#4fd07a'; g.beginPath(); g.arc(s.x * k, s.z * k, k * 0.75, 0, 6.3); g.fill();
     if (l.bomb) { g.fillStyle = '#ff3b3b'; g.beginPath(); g.arc(l.bomb.x * k, l.bomb.z * k, k * 0.65, 0, 6.3); g.fill(); }
+  }
+  openBrief(index: number) {
+    this.mission = index;
+    const m = MISSIONS[index];
+    this.briefLevel = buildLevel(index, 1);
+    this.preplan = { entry: 0, teamA: [], teamB: [], pins: [] };
+    this.planTool = 'B';
+    this.dispatchPlaying = false;
+    this.audio.stopDispatch();
+    const dpBtn = $('btnPlayDispatch');
+    dpBtn.textContent = '▶ PLAY 911 DISPATCH';
+    dpBtn.classList.remove('playing');
+
+    $('briefTitle').textContent = m.name;
+    $('briefText').textContent = m.brief;
+    const objMap = { clear: 'Locate & arrest or neutralize all suspects, secure all civilians.', hostage: 'Rescue the VIP bank director and secure all suspects.', bomb: 'Find and defuse the explosive device before detonation.' } as const;
+    $('briefMeta').innerHTML = `<div><span>Suspects</span>${m.suspects}</div><div><span>Civilians</span>${m.civs}</div><div><span>Objective</span>${objMap[m.objective]}</div>`;
+
+    // Entry points selector
+    const entriesBox = $('briefEntries');
+    const entries = this.briefLevel.entries;
+    entriesBox.innerHTML = entries.map((ep, idx) => `<button type="button" class="entry-btn ${idx === 0 ? 'on' : ''}" data-ep="${idx}">${ep.name}</button>`).join('');
+    entriesBox.querySelectorAll<HTMLElement>('.entry-btn').forEach(btn => {
+      btn.onclick = () => {
+        this.audio.ui();
+        this.preplan.entry = +btn.dataset.ep!;
+        entriesBox.querySelectorAll('.entry-btn').forEach(o => o.classList.toggle('on', o === btn));
+        this.drawBriefPlan();
+      };
+    });
+
+    document.querySelectorAll<HTMLElement>('.plan-tools .ptool').forEach(b => {
+      b.classList.toggle('on', b.dataset.pt === this.planTool);
+    });
+
+    this.drawBriefPlan();
+    show('menu', false);
+    show('brief', true);
+  }
+  drawBriefPlan() {
+    const l = this.briefLevel; if (!l) return;
+    const c = $<HTMLCanvasElement>('briefMap'), k = 9;
+    c.width = l.w * k; c.height = l.h * k;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#0b1118'; g.fillRect(0, 0, c.width, c.height);
+    g.strokeStyle = 'rgba(120,160,200,.08)'; g.lineWidth = 1; g.beginPath();
+    for (let x = 0; x <= l.w; x += 2) { g.moveTo(x * k + 0.5, 0); g.lineTo(x * k + 0.5, c.height); }
+    for (let z = 0; z <= l.h; z += 2) { g.moveTo(0, z * k + 0.5); g.lineTo(c.width, z * k + 0.5); }
+    g.stroke();
+    for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) {
+      const v = l.cells[z * l.w + x]; if (v === 0) continue;
+      g.fillStyle = v === WALL ? '#9db4c8' : v === DOOR ? '#f2c14e' : v === WINDOW ? '#68b6e0' : v === LOW || v === HIGH ? '#263645' : '#152130';
+      g.fillRect(x * k, z * k, k, k);
+    }
+    // Entry points
+    l.entries.forEach((ep, idx) => {
+      const active = idx === (this.preplan.entry ?? 0);
+      g.fillStyle = active ? '#4ade80' : 'rgba(148,163,184,0.45)';
+      g.beginPath(); g.arc(ep.x * k, ep.z * k, active ? k * 0.85 : k * 0.55, 0, 6.28); g.fill();
+      if (active) {
+        g.strokeStyle = '#ecfdf5'; g.lineWidth = 1.5;
+        g.beginPath(); g.arc(ep.x * k, ep.z * k, k * 1.15, 0, 6.28); g.stroke();
+      }
+    });
+    if (l.bomb) { g.fillStyle = '#ff3b3b'; g.beginPath(); g.arc(l.bomb.x * k, l.bomb.z * k, k * 0.7, 0, 6.28); g.fill(); }
+    // Pre-plan routes
+    const drawRoute = (pts: { x: number; z: number }[] | undefined, col: string) => {
+      if (!pts?.length) return;
+      g.strokeStyle = col; g.lineWidth = 2.4; g.lineCap = 'round'; g.lineJoin = 'round';
+      g.beginPath();
+      pts.forEach((p, i) => { if (i === 0) g.moveTo(p.x * k, p.z * k); else g.lineTo(p.x * k, p.z * k); });
+      g.stroke();
+      const last = pts[pts.length - 1];
+      g.fillStyle = col; g.beginPath(); g.arc(last.x * k, last.z * k, 4, 0, 6.28); g.fill();
+    };
+    drawRoute(this.preplan.teamB, '#4a9eff');
+    drawRoute(this.preplan.teamA, '#f87171');
+    for (const mk of this.preplan.pins ?? []) {
+      g.fillStyle = mk.kind === 'c2' ? '#f59e0b' : '#38bdf8';
+      g.beginPath(); g.arc(mk.x * k, mk.z * k, 5, 0, 6.28); g.fill();
+      g.fillStyle = '#fff'; g.font = 'bold 8px sans-serif'; g.textAlign = 'center';
+      g.fillText(mk.kind === 'c2' ? 'C2' : 'FB', mk.x * k, mk.z * k - 7);
+    }
   }
   buildWheel() {
     const ring = document.querySelector('#wheel .wring')!;
@@ -319,8 +417,21 @@ class Game {
   }
   togglePip(cycle = true) {
     if (!this.sim) return;
+    if (this.pipOn && this.pipKind === 'optiwand') {
+      this.pipKind = 'ally';
+      this.optiwandDoor = null;
+      $('pipFrame').classList.remove('optiwand');
+      show('pipMeta', false);
+      this.pipOn = false; this.pipManual = false;
+      show('pipFrame', false);
+      this.audio.ui();
+      return;
+    }
     const list = this.pipActors();
     if (!list.length) return;
+    this.pipKind = 'ally';
+    $('pipFrame').classList.remove('optiwand');
+    show('pipMeta', false);
     if (!this.pipOn) { this.pipOn = true; this.pipActorIdx = 0; this.pipTimer = 0; this.pipManual = true; }
     else if (cycle) {
       this.pipActorIdx++;
@@ -330,12 +441,15 @@ class Game {
     this.audio.ui();
   }
   triggerPipFor(team: Team | 'ALL', who: number | null, dur = 6) {
-    if (!S.pip || !this.sim || this.pipManual) return;
+    if (!S.pip || !this.sim || this.pipManual || this.pipKind === 'optiwand') return;
     const list = this.pipActors();
     const targetOfficer = who != null ? this.sim.officers[who] : this.sim.officers.find(o => o.alive && (team === 'ALL' || o.team === team));
     if (!targetOfficer || !targetOfficer.alive) return;
     const idx = list.indexOf(targetOfficer);
     if (idx < 0) return;
+    this.pipKind = 'ally';
+    $('pipFrame').classList.remove('optiwand');
+    show('pipMeta', false);
     this.pipActorIdx = idx;
     this.pipOn = true;
     this.pipTimer = dur;
@@ -372,8 +486,80 @@ class Game {
   }
   bindUI() {
     const click = (id: string, fn: () => void) => { $(id).onclick = () => { this.audio.init(); this.audio.ui(); fn(); }; };
-    click('btnBack', () => { show('brief', false); show('menu', true); });
-    click('btnGo', () => { show('brief', false); this.start(this.mission, (Math.random() * 1e6) | 0); this.lock(); });
+    click('btnBack', () => { this.dispatchPlaying = false; this.audio.stopDispatch(); show('brief', false); show('menu', true); });
+    click('btnGo', () => {
+      this.dispatchPlaying = false;
+      this.audio.stopDispatch();
+      show('brief', false);
+      this.newRound(this.mission, this.preplan);
+    });
+    click('btnPlayDispatch', () => {
+      this.audio.init();
+      const btn = $('btnPlayDispatch');
+      if (this.dispatchPlaying) {
+        this.dispatchPlaying = false;
+        this.audio.stopDispatch();
+        btn.textContent = '▶ PLAY 911 DISPATCH';
+        btn.classList.remove('playing');
+      } else {
+        this.dispatchPlaying = true;
+        btn.textContent = '■ STOP DISPATCH';
+        btn.classList.add('playing');
+        this.audio.playDispatch(this.mission, this.speech, () => {
+          this.dispatchPlaying = false;
+          btn.textContent = '▶ PLAY 911 DISPATCH';
+          btn.classList.remove('playing');
+        });
+      }
+    });
+    document.querySelectorAll<HTMLElement>('.plan-tools .ptool').forEach(b => {
+      b.onclick = () => {
+        this.audio.ui();
+        this.planTool = b.dataset.pt as 'B' | 'A' | 'c2' | 'flash';
+        document.querySelectorAll<HTMLElement>('.plan-tools .ptool').forEach(o => o.classList.toggle('on', o === b));
+      };
+    });
+    click('btnClearPlan', () => {
+      this.preplan.teamA = [];
+      this.preplan.teamB = [];
+      this.preplan.pins = [];
+      this.drawBriefPlan();
+    });
+    // Interactive route & marker drawing on #briefMap
+    const bmap = $<HTMLCanvasElement>('briefMap');
+    let drawingRoute = false;
+    const mapCoord = (ev: PointerEvent) => {
+      const rect = bmap.getBoundingClientRect();
+      const l = this.briefLevel; if (!l) return null;
+      const x = ((ev.clientX - rect.left) / rect.width) * l.w;
+      const z = ((ev.clientY - rect.top) / rect.height) * l.h;
+      return { x: Math.max(0.5, Math.min(l.w - 0.5, x)), z: Math.max(0.5, Math.min(l.h - 0.5, z)) };
+    };
+    bmap.addEventListener('pointerdown', ev => {
+      const pt = mapCoord(ev); if (!pt) return;
+      if (this.planTool === 'c2' || this.planTool === 'flash') {
+        this.preplan.pins = this.preplan.pins ?? [];
+        this.preplan.pins.push({ x: pt.x, z: pt.z, kind: this.planTool });
+        this.audio.ui();
+        this.drawBriefPlan();
+      } else {
+        drawingRoute = true;
+        if (this.planTool === 'A') this.preplan.teamA = [pt];
+        else this.preplan.teamB = [pt];
+        this.drawBriefPlan();
+      }
+    });
+    bmap.addEventListener('pointermove', ev => {
+      if (!drawingRoute) return;
+      const pt = mapCoord(ev); if (!pt) return;
+      const arr = this.planTool === 'A' ? this.preplan.teamA! : this.preplan.teamB!;
+      const last = arr[arr.length - 1];
+      if (!last || Math.hypot(pt.x - last.x, pt.z - last.z) >= 1.2) {
+        arr.push(pt);
+        this.drawBriefPlan();
+      }
+    });
+    window.addEventListener('pointerup', () => { drawingRoute = false; });
     click('btnResume', () => this.resume());
     click('btnRestart', () => { show('pause', false); this.newRound(this.mission); });
     click('btnMicRetry', () => { if (!S.mic) { S.mic = 1; saveSettings(); this.applySettings(); } this.voice.stop(); this.voice.start(); });
@@ -419,7 +605,7 @@ class Game {
       void this.ai.ensureLoaded(S.aiModel);
     };
   }
-  toMenu() { this.stopReplay(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
+  toMenu() { this.stopReplay(); this.dispatchPlaying = false; this.audio.stopDispatch(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
   // ---------------- online co-op ----------------
   private currentMods(): CoopMods & { daily?: boolean } {
     const black = ($('modBlackout') as HTMLInputElement).checked;
@@ -429,7 +615,7 @@ class Game {
     const daily = ($('modDaily') as HTMLInputElement).checked;
     return { blackout: black, extraHostiles: extra, pistolOnly: pistol, friendlyFire: ff, daily };
   }
-  newRound(mission: number) {
+  newRound(mission: number, preplan?: PrePlan) {
     if (this.net.role === 'client') return;
     const mods = this.net.role === 'host' ? this.currentMods() : {};
     const useDaily = !!mods.daily;
@@ -445,7 +631,7 @@ class Game {
       this.debReady = false;
       conns.forEach((c, i) => { this.connIdx.set(c, i + 1); c.send({ t: 'start', mission: mUse, seed, diff: S.diff, n: names.length, you: i + 1, names, mods, daily: useDaily, shields }); });
       this.start(mUse, seed, names.length, 0, S.diff, names, mods, shields);
-    } else this.start(mUse, seed);
+    } else this.start(mUse, seed, 1, 0, S.diff, [], {}, [], preplan ?? {});
     this.lock();
   }
   bindNet() {
@@ -637,7 +823,7 @@ class Game {
     if (!pa.alive) return;
     switch (m.t) {
       case 'in': { const x = num(m.x), z = num(m.z), d = Math.hypot(x - pa.x, z - pa.z); if (!pa.downed && d < 3 && !sim.solidCell(Math.floor(x), Math.floor(z))) { pa.x = x; pa.z = z; pa.walk += d * 2.4; sim.pushTrail(pa); } pa.yaw = num(m.yaw); pa.pitch = num(m.pitch); pa.crouch = !!m.cr; pa.prone = !!m.pr; pa.jumpY = Math.max(0, Math.min(0.8, num(m.jy))); pa.moving = !pa.downed && !!m.mv; pa.torch = m.tc !== undefined ? !!m.tc : pa.torch; pa.ads = !!m.ads; pa.weapon = num(m.wp); pa.shield = !!m.sh; pa.speaking = !!m.sp; break; }
-      case 'fire': if (!pa.downed) sim.fire(pa, num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), Math.min(34, num(m.dmg)), { nonLethal: !!m.nl, taser: !!m.ts }); break;
+      case 'fire': if (!pa.downed) sim.fire(pa, num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), Math.min(34, num(m.dmg)), { nonLethal: !!m.nl, taser: !!m.ts, pen: m.pen ? 1 : 0 }); break;
       case 'use': sim.playerUse(pa); break;
       case 'c2': sim.playerC2(pa); break;
       case 'wedge': sim.playerWedge(pa); break;
@@ -645,7 +831,14 @@ class Game {
       case 'shout': sim.playerShout(pa); break;
       case 'breachSync': sim.toggleBreachSync(pa); break;
       case 'share': sim.shareGear(pa); break;
-      case 'bang': if (!pa.downed && pa.bangs > 0) { pa.bangs--; sim.throwBang(num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2])); } break;
+      case 'bang': {
+        if (pa.downed) break;
+        const gk = m.kind === 'smoke' ? 'smoke' : m.kind === 'gas' ? 'gas' : 'bang';
+        if (gk === 'smoke' && pa.smokes > 0) { pa.smokes--; sim.throwGrenade(num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), 'smoke'); }
+        else if (gk === 'gas' && pa.gases > 0) { pa.gases--; sim.throwGrenade(num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), 'gas'); }
+        else if (gk === 'bang' && pa.bangs > 0) { pa.bangs--; sim.throwGrenade(num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), 'bang'); }
+        break;
+      }
       case 'cmd': sim.command(m.cmd, m.aim ?? null, pa); break;
     }
   }
@@ -656,7 +849,7 @@ class Game {
 
   // ---------------- mission start ----------------
   private starting = false;
-  async start(mission: number, seed: number, n = 1, me = 0, diff: number = S.diff, names: string[] = [], mods: CoopMods = {}, shields: boolean[] = []) {
+  async start(mission: number, seed: number, n = 1, me = 0, diff: number = S.diff, names: string[] = [], mods: CoopMods = {}, shields: boolean[] = [], preplan: PrePlan = {}) {
     if (this.starting) return;
     this.starting = true;
     const setLoad = (pct: number, msg: string) => {
@@ -677,10 +870,10 @@ class Game {
       setLoad(62, 'Building operation environment...');
       await nextFrame();
 
-      this.mission = mission; this.seed = seed; this.audio.init(); void this.audio.setMenuMusic(false);
+      this.mission = mission; this.seed = seed; this.audio.init(); void this.audio.setMenuMusic(false); this.audio.stopDispatch();
       document.body.classList.remove('menu-wait');
       this.netTargets.clear(); this.pings = []; this.breachBannerT = 0;
-      const sim = this.sim = new Sim(mission, seed, diff, n, mods); if (me) sim.player = sim.players[me];
+      const sim = this.sim = new Sim(mission, seed, diff, n, mods, preplan); if (me) sim.player = sim.players[me];
       sim.players.forEach((pl, i) => {
         if (names[i]) pl.name = names[i];
         if (!mods.pistolOnly && shields[i]) pl.shield = true;
@@ -705,9 +898,10 @@ class Game {
       else sim.player.shield = false;
       const ws = this.weaponSpecs;
       this.yaw = sim.player.yaw; this.pitch = 0; this.weapon = 0; this.ammo = [ws[0].mag, ws[1].mag]; this.reserve = [ws[0].res, ws[1].res]; this.reloadT = 0; this.fireCd = 0; this.recoil = 0; this.recoilPitch = 0; this.recoilRoll = 0; this.camShake = 0; this.dmgFx = 0; this.hitFx = 0; this.hitHead = false; this.endT = 0;
-      this.nvgOn = false; this.bodycamOn = !!S.stream; this.wheelOn = false; this.pipOn = false; this.pipManual = false; this.pipTimer = 0; this.dispatchOn = false; this.stress = 0; this.clubBeatT = 0; this.hbT = 0; this.radioCardT = 0; this.fireMode = 'auto';
+      this.lean = 0; this.leanTarget = 0; this.grenadeType = 'bang'; this.magnifier = false;
+      this.nvgOn = false; this.bodycamOn = !!S.stream; this.wheelOn = false; this.pipOn = false; this.pipManual = false; this.pipTimer = 0; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.stress = 0; this.clubBeatT = 0; this.hbT = 0; this.radioCardT = 0; this.fireMode = 'auto';
       this.stopReplay();
-      show('nvg', false); show('bodycam', this.bodycamOn); show('wheel', false); show('pipFrame', false); show('dispatchPanel', false); show('radioCard', false); $('bcCensor').innerHTML = '';
+      show('nvg', false); show('bodycam', this.bodycamOn); show('wheel', false); show('pipFrame', false); $('pipFrame').classList.remove('optiwand'); show('pipMeta', false); show('dispatchPanel', false); show('radioCard', false); $('bcCensor').innerHTML = '';
       $('bcSector').textContent = SECTOR_LOCS[mission] ?? 'SECTOR UNKNOWN';
       this.renderer.toneMappingExposure = 1.15;
       this.selTeam = this.lastTeam = 'ALL'; this.lastWho = null;
@@ -722,7 +916,10 @@ class Game {
       if (S.ai && !mp && !AUTO) void this.ai.ensureLoaded(S.aiModel);
       this.aiState(this.ai.state, this.ai.state === 'loading' ? this.ai.progress : this.ai.error);
       if (mp && !document.pointerLockElement) this.log('Click in the game to take control of the mouse.', 'warn');
-      this.log(`Command: ${MISSIONS[mission].name}${this.isDaily ? ' [DAILY IRONMAN]' : ''} (${ws[0].name} + ${ws[1].name}). Voice, H wheel, P helmet cam, F8 dispatch.`, 'me');
+      if (!this.mirror && ((preplan.teamA?.length ?? 0) > 1 || (preplan.teamB?.length ?? 0) > 1 || (preplan.pins?.length ?? 0) > 0)) {
+        sim.executePreplan();
+      }
+      this.log(`Command: ${MISSIONS[mission].name}${this.isDaily ? ' [DAILY IRONMAN]' : ''} (${ws[0].name} + ${ws[1].name}). Q/E Lean, CapsLock Shout, O Optiwand, \` Grenade, Shift Magnifier.`, 'me');
     } finally {
       show('loading', false);
       this.starting = false;
@@ -746,9 +943,17 @@ class Game {
       if (this.typing) { if (e.code === 'Enter') { const inp = $<HTMLInputElement>('cmdinput'); const v = inp.value.trim(); inp.value = ''; this.setTyping(false); if (v) this.heard(v, false); e.preventDefault(); } else if (e.code === 'Escape') this.setTyping(false); return; }
       if (e.code === 'Escape') { if (this.dispatchOn) { this.toggleDispatch(false); this.lock(); return; } if (this.wheelOn) { this.toggleWheel(false); this.lock(); return; } if (!$('help').classList.contains('hidden') || !$('settings').classList.contains('hidden')) { show('help', false); show('settings', false); } else if (this.state === 'pause') this.resume(); else if (this.state === 'play' && AUTO) this.pause(); return; }
       if (this.state !== 'play') return;
-      if (e.code === 'Tab' || e.code === 'Space') e.preventDefault();
+      if (e.code === 'Tab' || e.code === 'Space' || e.code === 'CapsLock') e.preventDefault();
       if (e.repeat) return; this.keys.add(e.code); this.onKey(e.code);
     });
+    document.addEventListener('wheel', e => {
+      if (this.state !== 'play' || !this.ads || !document.pointerLockElement) return;
+      if (this.activeGun() === 'rifle') {
+        this.magnifier = e.deltaY < 0 ? true : e.deltaY > 0 ? false : !this.magnifier;
+        this.audio.ui();
+        this.updateHud(true);
+      }
+    }, { passive: true });
     document.addEventListener('keyup', e => { this.keys.delete(e.code); if (e.code === 'KeyV') this.voice.release(); });
     window.addEventListener('blur', () => { this.voice.release(); this.keys.clear(); this.mouseDown = false; });
   }
@@ -757,25 +962,54 @@ class Game {
     const sim = this.sim!; if (sim.over) return;
     const quick: Record<string, Command['action'] | 'there'> = { Digit3: 'follow', Digit4: 'hold', Digit5: 'there', Digit6: 'cover', Digit7: 'stack', Digit8: 'breach', Digit9: 'bang', Digit0: 'restrain' };
     switch (code) {
-      case 'KeyF': if (this.mirror) this.net.send({ t: 'use' }); else sim.playerUse(); break;
-      case 'KeyE': if (this.mirror) this.net.send({ t: 'peek' }); else { const msg = sim.playerPeek(sim.player); if (msg) { this.log(msg, 'me'); this.audio.ui(); } } break;
+      case 'KeyF': {
+        if (this.mirror) { this.net.send({ t: 'use' }); break; }
+        if (sim.interactTarget()) sim.playerUse();
+        else this.shout(true);
+        break;
+      }
+      case 'CapsLock': this.shout(true); break;
+      case 'KeyO': {
+        if (this.mirror) {
+          if (sim.interactTarget()?.door) this.net.send({ t: 'peek' });
+          else this.shareGear();
+        } else {
+          const msg = sim.playerPeek(sim.player);
+          if (msg) { this.log(msg, 'me'); this.audio.ui(); }
+          else if (sim.players.length > 1) this.shareGear();
+        }
+        break;
+      }
       case 'KeyU': if (this.mirror) this.net.send({ t: 'c2' }); else sim.playerC2(sim.player); break;
       case 'KeyY': if (this.mirror) this.net.send({ t: 'wedge' }); else if (sim.playerWedge(sim.player)) this.audio.wedge(); break;
       case 'KeyN': this.toggleNvg(); break;
       case 'KeyK': this.toggleBodycam(); break;
       case 'KeyP': this.togglePip(true); break;
       case 'KeyJ': this.breachSync(); break;
-      case 'KeyO': this.shareGear(); break;
       case 'F8': this.toggleDispatch(); if (!this.dispatchOn) this.lock(); break;
       case 'KeyH': this.toggleWheel(); if (!this.wheelOn) this.lock(); break;
       case 'KeyB': if (this.net.online) { this.net.setMuted(!this.net.muted); this.audio.ui(); } break;
       case 'KeyR': this.reload(); break;
       case 'KeyG': this.throwBang(); break;
+      case 'Backquote': {
+        const order: ('bang' | 'smoke' | 'gas')[] = ['bang', 'smoke', 'gas'];
+        this.grenadeType = order[(order.indexOf(this.grenadeType) + 1) % order.length];
+        this.audio.ui();
+        this.updateHud(true);
+        break;
+      }
+      case 'ShiftLeft': case 'ShiftRight': {
+        if (this.ads && this.activeGun() === 'rifle') {
+          this.magnifier = !this.magnifier;
+          this.audio.ui();
+          this.updateHud(true);
+        }
+        break;
+      }
       case 'KeyV': if (S.ptt && S.mic) { if (this.voice.state !== 'listening' && this.voice.state !== 'starting') { this.voice.stop(); this.voice.start(); } if (!this.voice.held) $('heard').textContent = ''; this.voice.press(); } else this.shout(true); break;
-      case 'KeyQ': this.shout(true); break;
       case 'KeyT': this.torchOn = !this.torchOn; this.audio.dry(); this.updateHud(true); break;
       case 'KeyL': this.laserOn = !this.laserOn; this.audio.dry(); this.updateHud(true); break;
-      case 'KeyI': case 'Backquote': {
+      case 'KeyI': {
         const w = this.weaponSpecs[this.weapon];
         if (w.canSemi) {
           this.fireMode = this.fireMode === 'auto' ? 'semi' : 'auto';
@@ -970,10 +1204,33 @@ class Game {
     void tts; const now = performance.now(); if (now - this.shoutT > 900) { this.shoutT = now; this.speak(SHOUTS[0], null, { pitch: 0.7, rate: 1.3, gain: 1 }); } // your own voice yells the challenge, also when you gave it by microphone
     this.log('YOU: Police! Drop the weapon!', 'me');
   }
-  reload() { const w = this.weaponSpecs[this.weapon]; if (this.reloadT > 0 || this.ammo[this.weapon] >= w.mag || this.reserve[this.weapon] <= 0) return; this.reloadT = w.reload; if (!w.shield) this.arms.reload(w.reload); this.audio.reload(this.weapon === 0 && !w.shield ? 'rifle' : 'pistol', w.reload); }
+  reload() {
+    const w = this.weaponSpecs[this.weapon];
+    if (this.reloadT > 0 || this.ammo[this.weapon] >= w.mag || this.reserve[this.weapon] <= 0) return;
+    this.reloadT = w.reload;
+    if (!w.shield) this.arms.reload(w.reload);
+    this.audio.reload(this.activeGun(w), w.reload);
+  }
   throwBang() {
-    const sim = this.sim!, p = sim.player; if (p.bangs <= 0 || !p.alive || p.downed) return; const d = this.aimDir(), o = [p.x + d.x * 0.4, this.eye - 0.1, p.z + d.z * 0.4];
-    if (this.mirror) this.net.send({ t: 'bang', o, d: [d.x, d.y, d.z] }); else { p.bangs--; sim.throwBang(o[0], o[1], o[2], d.x, d.y, d.z); } this.vmKick = -0.6;
+    const sim = this.sim!, p = sim.player; if (!p.alive || p.downed) return;
+    let gk = this.grenadeType;
+    const countOf = (k: 'bang' | 'smoke' | 'gas') => k === 'smoke' ? p.smokes : k === 'gas' ? p.gases : p.bangs;
+    if (countOf(gk) <= 0) {
+      const alt = (['bang', 'smoke', 'gas'] as const).find(k => countOf(k) > 0);
+      if (!alt) return;
+      gk = alt;
+      this.grenadeType = alt;
+    }
+    const d = this.aimDir(), o = [p.x + d.x * 0.4, this.eye - 0.1, p.z + d.z * 0.4];
+    if (this.mirror) this.net.send({ t: 'bang', o, d: [d.x, d.y, d.z], kind: gk });
+    else {
+      if (gk === 'smoke') p.smokes--;
+      else if (gk === 'gas') p.gases--;
+      else p.bangs--;
+      sim.throwGrenade(o[0], o[1], o[2], d.x, d.y, d.z, gk);
+    }
+    this.vmKick = -0.6;
+    this.updateHud(true);
   }
   ping() {
     const sim = this.sim; if (!sim || !sim.player.alive || sim.over) return;
@@ -1012,11 +1269,16 @@ class Game {
     const firstAimedShot = pellets === 1 && ak > 0.82 && this.recoil <= w.kick * 1.15;
     const sp = firstAimedShot ? 0 : (w.spread * semiMul * laserMul * moveMul * crouchMul * adsSpreadMul + this.recoil * 0.25 * adsRecoilMul);
 
-    // Sync camera world matrix so ADS shots originate at the exact optical screen center
+    // Sync camera world matrix so ADS shots originate at the exact optical screen center (including lean)
     const bobScale = 1 - ak * 0.85;
-    const ox = p.x, oy = this.eye + Math.sin(this.bob * 2) * 0.022 * bobScale, oz = p.z;
+    const lo = sim.leanOffset(p, this.lean);
+    const ox = p.x + lo.lx, oy = this.eye + Math.sin(this.bob * 2) * 0.022 * bobScale - Math.abs(lo.actual) * 0.06, oz = p.z + lo.lz;
     this.camera.position.set(ox, oy, oz);
-    this.camera.rotation.set(Math.min(1.45, this.pitch + this.recoilPitch), this.yaw, (!p.alive ? 0.5 : p.downed ? 0.22 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale)) + this.recoilRoll);
+    this.camera.rotation.set(
+      Math.min(1.45, this.pitch + this.recoilPitch),
+      this.yaw,
+      (!p.alive ? 0.5 : p.downed ? 0.22 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale) - lo.actual * 0.13) + this.recoilRoll,
+    );
     this.camera.updateMatrixWorld();
     const baseDir = new THREE.Vector3();
     this.camera.getWorldDirection(baseDir);
@@ -1029,8 +1291,8 @@ class Game {
         d.z += (Math.random() - 0.5) * sp * 2;
         d.normalize();
       }
-      if (this.mirror) { this.net.send({ t: 'fire', o: [ox, oy, oz], d: [d.x, d.y, d.z], dmg: w.dmg, nl: !!w.nonLethal, ts: !!w.taser }); }
-      else sim.fire(p, ox, oy, oz, d.x, d.y, d.z, w.dmg, { nonLethal: !!w.nonLethal, taser: !!w.taser });
+      if (this.mirror) { this.net.send({ t: 'fire', o: [ox, oy, oz], d: [d.x, d.y, d.z], dmg: w.dmg, nl: !!w.nonLethal, ts: !!w.taser, pen: w.pen ?? 0 }); }
+      else sim.fire(p, ox, oy, oz, d.x, d.y, d.z, w.dmg, { nonLethal: !!w.nonLethal, taser: !!w.taser, pen: w.pen ?? 0 });
     }
     const gunType = this.activeGun(w);
     if (this.mirror && !this.preShot && !w.taser) this.audio.shot(0, 0, true, gunType);
@@ -1047,8 +1309,9 @@ class Game {
     if (!w.shield) this.arms.fire();
     if (!w.taser) {
       this.vm.flash.visible = true; this.vm.flash.material.rotation = Math.random() * 6; setTimeout(() => { this.vm.flash.visible = false; }, 45);
-      // Eject brass shell / shotgun hull to the right
+      // Lingering muzzle smoke + eject brass shell / shotgun hull to the right
       const f = fwd(this.yaw), rx = -f.z, rz = f.x;
+      this.fx.gunsmoke(ox + f.x * 0.55 + rx * (0.08 * (1 - ak)), oy - 0.07, oz + f.z * 0.55 + rz * (0.08 * (1 - ak)), f.x, Math.sin(this.pitch), f.z, gunType === 'shotgun' ? 3 : 2);
       const hull = gunType === 'shotgun';
       const col = hull ? (w.nonLethal ? 0x2f85d8 : 0xb82424) : 0xd8a840;
       this.fx.shell(ox + f.x * 0.32 + rx * 0.14, oy - 0.1, oz + f.z * 0.32 + rz * 0.14, rx * (1.8 + Math.random() * 0.9) + (Math.random() - 0.5) * 0.4, 1.3 + Math.random() * 0.8, rz * (1.8 + Math.random() * 0.9) + (Math.random() - 0.5) * 0.4, col, hull);
@@ -1064,8 +1327,8 @@ class Game {
       case 'shot': {
         const own = e.by === p, a = new THREE.Vector3(e.x, e.y, e.z), b = new THREE.Vector3(e.x2, e.y2, e.z2);
         if (own) {
-          const r = fwd(this.yaw), ak = this.aimK;
-          a.set(p.x + r.x * 0.5 - r.z * (0.12 * (1 - ak)), this.eye - (0.12 - 0.07 * ak), p.z + r.z * 0.5 + r.x * (0.12 * (1 - ak)));
+          const r = fwd(this.yaw), ak = this.aimK, lo = sim.leanOffset(p, this.lean);
+          a.set(p.x + lo.lx + r.x * 0.5 - r.z * (0.12 * (1 - ak)), this.eye - (0.12 - 0.07 * ak), p.z + lo.lz + r.z * 0.5 + r.x * (0.12 * (1 - ak)));
         } else this.views.get(e.by)?.muzzle();
         fx.tracer(a, b); const pn = this.pan(e.x, e.z);
         const muffle = !own && !sim.los(p.x, p.z, e.x, e.z);
@@ -1074,10 +1337,14 @@ class Game {
         fx.flashAt(a.x, a.y, a.z, own ? 14 : 22);
         fx.burst(a.x, a.y, a.z, 2, 0x9aa4b0, 0.9, -0.3, 0.35);
         if (e.hit === 'wall') {
-          fx.burst(e.x2, e.y2, e.z2, 9, 0xb8b0a0, 2.5, 6, 0.38);
-          fx.burst(e.x2, e.y2, e.z2, 4, 0xffd080, 4.6, 9, 0.18);
+          const mat = e.mat ?? 'concrete';
+          const sparkCol = mat === 'metal' ? 0xffe090 : mat === 'wood' ? 0xc29258 : 0xb8b0a0;
+          fx.burst(e.x2, e.y2, e.z2, 9, sparkCol, 2.5, 6, 0.38);
+          if (mat !== 'wood') fx.burst(e.x2, e.y2, e.z2, 4, 0xffd080, 4.6, 9, 0.18);
+          if (mat === 'wood') fx.debris(e.x2, e.y2, e.z2, 4, 'wood');
           const dx = e.x2 - e.x, dy = e.y2 - e.y, dz = e.z2 - e.z, len = Math.hypot(dx, dy, dz) || 1;
-          fx.hole(e.x2 - (dx / len) * 0.012, e.y2 - (dy / len) * 0.012, e.z2 - (dz / len) * 0.012);
+          const nx = e.nx ?? -(dx / len), ny = e.ny ?? -(dy / len), nz = e.nz ?? -(dz / len);
+          fx.hole(e.x2, e.y2, e.z2, nx, ny, nz, mat);
           const q = this.pan(e.x2, e.z2); if (q.d < 12) this.audio.impact(q.d, q.pan);
         }
         else if (e.hit === 'actor') {
@@ -1090,6 +1357,12 @@ class Game {
         }
         break;
       }
+      case 'pen': {
+        fx.burst(e.x, e.y, e.z, 8, 0xb68652, 2.6, 5, 0.4);
+        fx.debris(e.x, e.y, e.z, 5, 'wood');
+        fx.hole(e.x, e.y, e.z, e.nx, e.ny, e.nz, 'wood');
+        break;
+      }
       case 'taser': {
         const a = new THREE.Vector3(e.x, e.y, e.z), b = new THREE.Vector3(e.x2, e.y2, e.z2);
         fx.tracer(a, b, 0x50d8ff);
@@ -1097,8 +1370,30 @@ class Game {
         fx.burst(e.x2, e.y2, e.z2, 10, 0x60e0ff, 2.4, 7, 0.45);
         break;
       }
-      case 'c2': { const q = this.pan(e.x, e.z); this.audio.c2(q.d, q.pan); if (q.d < 14) this.camShake = Math.max(this.camShake, (1 - q.d / 14) * 0.045); fx.flashAt(e.x, 1.2, e.z, 600, 0.12, 0xffa848); fx.burst(e.x, 1.1, e.z, 45, 0xffb860, 6, 4, 0.6); fx.burst(e.x, 1.1, e.z, 25, 0x8a6d48, 4, 6, 0.9); break; }
-      case 'glass': { const q = this.pan(e.x, e.z); this.audio.glass(q.d, q.pan); fx.burst(e.x, 1.5, e.z, 28, 0xb8e8ff, 4.2, 7, 0.7); break; }
+      case 'c2': { const q = this.pan(e.x, e.z); this.audio.c2(q.d, q.pan); if (q.d < 14) this.camShake = Math.max(this.camShake, (1 - q.d / 14) * 0.045); fx.flashAt(e.x, 1.2, e.z, 600, 0.12, 0xffa848); fx.burst(e.x, 1.1, e.z, 45, 0xffb860, 6, 4, 0.6); fx.burst(e.x, 1.1, e.z, 25, 0x8a6d48, 4, 6, 0.9); fx.debris(e.x, 1.0, e.z, 14, 'wood'); break; }
+      case 'glass': { const q = this.pan(e.x, e.z); this.audio.glass(q.d, q.pan); fx.burst(e.x, 1.5, e.z, 28, 0xb8e8ff, 4.2, 7, 0.7); fx.debris(e.x, 1.35, e.z, 10, 'glass'); break; }
+      case 'smoke': case 'gas': {
+        const q = this.pan(e.x, e.z);
+        this.audio.smokeHiss(q.d, q.pan);
+        fx.burst(e.x, 0.35, e.z, 18, e.t === 'gas' ? 0xa3e635 : 0xd0d8e0, 2.2, -0.3, 0.9);
+        break;
+      }
+      case 'optiwand': {
+        this.pipKind = 'optiwand';
+        this.optiwandDoor = e.door;
+        this.optiwandSide = e.side;
+        this.optiwandMeta = e.msg;
+        this.pipOn = true;
+        this.pipManual = false;
+        this.pipTimer = 7.5;
+        $('pipFrame').classList.add('optiwand');
+        $('pipLabel').textContent = 'OPTIWAND // UNDER-DOOR CAM';
+        $('pipMeta').textContent = e.msg;
+        show('pipMeta', true);
+        show('pipFrame', true);
+        this.audio.ui();
+        break;
+      }
       case 'break': {
         const q = this.pan(e.x, e.z);
         if (e.kind === 'pc') {
@@ -1418,12 +1713,19 @@ class Game {
   }
   updateHud(force = false) {
     const sim = this.sim; if (!sim) return; this.hudT -= 1; if (!force && this.hudT > 0) return; this.hudT = 8;
-    const p = sim.player, r = sim.remaining(), ws = this.weaponSpecs, curW = ws[this.weapon];
+    const p = sim.player, r = sim.remaining(), ws = this.weaponSpecs, curW = ws[this.weapon], gun = this.activeGun(curW);
     ($('hpbar').firstElementChild as HTMLElement).style.width = Math.max(0, p.hp) + '%'; $('hptxt').textContent = String(Math.ceil(Math.max(0, p.hp)));
     const modeTag = curW.canSemi ? ` · ${this.fireMode.toUpperCase()}` : '';
     $('wname').textContent = curW.name + modeTag + (this.reloadT > 0 ? ' – RELOADING' : '');
     const ac = $('acount'); ac.innerHTML = `<b>${this.ammo[this.weapon]}</b> / ${this.reserve[this.weapon]}`; ac.className = this.ammo[this.weapon] <= 4 ? 'low' : '';
-    $('bangs').textContent = `BANG ${'◉'.repeat(p.bangs)} · C2 ${p.c2} · WDG ${p.wedges}${this.laserOn && !curW.taser ? ' · LSR' : ''}${this.torchOn ? ' · LT' : ''}`;
+    const gSel = this.grenadeType;
+    $('bangs').innerHTML = `<span class="gchip ${gSel === 'bang' ? 'on' : ''}">FLASH ${p.bangs}</span><span class="gchip smoke ${gSel === 'smoke' ? 'on' : ''}">SMK ${p.smokes}</span><span class="gchip gas ${gSel === 'gas' ? 'on' : ''}">CS ${p.gases}</span><span>C2 ${p.c2} · WDG ${p.wedges}${this.laserOn && !curW.taser ? ' · LSR' : ''}${this.torchOn ? ' · LT' : ''}</span>`;
+    const magEl = $('magBadge');
+    if (this.ads && gun === 'rifle') {
+      magEl.classList.remove('hidden');
+      magEl.classList.toggle('on', this.magnifier);
+      magEl.textContent = this.magnifier ? '3× G33 ON [SHIFT]' : '1× EOTECH [SHIFT]';
+    } else magEl.classList.add('hidden');
     $('objective').innerHTML = `SUSPECTS <b>${r.suspects}</b> · CIVILIANS <b>${r.civs}</b>${sim.level.breaker ? ` · POWER <b>${sim.powerOn ? 'ON' : 'OFF'}</b>` : ''}`;
     const bt = $('bombtimer');
     if (sim.bomb && !sim.bomb.defused) {
@@ -1438,7 +1740,7 @@ class Game {
       const bpm = Math.min(182, Math.round(baseBpm + runBpm + this.stress * 48));
       $('bcBpm').textContent = `${bpm} BPM`;
     }
-    if (this.pipOn) {
+    if (this.pipOn && this.pipKind !== 'optiwand') {
       const list = this.pipActors();
       const o = list[this.pipActorIdx];
       if (o) $('pipLabel').textContent = `${o.kind === 'player' ? 'ALLY CAM' : 'HELMET CAM'} // ${o.name.toUpperCase()}${o.kind === 'officer' ? ' [' + o.team + ']' : ''}${!o.alive ? ' · KIA' : o.downed ? ' · DOWNED' : ''}`;
@@ -1458,7 +1760,7 @@ class Game {
       html += '</div>';
     }
     $('team').innerHTML = html;
-    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · <kbd>H</kbd> Wheel · <kbd>L</kbd> Laser · ${curW.canSemi ? '<kbd>I</kbd> Mode · ' : ''}<kbd>N</kbd> NVG · <kbd>K</kbd> Bodycam · <kbd>P</kbd> Helmet Cam · <kbd>MMB</kbd> Ping${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
+    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · <kbd>Q/E</kbd> Lean · <kbd>\`</kbd> Grenade · <kbd>Caps</kbd> Shout · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>K</kbd> Bodycam · <kbd>P</kbd> Cam${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
     const it = sim.interactTarget(), pr = $('prompt');
     if (p.downed && p.alive) {
       pr.style.opacity = '1'; pr.textContent = `DOWNED — BLEEDOUT IN ${Math.max(0, Math.ceil(p.bleedT))}s (WAIT FOR TEAMMATE)`;
@@ -1475,8 +1777,8 @@ class Game {
       else if (it?.breaker) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> ${sim.powerOn ? 'Cut Building Power' : 'Restore Power'}`; }
       else if (it?.door) {
         pr.style.opacity = '1';
-        pr.innerHTML = it.door.locked ? '<kbd>F</kbd> Pick Lock · <kbd>U</kbd> C2 · <kbd>E</kbd> Peek'
-          : `<kbd>F</kbd> ${it.door.target ? 'Close' : 'Open'} · <kbd>E</kbd> Peek · <kbd>Y</kbd> ${it.door.wedged ? 'Unwedge' : 'Wedge'}${sim.players.length > 1 ? ' · <kbd>J</kbd> Breach Sync' : ''}`;
+        pr.innerHTML = it.door.locked ? '<kbd>F</kbd> Pick Lock · <kbd>U</kbd> C2 · <kbd>O</kbd> Optiwand'
+          : `<kbd>F</kbd> ${it.door.target ? 'Close' : 'Open'} · <kbd>O</kbd> Optiwand · <kbd>Y</kbd> ${it.door.wedged ? 'Unwedge' : 'Wedge'}${sim.players.length > 1 ? ' · <kbd>J</kbd> Breach Sync' : ''}`;
       } else pr.style.opacity = '0';
     }
   }
@@ -1570,28 +1872,38 @@ class Game {
     this.recoilRoll *= Math.max(0, 1 - dt * 12);
     this.camShake = Math.max(0, this.camShake - dt * 0.085);
     this.dmgFx = Math.max(0, this.dmgFx - dt * 1.4); this.hitFx = Math.max(0, this.hitFx - dt * 5);
-    const targetEye = (!p.alive ? 0.35 : p.downed ? 0.48 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive && !p.downed ? p.jumpY : 0); this.eye += (targetEye - this.eye) * Math.min(1, dt * (p.jumpY > 0 ? 30 : 9));
-    { const st = $('stance'), run = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch, t = !p.alive ? '' : p.downed ? 'DOWNED · BLEEDING OUT' : p.prone ? 'CRAWLING · SILENT' : p.crouch ? 'CROUCHING · SILENT' : run ? 'RUNNING · HEARD FAR AWAY' : this.slow ? 'SNEAKING · SILENT' : ''; if (st.textContent !== t) { st.textContent = t; st.className = run || p.downed ? 'loud' : ''; } }
+    // Lean Q / E smooth update + wall-safe camera offset
+    this.leanTarget = p.alive && !p.downed && !p.prone && !this.typing ? (K.has('KeyQ') ? -1 : 0) + (K.has('KeyE') ? 1 : 0) : 0;
+    this.lean += (this.leanTarget - this.lean) * Math.min(1, dt * 11);
+    const lo = sim.leanOffset(p, this.lean);
+
+    const targetEye = (!p.alive ? 0.35 : p.downed ? 0.48 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive && !p.downed ? p.jumpY : 0) - Math.abs(lo.actual) * 0.06;
+    this.eye += (targetEye - this.eye) * Math.min(1, dt * (p.jumpY > 0 ? 30 : 9));
+    { const st = $('stance'), run = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch, t = !p.alive ? '' : p.downed ? 'DOWNED · BLEEDING OUT' : p.prone ? 'CRAWLING · SILENT' : p.crouch ? 'CROUCHING · SILENT' : run ? 'RUNNING · HEARD FAR AWAY' : this.slow ? 'SNEAKING · SILENT' : Math.abs(lo.actual) > 0.25 ? (lo.actual < 0 ? 'LEAN LEFT' : 'LEAN RIGHT') : ''; if (st.textContent !== t) { st.textContent = t; st.className = run || p.downed ? 'loud' : ''; } }
     const bobScale = 1 - this.aimK * 0.85;
     const shkX = this.camShake > 0 ? (Math.random() - 0.5) * this.camShake : 0;
     const shkY = this.camShake > 0 ? (Math.random() - 0.5) * this.camShake : 0;
-    this.camera.position.set(p.x + shkX, this.eye + Math.sin(this.bob * 2) * 0.022 * bobScale + shkY, p.z);
+    this.camera.position.set(p.x + lo.lx + shkX, this.eye + Math.sin(this.bob * 2) * 0.022 * bobScale + shkY, p.z + lo.lz);
     this.camera.rotation.set(
       Math.min(1.45, this.pitch + this.recoilPitch + shkY * 0.4),
       this.yaw + shkX * 0.3,
-      (!p.alive ? 0.5 : p.downed ? 0.22 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale)) + this.recoilRoll,
+      (!p.alive ? 0.5 : p.downed ? 0.22 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale) - lo.actual * 0.13) + this.recoilRoll,
     );
+    const ws0 = this.weaponSpecs[this.weapon];
+    const gun0 = this.activeGun(ws0);
     { const sprint = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch && (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD'));
       const want = this.ads && p.alive && !p.downed && this.reloadT <= 0 && !sprint && !this.typing && !!document.pointerLockElement || (AUTO && this.ads) ? 1 : 0;
       this.aimK += (want - this.aimK) * Math.min(1, dt * 12); if (Math.abs(want - this.aimK) < 0.002) this.aimK = want;
       const baseFov = this.bodycamOn ? 92 : 74;
-      const fov = baseFov * (1 - this.aimK * (this.weapon === 0 ? 0.45 : 0.25)); if (Math.abs(this.camera.fov - fov) > 0.01) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); } }
+      const zoomFov = gun0 === 'rifle' ? (this.magnifier ? 26 : 44) : 54;
+      const fov = baseFov + (zoomFov - baseFov) * this.aimK;
+      if (Math.abs(this.camera.fov - fov) > 0.01) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); } }
     this.torch.intensity = this.torchOn && p.alive && !p.downed ? 22 : 0;
     const cross = $('cross');
     // IFF friendly crosshair check + tactical laser projection
     if (p.alive && !p.downed && !sim.over) {
       const ad = this.aimDir();
-      const rh = sim.ray(p.x, this.eye, p.z, ad.x, ad.y, ad.z, 26, p, false);
+      const rh = sim.ray(p.x + lo.lx, this.eye, p.z + lo.lz, ad.x, ad.y, ad.z, 26, p, false);
       const friendly = !!(rh.actor && (rh.actor.kind === 'player' || rh.actor.kind === 'officer' || (rh.actor.kind === 'civ' && !rh.actor.hostile)));
       cross.classList.toggle('friend', friendly);
       if (friendly) {
@@ -1610,18 +1922,24 @@ class Game {
       this.fx.setLaser(false);
     }
     // view model
-    const ws0 = this.weaponSpecs[this.weapon];
     const g = this.vm.group; this.vmKick += (0 - this.vmKick) * Math.min(1, dt * 14); this.sway.multiplyScalar(Math.max(0, 1 - dt * 9));
     const rl = this.reloadT > 0 ? Math.sin(Math.min(1, this.reloadT / ws0.reload) * Math.PI) : 0;
     const ak = this.aimK, AIM = AIMPOS;
     g.position.set(0.17 * (1 - ak) - this.sway.x * (1 - ak * 0.8) + Math.sin(this.bob) * 0.006 * bobScale, -0.16 + ak * 0.075 + this.sway.y * (1 - ak * 0.8) - rl * 0.16 + Math.abs(Math.cos(this.bob)) * 0.006 * bobScale + Math.min(0, this.vmKick) * 0.2, -0.5 + Math.max(0, this.vmKick) * 0.05);
     g.rotation.set(Math.max(0, this.vmKick) * 0.07 - rl * 0.7, 0.03 * (1 - ak) + this.sway.x * 2 * (1 - ak * 0.8), rl * 0.5);
-    this.vm.rifle.visible = this.weapon === 0 && !ws0.shield; this.vm.pistol.visible = this.weapon === 1 || !!ws0.shield; this.vm.shield.visible = !!ws0.shield; g.visible = p.alive && !p.downed;
+    this.vm.rifle.visible = gun0 === 'rifle' && !ws0.shield;
+    this.vm.shotgun.visible = gun0 === 'shotgun' && !ws0.nonLethal;
+    this.vm.beanbag.visible = gun0 === 'shotgun' && !!ws0.nonLethal;
+    this.vm.pistol.visible = gun0 === 'pistol' || !!ws0.shield;
+    this.vm.shield.visible = !!ws0.shield;
+    g.visible = p.alive && !p.downed;
     if (this.arms.ready) { // animated arms: the clips do the reloading and walking, the code only adds sway and recoil
-      const a = this.arms.root, rf = this.weapon === 0 && !ws0.shield, dip = 0, mv = !p.alive || p.downed || this.typing || !(K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD')) ? 0 : (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.crouch && !p.prone ? 2 : 1;
-      const wIdx = rf ? 0 : 1;
-      const am = AIM[wIdx]; a.position.set(-this.sway.x * (1 - ak * 0.85) + am[0] * ak, this.sway.y * (1 - ak * 0.85) + Math.min(0, this.vmKick) * 0.2 - dip * 0.16 + am[1] * ak, Math.max(0, this.vmKick) * 0.035 + am[2] * ak);
+      const a = this.arms.root, dip = 0, mv = !p.alive || p.downed || this.typing || !(K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD')) ? 0 : (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.crouch && !p.prone ? 2 : 1;
+      const wIdx = gun0 === 'rifle' ? 0 : gun0 === 'shotgun' ? (ws0.nonLethal ? 3 : 2) : (ws0.taser ? 4 : 1);
+      const am = AIM[wIdx] ?? AIM[0];
+      a.position.set(-this.sway.x * (1 - ak * 0.85) + am[0] * ak, this.sway.y * (1 - ak * 0.85) + Math.min(0, this.vmKick) * 0.2 - dip * 0.16 + am[1] * ak, Math.max(0, this.vmKick) * 0.035 + am[2] * ak);
       a.rotation.set(Math.max(0, this.vmKick) * 0.035 * (1 - ak * 0.6) - dip * 0.7 + am[3] * ak, this.sway.x * 2 * (1 - ak * 0.85) + am[4] * ak, dip * 0.5); a.visible = p.alive && !p.downed && !ws0.shield;
+      this.arms.setSight(ak > 0.35, this.magnifier && gun0 === 'rifle');
       this.arms.update(dt, wIdx, mv); a.updateMatrixWorld(true); this.vm.flash.position.copy(g.worldToLocal(this.arms.muzzle.getWorldPosition(new THREE.Vector3())));
     }
     // overlays
@@ -1629,7 +1947,10 @@ class Game {
     if (this.radioCardT > 0) { this.radioCardT -= dt; if (this.radioCardT <= 0) show('radioCard', false); }
     if (this.pipTimer > 0) {
       this.pipTimer -= dt;
-      if (this.pipTimer <= 0 && !this.pipManual && this.pipOn) { this.pipOn = false; show('pipFrame', false); }
+      if (this.pipTimer <= 0 && !this.pipManual && this.pipOn) {
+        this.pipOn = false; this.pipKind = 'ally'; this.optiwandDoor = null;
+        $('pipFrame').classList.remove('optiwand'); show('pipMeta', false); show('pipFrame', false);
+      }
     }
     // Ambient club bass & low-HP heartbeat
     if (sim.level.name === 'Club Eclipse' && p.alive && !sim.over) {
@@ -1647,7 +1968,16 @@ class Game {
     }
     this.censorT -= dt;
     if (this.censorT <= 0) { this.censorT = 0.04; this.updateCensors(); }
-    $('dmg').style.opacity = String(Math.max(this.dmgFx, p.hp < 35 && p.alive ? 0.35 : 0, p.alive ? 0 : 0.8)); $('flash').style.opacity = String(Math.min(1, p.flash * 1.6));
+    $('dmg').style.opacity = String(Math.max(this.dmgFx, p.hp < 35 && p.alive ? 0.35 : 0, p.alive ? 0 : 0.8));
+    const fl = $('flash');
+    const inGas = sim.clouds.some(cl => cl.kind === 'gas' && Math.hypot(p.x - cl.x, p.z - cl.z) < cl.r);
+    if (inGas && p.flash < 0.2) {
+      fl.style.background = 'rgba(170, 215, 75, 0.55)';
+      fl.style.opacity = '0.48';
+    } else {
+      fl.style.background = '#fff';
+      fl.style.opacity = String(Math.min(1, p.flash * 1.6));
+    }
     const hm = $('hitmark'); hm.style.opacity = String(this.hitFx);
     hm.classList.toggle('head', this.hitHead);
     hm.classList.toggle('kill', this.hitHead && this.hitFx > 0.2);
@@ -1708,17 +2038,18 @@ class Game {
     else if (this.sim) {
       r.render(this.scene, this.camera); r.clearDepth(); r.render(this.viewScene, this.viewCam);
       if (this.pipOn && S.pip && this.state === 'play') {
-        const list = this.pipActors();
-        const o = list[this.pipActorIdx] ?? list[0];
-        if (o) {
-          const w = 240, h = 150, padX = 20, padY = 188;
-          const x = Math.max(0, innerWidth - w - padX), y = Math.max(0, padY);
+        const w = 240, h = 146, padX = 18, padY = innerHeight - 146 - 146;
+        const x = Math.max(0, innerWidth - w - padX), y = Math.max(0, padY);
+        if (this.pipKind === 'optiwand' && this.optiwandDoor) {
+          const d = this.optiwandDoor, s = this.optiwandSide;
+          const cx = d.cx + 0.5 + (d.horiz ? 0 : -s * 0.28);
+          const cz = d.cz + 0.5 + (d.horiz ? -s * 0.28 : 0);
+          const yaw = d.horiz ? (s > 0 ? 0 : Math.PI) : (s > 0 ? Math.PI / 2 : -Math.PI / 2);
+          this.pipCam.fov = 98;
           this.pipCam.aspect = w / h;
           this.pipCam.updateProjectionMatrix();
-          this.pipCam.position.set(o.x, !o.alive ? 0.35 : o.downed ? 0.52 : o.crouch ? 1.16 : 1.66, o.z);
-          this.pipCam.rotation.set(o.alive && !o.downed ? (o.kind === 'player' ? o.pitch : -0.04) : 0.45, o.yaw, o.alive && !o.downed ? 0.02 : 0.6);
-          const ownView = this.views.get(o);
-          if (ownView) ownView.root.visible = false;
+          this.pipCam.position.set(cx, 0.18, cz);
+          this.pipCam.rotation.set(0.14, yaw, 0);
           r.setScissorTest(true);
           r.setViewport(x, y, w, h);
           r.setScissor(x, y, w, h);
@@ -1726,7 +2057,26 @@ class Game {
           r.render(this.scene, this.pipCam);
           r.setScissorTest(false);
           r.setViewport(0, 0, innerWidth, innerHeight);
-          if (ownView) ownView.root.visible = true;
+        } else {
+          const list = this.pipActors();
+          const o = list[this.pipActorIdx] ?? list[0];
+          if (o) {
+            this.pipCam.fov = 78;
+            this.pipCam.aspect = w / h;
+            this.pipCam.updateProjectionMatrix();
+            this.pipCam.position.set(o.x, !o.alive ? 0.35 : o.downed ? 0.52 : o.crouch ? 1.16 : 1.66, o.z);
+            this.pipCam.rotation.set(o.alive && !o.downed ? (o.kind === 'player' ? o.pitch : -0.04) : 0.45, o.yaw, o.alive && !o.downed ? 0.02 : 0.6);
+            const ownView = this.views.get(o);
+            if (ownView) ownView.root.visible = false;
+            r.setScissorTest(true);
+            r.setViewport(x, y, w, h);
+            r.setScissor(x, y, w, h);
+            r.clear();
+            r.render(this.scene, this.pipCam);
+            r.setScissorTest(false);
+            r.setViewport(0, 0, innerWidth, innerHeight);
+            if (ownView) ownView.root.visible = true;
+          }
         }
       }
     }
@@ -1738,7 +2088,8 @@ const propsDone = loadProps();
 const weaponsDone = loadWeapons().then(async () => {
   if (weaponsReady) { upgradeViewModel(game.vm); game.menu.upgradeWeapons(); }
   if (S.qual > 0 && await game.arms.load()) { // animated arms replace the static weapon (not on the lowest graphics setting)
-    game.vm.rifle.clear(); game.vm.pistol.clear(); game.viewCam.add(game.arms.root); game.viewScene.environment = studioEnv(game.renderer); game.viewScene.environmentIntensity = 0.5;
+    game.vm.rifle.clear(); game.vm.pistol.clear(); game.vm.shotgun.clear(); game.vm.beanbag.clear();
+    game.viewCam.add(game.arms.root); game.viewScene.environment = studioEnv(game.renderer); game.viewScene.environmentIntensity = 0.5;
   }
 });
 const modelsDone = loadModels().then(() => {

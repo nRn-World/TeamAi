@@ -1,9 +1,9 @@
 // Weapon and door sounds are real recordings (public/sfx, CC0 – see public/sfx/LICENSE.txt); everything else is synthesized with WebAudio.
 export type Gun = 'rifle' | 'pistol' | 'smg' | 'shotgun';
-const SFX = ['shot-m4a1-1', 'shot-m4a1-2', 'shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3', 'shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3', 'shot-m1014-1', 'far-rifle', 'far-pistol', 'far-smg', 'far-sniper',
-  'foley-mag-out', 'foley-mag-in', 'foley-charge', 'foley-pistol-out', 'foley-pistol-in', 'foley-slide', 'foley-click', 'foley-bolt',
+const SFX = ['shot-m4a1-1', 'shot-m4a1-2', 'shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3', 'shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3', 'shot-m1014-1', 'shot-m1014-2', 'shot-m1014-3', 'far-rifle', 'far-pistol', 'far-smg', 'far-shotgun', 'far-sniper',
+  'foley-mag-out', 'foley-mag-in', 'foley-charge', 'foley-pistol-out', 'foley-pistol-in', 'foley-slide', 'foley-click', 'foley-bolt', 'foley-rack', 'foley-shell',
   'door-open-1', 'door-open-2', 'door-close-1', 'door-close-2', 'door-close-3', 'door-slam', 'door-creak-1', 'door-creak-2', 'door-latch'];
-const NEAR: Record<Gun, string[]> = { rifle: ['shot-m4a1-1', 'shot-m4a1-2'], pistol: ['shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3'], smg: ['shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3'], shotgun: ['shot-m1014-1'] };
+const NEAR: Record<Gun, string[]> = { rifle: ['shot-m4a1-1', 'shot-m4a1-2'], pistol: ['shot-m9a1-1', 'shot-m9a1-2', 'shot-m9a1-3'], smg: ['shot-mp5-1', 'shot-mp5-2', 'shot-mp5-3'], shotgun: ['shot-m1014-1', 'shot-m1014-2', 'shot-m1014-3'] };
 // Voice levels. Every clip is measured when it is loaded and scaled to LINE_LEVEL (RMS of its voiced parts, dBFS), so a shouted
 // line is not louder than a spoken one – it only sounds shouted. CH_* even out what the radio / rough-voice filters add.
 const LINE_LEVEL = -20, CH_RADIO = 0.89, CH_GRUFF = 0.8, CH_PLAIN = 2.14, CH_SHOUT = 1.25, CH_GRUFF_SHOUT = 0.95;
@@ -178,9 +178,10 @@ export class GameAudio {
       const lp = own ? 0 : wallCut || Math.max(1400, 16000 - dist * 800);
       // close: the dry report; further away (or behind walls) it is duller and gives way to the distant recording
       if (far < 1) this.sample(take, o, 1 - far * 0.8, rate, 0, lp);
-      if (far > 0 && !own) this.sample('far-' + (gun === 'shotgun' ? 'sniper' : gun), o, far * (muffled ? 0.75 : 1.3), gun === 'shotgun' ? rate * 0.85 : rate, 0, wallCut);
+      if (far > 0 && !own) this.sample('far-' + gun, o, far * (muffled ? 0.75 : 1.3), gun === 'shotgun' ? rate * 0.92 : rate, 0, wallCut);
       if (own) {
         this.tone(o, 'sine', gun === 'shotgun' ? 68 : gun === 'rifle' ? 95 : 120, 36, gun === 'shotgun' ? 0.14 : 0.09, gun === 'shotgun' ? 0.7 : 0.5); // chest thump
+        if (gun === 'shotgun') this.sample('foley-rack', this.out(0.14, 0.42, false), 1, 1.05, 0.24);
         this.shell(gun);
       }
       return;
@@ -211,9 +212,65 @@ export class GameAudio {
   /** Magazine out, magazine in, charging handle / slide – spread over the reload time (seconds). */
   reload(gun: Gun = 'rifle', dur = 2) {
     if (!this.ctx) return; const o = this.out(0.15, 0.9, false), r = gun === 'rifle';
+    if (gun === 'shotgun') {
+      const ok = this.sample('foley-shell', o, 0.95, 1, dur * 0.14);
+      this.sample('foley-shell', o, 0.95, 1.04, dur * 0.44);
+      this.sample('foley-rack', o, 1.0, 1, dur * 0.78);
+      if (ok) return;
+    }
     const ok = this.sample(r ? 'foley-mag-out' : 'foley-pistol-out', o, 1, 1, dur * 0.06);
     this.sample(r ? 'foley-mag-in' : 'foley-pistol-in', o, 1, 1, dur * 0.52); this.sample(r ? 'foley-charge' : 'foley-slide', o, 1, 1, dur * 0.8);
     if (!ok) { this.burst(o, 0.05, 'bandpass', 2400, 1800, 4, 0.4); this.burst(o, 0.06, 'bandpass', 1500, 1100, 4, 0.45, 0.55); this.burst(o, 0.05, 'bandpass', 3000, 2000, 3, 0.5, 1.12); }
+  }
+  smokeHiss(dist: number, pan: number) {
+    if (!this.ctx) return;
+    const o = this.out(pan, Math.max(0.08, 0.75 / (1 + dist * 0.14)));
+    this.tone(o, 'triangle', 920, 420, 0.08, 0.35);
+    this.burst(o, 1.6, 'bandpass', 3800, 1700, 1.2, 0.55, 0.04);
+  }
+  /** Playable 911 Dispatch radio briefing with radio squelch, distant siren bed & tactical callout. */
+  private dispatchTimer = 0;
+  private dispatchOnEnd?: () => void;
+  playDispatch(mission: number, speech: Speech, onEnd?: () => void) {
+    this.init();
+    this.stopDispatch();
+    this.dispatchOnEnd = onEnd;
+    const lines = [
+      'Dispatch to Team 1: Multiple 911 calls from The Office Complex, Kista Sector. Three to five armed intruders barricaded on the main floor, civilians pinned in cubicles. Proceed with caution.',
+      'Dispatch to Team 1: Harbor patrol reports an armed weapons exchange inside The Warehouse. Dock workers trapped near shipping crates. Expect crossfire and locked storage doors.',
+      'Dispatch to Team 1: Panic call from Hotel North Star front desk. Armed suspects holding guests across corridor rooms 101 through 108. Optiwand doors before breaching.',
+      'Dispatch to Team 1: Silent alarm triggered at Nordia Bank. Armed crew has taken the Bank Director hostage near the vault. Prioritize VIP extraction and non-lethal compliance.',
+      'Dispatch to Team 1: Urgent! Anonymous tip confirms an improvised explosive device inside Club Eclipse backstage. Low visibility, panicked civilians on the dancefloor. Move fast.',
+      'Dispatch to Team 1: Tactical warrant active for an unmapped compound. Intel indicates armed lookouts and civilians inside. Watch your corners and clear room by room.',
+    ];
+    const msg = lines[mission % lines.length];
+    this.squelch(true);
+    if (this.ctx) {
+      const o = this.out(0, 0.14, false);
+      this.burst(o, 5.5, 'bandpass', 2100, 1900, 1.2, 0.16, 0.05);
+      // Distant faint siren wail in dispatch center background
+      this.tone(o, 'sine', 640, 880, 1.4, 0.05, 0.4);
+      this.tone(o, 'sine', 880, 620, 1.4, 0.05, 1.8);
+    }
+    speech.say(msg, 0.96, 1.06, 0.95, true);
+    const ms = Math.max(4800, msg.length * 64);
+    this.dispatchTimer = window.setTimeout(() => {
+      this.squelch(false);
+      this.dispatchTimer = 0;
+      const cb = this.dispatchOnEnd;
+      this.dispatchOnEnd = undefined;
+      cb?.();
+    }, ms);
+  }
+  stopDispatch(speech?: Speech) {
+    if (this.dispatchTimer) {
+      clearTimeout(this.dispatchTimer);
+      this.dispatchTimer = 0;
+    }
+    if (speech) speech.stop();
+    const cb = this.dispatchOnEnd;
+    this.dispatchOnEnd = undefined;
+    cb?.();
   }
   /** Weapon raised after switching. */
   draw() { if (!this.ctx) return; this.sample('foley-bolt', this.out(0.1, 0.7, false)); }

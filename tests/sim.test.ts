@@ -455,4 +455,56 @@ ok(wins >= 4, 'bot should be able to win across missions');
   ok(sCoop.squadMvp().length === 2 && sCoop.squadMvp()[0].badge === 'SQUAD MVP', 'squadMvp ranks co-op players');
 }
 
+// ---- Phase 1-2 new tactical systems verification ----
+{
+  // 1) Multiple tactical entry points + PrePlan route execution
+  for (let m = 0; m < MISSIONS.length; m++) {
+    const l = buildLevel(m, 1);
+    ok(l.entries.length >= 2, `mission ${m} defines >=2 tactical entries`);
+  }
+  const simPlan = new Sim(0, 1, 1, 1, {}, {
+    entry: 1,
+    teamB: [{ x: 10, z: 10 }, { x: 12, z: 12 }],
+    teamA: [{ x: 14, z: 10 }, { x: 16, z: 12 }],
+  });
+  const e1 = simPlan.level.entries[1];
+  ok(Math.hypot(simPlan.player.x - e1.x, simPlan.player.z - e1.z) < 0.05, 'preplan entry selects alternate insertion point');
+  simPlan.executePreplan();
+  ok(simPlan.teams.B.order.type === 'move' && simPlan.teams.A.order.type === 'move', 'executePreplan dispatches drawn routes to Team A and Team B');
+
+  // 2) Lean offset + wall-safe clamping
+  const sim = new Sim(0, 1, 1);
+  const pl = sim.player;
+  pl.yaw = 0;
+  const lo = sim.leanOffset(pl, 1);
+  ok(lo.actual > 0.5 && lo.lx > 0.15, 'leanOffset shifts camera laterally in open space');
+
+  // 3) Smoke occlusion & CS gas stun/surrender
+  const sus = sim.suspects[0];
+  pl.x = sus.x + 4; pl.z = sus.z;
+  const openLos = sim.los(pl.x, pl.z, sus.x, sus.z);
+  sim.clouds.push({ kind: 'smoke', x: sus.x + 2, z: sus.z, r: 2.2, t: 10, maxT: 10 });
+  ok(!openLos || !sim.los(pl.x, pl.z, sus.x, sus.z), 'smoke cloud blocks line of sight');
+  sim.clouds.length = 0;
+  sim.clouds.push({ kind: 'gas', x: sus.x, z: sus.z, r: 3.0, t: 10, maxT: 10 });
+  for (let i = 0; i < 12; i++) sim.update(0.25);
+  ok(sus.stun > 0 || sus.down, 'CS gas cloud stuns/forces surrender on exposed suspect');
+
+  // 4) Optiwand emits live camera event for player
+  const door = sim.level.doors[0];
+  pl.x = door.cx + 0.5; pl.z = door.cz + (door.horiz ? 1.1 : 0.5);
+  if (!door.horiz) pl.x += 0.6;
+  sim.events.length = 0;
+  sim.peekDoor(door, pl);
+  ok(sim.events.some(e => e.t === 'optiwand'), 'peekDoor emits optiwand event for player PiP camera');
+
+  // 5) Wallbang penetration through solid wood door (exclude glass doors)
+  const woodDoor = sim.level.doors.find(d => d.horiz && !sim.isMetalDoor(d) && !sim.isGlassDoor(d))!;
+  woodDoor.open = 0; woodDoor.target = 0;
+  const wx = woodDoor.cx + 0.5, wz = woodDoor.cz + 0.5;
+  sim.events.length = 0;
+  sim.fire(pl, wx, 1.2, wz + 1.2, 0, 0, -1, 34, { pen: 1 });
+  ok(sim.events.some(e => e.t === 'pen'), 'pen>=1 fire through closed wood door emits penetration event');
+}
+
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);

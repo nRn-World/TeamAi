@@ -18,6 +18,7 @@ export interface VehicleCollider { x: number; z: number; yaw: number; hx: number
 
 export type LevelTheme = 'office' | 'warehouse' | 'hotel' | 'bank' | 'club' | 'raid';
 export type ObjectiveKind = 'clear' | 'hostage' | 'bomb';
+export interface EntryPoint { name: string; x: number; z: number; yaw: number; }
 
 export interface Level {
   index: number; name: string; brief: string; theme: LevelTheme; objective: ObjectiveKind;
@@ -31,6 +32,7 @@ export interface Level {
   extBoxes: BoxCollider[];
   extCircles: CircleCollider[];
   playerSpawn: Pt & { yaw: number };
+  entries: EntryPoint[];
   suspects: (Pt & { room: number; hostage?: boolean })[];
   civs: (Pt & { room: number; vip?: boolean })[];
 }
@@ -52,6 +54,7 @@ class Builder {
   vehicle?: VehicleCollider;
   extBoxes: BoxCollider[] = [];
   extCircles: CircleCollider[] = [];
+  entries: EntryPoint[] = [];
   constructor(public w: number, public h: number) {
     this.cells = new Uint8Array(w * h);
     for (let x = 0; x < w; x++) { this.set(x, 0, WALL); this.set(x, h - 1, WALL); }
@@ -254,6 +257,10 @@ const SPECS: Spec[] = [
       b.extCircles.push({ x: 8.5, z: 22.0, r: 0.44, h: 2.6 }, { x: 27.0, z: 22.2, r: 0.44, h: 2.6 }); // courtyard trees
       b.extCircles.push({ x: 6.5, z: 25.4, r: 0.14, h: 4.6 }, { x: 27.5, z: 25.4, r: 0.14, h: 4.6 }); // street lamps
       b.vehicle = { x: 22.4, z: 25.4, yaw: -0.26, hx: 3.0, hz: 1.2, h: 2.43 };
+      b.entries.push(
+        { name: 'Front Plaza', x: 14.5, z: 24.4, yaw: 0 },
+        { name: 'East Alley Door', x: 29.6, z: 12.5, yaw: Math.PI / 2 },
+      );
       return { x: 14.5, z: 24.4, yaw: 0 };
     },
   },
@@ -274,6 +281,10 @@ const SPECS: Spec[] = [
         { x: 31.2, z: 28.0, hx: 2.9, hz: 1.2, yaw: -0.14, h: 2.5 },
       );
       b.vehicle = { x: 23.2, z: 28.2, yaw: -0.3, hx: 3.0, hz: 1.2, h: 2.43 };
+      b.entries.push(
+        { name: 'South Loading Dock', x: 16.5, z: 29.0, yaw: 0 },
+        { name: 'West Loading Door', x: 2.0, z: 12.5, yaw: -Math.PI / 2 },
+      );
       return { x: 16.5, z: 29.0, yaw: 0 };
     },
   },
@@ -297,6 +308,10 @@ const SPECS: Spec[] = [
       b.extBoxes.push({ x: 18.6, z: 25.5, hx: 0.61, hz: 0.28, h: 1.0 }, { x: 26.4, z: 25.5, hx: 0.61, hz: 0.28, h: 1.0 }); // planters
       b.extCircles.push({ x: 16.2, z: 25.8, r: 0.45, h: 2.7 }, { x: 36.6, z: 26.2, r: 0.45, h: 2.7 }); // courtyard trees
       b.vehicle = { x: 31.8, z: 28.2, yaw: -0.25, hx: 3.0, hz: 1.2, h: 2.43 };
+      b.entries.push(
+        { name: 'Hotel Main Lobby', x: 22.5, z: 29.0, yaw: 0 },
+        { name: 'East Fire Exit', x: 43.4, z: 14.5, yaw: Math.PI / 2 },
+      );
       return { x: 22.5, z: 29.0, yaw: 0 };
     },
   },
@@ -310,6 +325,7 @@ const SPECS: Spec[] = [
       b.room(27, 4, 13, 11, 'Bank Vault', 'vault', 'concrete');
       b.room(27, 14, 13, 11, "Director's Suite", 'office', 'wood');
       b.door(15, 24);
+      b.door(4, 19);
       b.door(9, 14);
       b.door(21, 14);
       b.door(27, 9, true);  // Vault door locked
@@ -325,6 +341,10 @@ const SPECS: Spec[] = [
       b.extBoxes.push({ x: 12.3, z: 25.7, hx: 0.61, hz: 0.28, h: 1.0 }, { x: 18.7, z: 25.7, hx: 0.61, hz: 0.28, h: 1.0 }); // planters
       b.extCircles.push({ x: 7.8, z: 26.2, r: 0.45, h: 2.7 }, { x: 30.8, z: 26.2, r: 0.45, h: 2.7 }); // courtyard trees
       b.vehicle = { x: 25.8, z: 28.3, yaw: -0.25, hx: 3.0, hz: 1.2, h: 2.43 };
+      b.entries.push(
+        { name: 'Bank Front Steps', x: 15.5, z: 29.0, yaw: 0 },
+        { name: 'West Side Entrance', x: 2.0, z: 19.5, yaw: -Math.PI / 2 },
+      );
       return { x: 15.5, z: 29.0, yaw: 0 };
     },
   },
@@ -344,6 +364,7 @@ const SPECS: Spec[] = [
       b.door(23, 6, true);
       b.door(29, 10, true);
       b.door(14, 6);
+      b.door(35, 17, true);
       b.win(16, 10); b.win(20, 10); b.win(11, 23); b.win(15, 23);
       b.placeBreaker(24, 22);
       b.bomb = { x: 31.5, z: 16.5, time: 165 };
@@ -354,6 +375,10 @@ const SPECS: Spec[] = [
         { x: 15.2, z: 24.6, hx: 0.61, hz: 0.28, h: 1.0 },
       );
       b.vehicle = { x: 19.2, z: 27.4, yaw: -0.38, hx: 3.0, hz: 1.2, h: 2.43 };
+      b.entries.push(
+        { name: 'Main Club Entrance', x: 13.5, z: 27.8, yaw: 0 },
+        { name: 'Backstage Alley (Locked)', x: 37.5, z: 17.5, yaw: Math.PI / 2 },
+      );
       return { x: 13.5, z: 27.8, yaw: 0 };
     },
   },
@@ -424,6 +449,10 @@ const SPECS: Spec[] = [
       b.extBoxes.push({ x: 5.0, z: fz + 0.3, hx: 0.14, hz: 0.14, h: 7.5 }, { x: 36.2, z: fz + 0.3, hx: 0.14, hz: 0.14, h: 7.5 });
       b.extCircles.push({ x: 4.5, z: fz + 1.4, r: 0.44, h: 2.6 }, { x: 36.6, z: fz + 1.4, r: 0.44, h: 2.6 });
       b.vehicle = { x: Math.min(31.2, sx + 5.8), z: Math.min(b.h - 3.3, fz + 2.75), yaw: -0.25, hx: 3.0, hz: 1.2, h: 2.43 };
+      b.entries.push(
+        { name: 'South Plaza', x: sx, z: sz, yaw: 0 },
+        { name: 'West Side Breach', x: 2.0, z: cz + 2.5, yaw: -Math.PI / 2 },
+      );
       return { x: sx, z: sz, yaw: 0 };
     },
   },
@@ -436,6 +465,7 @@ export function buildLevel(index: number, seed: number): Level {
   const rng = mulberry32(seed * 7919 + index * 104729 + 13);
   const b = new Builder(spec.w, spec.h);
   const spawn = spec.build(b, rng);
+  const entries = b.entries.length ? b.entries : [{ name: 'Main Entrance', x: spawn.x, z: spawn.z, yaw: spawn.yaw }];
   b.furnish(rng, spawn);
   const doorAt = new Map<number, Door>();
   for (const d of b.doors) doorAt.set(d.cz * b.w + d.cx, d);
@@ -475,7 +505,7 @@ export function buildLevel(index: number, seed: number): Level {
     w: b.w, h: b.h, cells: b.cells, doors: b.doors, doorAt, windows: b.windows,
     rooms: b.rooms, props: b.props, propAt, breaker: b.breaker, bomb: b.bomb,
     vehicle: b.vehicle, extBoxes: b.extBoxes, extCircles: b.extCircles,
-    playerSpawn: spawn, suspects, civs,
+    playerSpawn: spawn, entries, suspects, civs,
   };
 }
 

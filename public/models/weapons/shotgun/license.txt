@@ -1,0 +1,8 @@
+Model Information:
+* title:	Pump Shotgun (Guns & Explosives)
+* source:	https://www.3dmodelscc0.com (extracted & packed via github.com/madeyexz/turfwar, MIT)
+* author:	3dmodelscc0 (https://www.3dmodelscc0.com)
+
+Model License:
+* license type:	CC0 1.0 Universal (Public Domain Dedication — https://creativecommons.org/publicdomain/zero/1.0/)
+* changes:	Extracted Gun_M1014 from arsenal.glb, embedded 512px WebP PBR textures (BaseColor, Normal, ORM), rotated barrel to -Z, meshopt-compressed.
