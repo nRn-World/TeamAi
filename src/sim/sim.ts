@@ -1,5 +1,5 @@
 // TeamAi tactical simulation. Pure logic: no DOM, no three.js – runs headless in tests.
-import { Level, Door, Pt, Room, buildLevel, mulberry32, roomAt, OUT, WALL, DOOR, LOW, HIGH, WINDOW } from './level';
+import { Level, Door, Pt, Room, buildLevel, mulberry32, roomAt, OUT, FLOOR, WALL, DOOR, LOW, HIGH, WINDOW } from './level';
 import { findPath, nearestWalkable, walkLine } from './nav';
 import { buildLocalReport } from './context';
 
@@ -98,8 +98,12 @@ export interface ReplayEvent {
   x: number; z: number; x2?: number; z2?: number; team?: Team;
 }
 
+const ACTOR_RADIUS = 0.37;
+const SPAWN_BODY_GAP = 0.04;
+const COLLISION_EPS = 1e-4; // tolerate sub-millimetre float drift at exact contact
+
 export class Actor {
-  x = 0; z = 0; yaw = 0; r = 0.3; hp = 100; alive = true; speed = 3.2;
+  x = 0; z = 0; yaw = 0; r = ACTOR_RADIUS; hp = 100; alive = true; speed = 3.2;
   path: Pt[] | null = null; goal: Pt | null = null; repathT = 0; moving = false; stuckT = 0; walk = 0;
   stun = 0; surrendered = false; restrained = false; armed = false; morale = 0.5; rolls = 0; lastRoll = -9;
   fakeSurrender = false; fakeT = 0; wasFake = false; vip = false; hostage = false;
@@ -156,6 +160,15 @@ function pointInOBB(px: number, pz: number, bx: number, bz: number, hx: number, 
   const dx = px - bx, dz = pz - bz;
   const lx = dx * c - dz * s, lz = dx * s + dz * c;
   return Math.abs(lx) < hx + pad && Math.abs(lz) < hz + pad;
+}
+
+/** Exact 2D circle-vs-oriented-box overlap; used by spawn validation and collision recovery. */
+function circleOverlapsBox(px: number, pz: number, r: number, bx: number, bz: number, hx: number, hz: number, yaw = 0) {
+  const c = Math.cos(yaw), s = Math.sin(yaw), dx = px - bx, dz = pz - bz;
+  const lx = dx * c - dz * s, lz = dx * s + dz * c;
+  const qx = Math.max(-hx, Math.min(lx, hx)), qz = Math.max(-hz, Math.min(lz, hz));
+  const ex = lx - qx, ez = lz - qz, safeR = Math.max(0, r - COLLISION_EPS);
+  return ex * ex + ez * ez < safeR * safeR;
 }
 
 export interface Stats {
@@ -219,8 +232,9 @@ export class Sim {
     const ep = preplan.entry && preplan.entry > 0 && l.entries[preplan.entry] ? l.entries[preplan.entry] : l.playerSpawn;
     const sp = { x: ep.x, z: ep.z, yaw: ep.yaw };
     let id = 0;
-    this.player = new Actor(id++, 'player', 'You'); Object.assign(this.player, { x: sp.x, z: sp.z, yaw: sp.yaw, armed: true });
-    this.actors.push(this.player); this.players.push(this.player); this.player.trail.push({ x: sp.x, z: sp.z });
+    this.player = new Actor(id++, 'player', 'You'); Object.assign(this.player, { yaw: sp.yaw, armed: true });
+    this.spawnActorAt(this.player, sp.x, sp.z);
+    this.actors.push(this.player); this.players.push(this.player); this.player.trail.push({ x: this.player.x, z: this.player.z });
     const roster = mods.roster;
     OFFICER_NAMES.forEach((n, i) => {
       const r = roster && roster[i];
@@ -229,12 +243,13 @@ export class Sim {
       o.armed = true; o.speed = r ? r.speed : i === 0 ? 4.25 : 3.9;
       if (r && r.hp) o.hp = r.hp;
       if (o.role === 'Breacher') { o.bangs = 4; o.c2 = 3; } // Maya (Breacher) carries extra breach gear
-      const p = nearestWalkable(l, sp.x + (i % 2 ? 0.9 : -0.9), sp.z + 1.1 + Math.floor(i / 2) * 1.0) ?? sp;
-      o.x = sp.x + (i % 2 ? 0.8 : -0.8); o.z = sp.z + 1.0 + Math.floor(i / 2) * 0.9; if (this.solidCell(Math.floor(o.x), Math.floor(o.z))) { o.x = p.x; o.z = p.z; }
+      const ox = sp.x + (i % 2 ? 0.8 : -0.8), oz = sp.z + 1.0 + Math.floor(i / 2) * 0.9;
+      this.spawnActorAt(o, ox, oz);
       o.yaw = sp.yaw; this.officers.push(o); this.actors.push(o);
     });
     for (const s of l.suspects) {
-      const a = new Actor(id++, 'suspect', 'Suspect'); Object.assign(a, { x: s.x, z: s.z, room: s.room, armed: true, yaw: this.rng() * 6.28, speed: 3.0 });
+      const a = new Actor(id++, 'suspect', 'Suspect'); Object.assign(a, { room: s.room, armed: true, yaw: this.rng() * 6.28, speed: 3.0 });
+      this.spawnActorAt(a, s.x, s.z);
       a.morale = 0.2 + this.rng() * 0.75 + (difficulty - 1) * 0.1; a.hunter = this.rng() < 0.45; a.variant = Math.floor(this.rng() * 6); a.timer = this.rng() * 5;
       a.hostage = !!s.hostage;
       this.suspects.push(a); this.actors.push(a);
@@ -245,13 +260,15 @@ export class Sim {
       const rm = spawnRooms[(ei * 3 + Math.floor(this.rng() * spawnRooms.length)) % spawnRooms.length];
       const pt = nearestWalkable(l, rm.x + 1 + Math.floor(this.rng() * Math.max(1, rm.w - 2)), rm.z + 1 + Math.floor(this.rng() * Math.max(1, rm.h - 2)));
       if (pt) {
-        const a = new Actor(id++, 'suspect', 'Suspect'); Object.assign(a, { x: pt.x, z: pt.z, room: rm.id, armed: true, yaw: this.rng() * 6.28, speed: 3.1 });
+        const a = new Actor(id++, 'suspect', 'Suspect'); Object.assign(a, { room: rm.id, armed: true, yaw: this.rng() * 6.28, speed: 3.1 });
+        this.spawnActorAt(a, pt.x, pt.z);
         a.morale = 0.35 + this.rng() * 0.6 + (difficulty - 1) * 0.1; a.hunter = this.rng() < 0.55; a.variant = Math.floor(this.rng() * 6); a.timer = this.rng() * 4;
         this.suspects.push(a); this.actors.push(a);
       }
     }
     for (const s of l.civs) {
-      const a = new Actor(id++, 'civ', s.vip ? 'VIP Hostage' : 'Civilian'); Object.assign(a, { x: s.x, z: s.z, room: s.room, yaw: this.rng() * 6.28, speed: 3.4 });
+      const a = new Actor(id++, 'civ', s.vip ? 'VIP Hostage' : 'Civilian'); Object.assign(a, { room: s.room, yaw: this.rng() * 6.28, speed: 3.4 });
+      this.spawnActorAt(a, s.x, s.z);
       a.variant = Math.floor(this.rng() * 6); a.morale = this.rng(); a.vip = !!s.vip;
       this.civs.push(a); this.actors.push(a);
     }
@@ -259,7 +276,8 @@ export class Sim {
     // extra co-op players are appended last so ids/RNG of everything else stay identical
     for (let i = 1; i < nPlayers; i++) {
       const a = new Actor(id++, 'player', 'Player ' + (i + 1)); a.pi = i; a.armed = true; a.yaw = sp.yaw;
-      const q = nearestWalkable(l, sp.x + (i % 2 ? 1.6 : -1.6) * Math.ceil(i / 2), sp.z - 0.6) ?? sp; a.x = q.x; a.z = q.z; a.trail.push({ x: a.x, z: a.z });
+      const q = nearestWalkable(l, sp.x + (i % 2 ? 1.6 : -1.6) * Math.ceil(i / 2), sp.z - 0.6) ?? sp;
+      this.spawnActorAt(a, q.x, q.z); a.trail.push({ x: a.x, z: a.z });
       this.players.push(a); this.actors.push(a);
     }
     this.trail = this.player.trail;
@@ -381,6 +399,73 @@ export class Sim {
   private solidBodyCell(cx: number, cz: number) {
     const c = this.cell(cx, cz);
     return c === WALL || c === LOW || c === HIGH || c === WINDOW;
+  }
+  /** True when a standing actor's full collision footprint has clearance from every world collider. */
+  isActorPositionClear(x: number, z: number, radius = ACTOR_RADIUS, ignoreDoor?: Door) {
+    const x0 = Math.floor(x - radius), x1 = Math.floor(x + radius);
+    const z0 = Math.floor(z - radius), z1 = Math.floor(z + radius);
+    for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) {
+      if (!this.solidBodyCell(cx, cz)) continue;
+      const qx = Math.max(cx, Math.min(x, cx + 1)), qz = Math.max(cz, Math.min(z, cz + 1));
+      const safeR = Math.max(0, radius - COLLISION_EPS);
+      if ((x - qx) ** 2 + (z - qz) ** 2 < safeR * safeR) return false;
+    }
+    for (const door of this.level.doors) {
+      if (Math.abs(door.cx + 0.5 - x) > 1.8 + radius || Math.abs(door.cz + 0.5 - z) > 1.8 + radius) continue;
+      // The jambs remain solid even when the door is open.
+      if (door.horiz) {
+        if (circleOverlapsBox(x, z, radius, door.cx + 0.015, door.cz + 0.5, 0.02, 0.5)
+          || circleOverlapsBox(x, z, radius, door.cx + 0.985, door.cz + 0.5, 0.02, 0.5)) return false;
+      } else if (circleOverlapsBox(x, z, radius, door.cx + 0.5, door.cz + 0.015, 0.5, 0.02)
+        || circleOverlapsBox(x, z, radius, door.cx + 0.5, door.cz + 0.985, 0.5, 0.02)) return false;
+      if (door !== ignoreDoor) {
+        const seg = doorLeafSegment(door);
+        if (closestOnSeg(x, z, seg.hx, seg.hz, seg.tx, seg.tz).d < radius + 0.04 - COLLISION_EPS) return false;
+      }
+    }
+    const l = this.level;
+    if (l.vehicle && circleOverlapsBox(x, z, radius, l.vehicle.x, l.vehicle.z, l.vehicle.hx, l.vehicle.hz, l.vehicle.yaw)) return false;
+    for (const box of l.extBoxes) if (circleOverlapsBox(x, z, radius, box.x, box.z, box.hx, box.hz, box.yaw ?? 0)) return false;
+    for (const circle of l.extCircles) if (Math.hypot(x - circle.x, z - circle.z) < radius + circle.r - COLLISION_EPS) return false;
+    if (this.bomb && !this.bomb.defused && circleOverlapsBox(x, z, radius, this.bomb.x, this.bomb.z, 0.28, 0.19)) return false;
+    return true;
+  }
+  /** Place every initial actor with its complete body footprint clear of the building and props. */
+  private spawnActorAt(actor: Actor, x: number, z: number) {
+    const canStand = (px: number, pz: number) => this.isActorPositionClear(px, pz, actor.r)
+      && this.actors.every(other => !other.alive
+        || Math.hypot(px - other.x, pz - other.z) >= actor.r + other.r + SPAWN_BODY_GAP - 1e-8);
+    actor.x = x; actor.z = z;
+    this.resolve(actor);
+    if (canStand(actor.x, actor.z)) return;
+
+    // Prefer the closest free point to the intended formation position (boundary spawns often need
+    // only a few centimetres of correction). Use rings rather than testing only whole-cell centres.
+    for (let radius = 0.12; radius <= 2.4; radius += 0.12) {
+      const count = Math.max(16, Math.ceil((Math.PI * 2 * radius) / 0.12));
+      for (let i = 0; i < count; i++) {
+        const angle = (i + actor.id * 0.381966) * Math.PI * 2 / count;
+        const px = x + Math.cos(angle) * radius, pz = z + Math.sin(angle) * radius;
+        if (!canStand(px, pz)) continue;
+        actor.x = px; actor.z = pz; return;
+      }
+    }
+
+    // Last-resort fallback for a crowded/blocked entry: choose the nearest walkable cell centre
+    // that still respects the same wall, prop, door, vehicle, bomb and body-spacing checks.
+    const cells: Pt[] = [];
+    for (let cz = 0; cz < this.level.h; cz++) for (let cx = 0; cx < this.level.w; cx++) {
+      const c = this.cell(cx, cz);
+      if (c === FLOOR || c === OUT || c === DOOR) cells.push({ x: cx + 0.5, z: cz + 0.5 });
+    }
+    cells.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
+    for (const pt of cells) {
+      if (!canStand(pt.x, pt.z)) continue;
+      actor.x = pt.x; actor.z = pt.z; return;
+    }
+    // Every generated level has far more free floor than actors. This guard keeps malformed custom
+    // levels from producing NaN positions; the normal paths above always find a valid spawn.
+    actor.x = x; actor.z = z; this.resolve(actor);
   }
   private hitDoorLeaf3D(x: number, y: number, z: number): Door | null {
     if (y >= 2.2) return null;
@@ -618,6 +703,17 @@ export class Sim {
     a.z = cz + (dz / d) * min;
   }
   private resolve(a: Actor, ignoreDoor?: Door) {
+    // A door leaf or exterior prop can push a body into a wall (or another prop). Re-run the
+    // inexpensive static sweep until the entire circle is clear, rather than stopping after one
+    // collider has moved it into a second one.
+    for (let pass = 0; pass < 4; pass++) {
+      const bx = a.x, bz = a.z;
+      this.resolvePass(a, ignoreDoor);
+      if (this.isActorPositionClear(a.x, a.z, a.r, ignoreDoor)) return;
+      if (Math.hypot(a.x - bx, a.z - bz) < 1e-7) return;
+    }
+  }
+  private resolvePass(a: Actor, ignoreDoor?: Door) {
     const r = a.r, x0 = Math.floor(a.x - r), x1 = Math.floor(a.x + r), z0 = Math.floor(a.z - r), z1 = Math.floor(a.z + r);
     for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) {
       if (!this.solidBodyCell(cx, cz)) continue;

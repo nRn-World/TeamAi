@@ -1078,7 +1078,19 @@ class Game {
     if (m.t === 'ping') { sim.playerPing(pa, num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2])); return; }
     if (!pa.alive) return;
     switch (m.t) {
-      case 'in': { const x = num(m.x), z = num(m.z), d = Math.hypot(x - pa.x, z - pa.z); if (!pa.downed && d < 3 && !sim.solidCell(Math.floor(x), Math.floor(z))) { pa.x = x; pa.z = z; pa.walk += d * 2.4; sim.pushTrail(pa); } pa.yaw = num(m.yaw); pa.pitch = num(m.pitch); pa.crouch = !!m.cr; pa.prone = !!m.pr; pa.jumpY = Math.max(0, Math.min(0.8, num(m.jy))); pa.moving = !pa.downed && !!m.mv; pa.torch = m.tc !== undefined ? !!m.tc : pa.torch; pa.ads = !!m.ads; pa.weapon = num(m.wp); pa.shield = !!m.sh; pa.speaking = !!m.sp; break; }
+      case 'in': {
+        const x = num(m.x), z = num(m.z), d = Math.hypot(x - pa.x, z - pa.z);
+        if (!pa.downed && d < 3) {
+          const bx = pa.x, bz = pa.z;
+          // Remote positions are untrusted movement input, not a teleport: sweep through the same
+          // wall/prop/door/vehicle colliders as local movement instead of checking only the centre tile.
+          sim.moveCircle(pa, x - pa.x, z - pa.z);
+          const moved = Math.hypot(pa.x - bx, pa.z - bz);
+          pa.walk += moved * 2.4;
+          sim.pushTrail(pa);
+        }
+        pa.yaw = num(m.yaw); pa.pitch = num(m.pitch); pa.crouch = !!m.cr; pa.prone = !!m.pr; pa.jumpY = Math.max(0, Math.min(0.8, num(m.jy))); pa.moving = !pa.downed && !!m.mv; pa.torch = m.tc !== undefined ? !!m.tc : pa.torch; pa.ads = !!m.ads; pa.weapon = num(m.wp); pa.shield = !!m.sh; pa.speaking = !!m.sp; break;
+      }
       case 'fire': if (!pa.downed) sim.fire(pa, num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), Math.min(34, num(m.dmg)), { nonLethal: !!m.nl, taser: !!m.ts, pen: m.pen ? 1 : 0 }); break;
       case 'use': sim.playerUse(pa); break;
       case 'crack': sim.playerUse(pa, { crack: true }); break;
