@@ -418,6 +418,9 @@ class Game {
   openBrief(index: number) {
     this.mission = index;
     const m = MISSIONS[index];
+    // Per-mission fullscreen key art for the KEY ART briefing look.
+    const briefEl = $('brief');
+    if (briefEl) briefEl.style.setProperty('--keyart', `url("./keyart/${index}.jpg")`);
     this.briefLevel = buildLevel(index, 1);
     this.preplan = { entry: 0, teamA: [], teamB: [], pins: [] };
     this.planTool = 'B';

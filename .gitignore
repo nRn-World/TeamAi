@@ -20,3 +20,6 @@ dist
 
 # generated screenshots
 .lens-preview/
+
+# visual review contact sheets (not for repo)
+review/
