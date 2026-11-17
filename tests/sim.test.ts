@@ -139,7 +139,14 @@ function play(mission: number, seed: number, verbose = false) {
     sim.update(dt);
     for (const e of sim.events) { if (e.t === 'say') says.push(e.text); }
     sim.events.length = 0;
-    for (const a of sim.actors) { ok(Number.isFinite(a.x) && Number.isFinite(a.z), 'NaN position'); if (a.alive && !a.down && sim.solidCell(Math.floor(a.x), Math.floor(a.z)) && sim.cell(Math.floor(a.x), Math.floor(a.z)) !== 3) { fails++; if (fails < 20) console.log('  FAIL actor inside solid', a.name, a.x.toFixed(2), a.z.toFixed(2), sim.cell(Math.floor(a.x), Math.floor(a.z))); } maxStuck = Math.max(maxStuck, a.stuckT); }
+    for (const a of sim.actors) {
+      ok(Number.isFinite(a.x) && Number.isFinite(a.z), 'NaN position');
+      if (Math.floor(t * 4) !== Math.floor((t - dt) * 4) && a.alive) {
+        ok(sim.isActorPositionClear(a.x, a.z, a.r), `actor ${a.kind}#${a.id} intersects a wall, door, prop or exterior collider`);
+      }
+      if (a.alive && !a.down && sim.solidCell(Math.floor(a.x), Math.floor(a.z)) && sim.cell(Math.floor(a.x), Math.floor(a.z)) !== 3) { fails++; if (fails < 20) console.log('  FAIL actor inside solid', a.name, a.x.toFixed(2), a.z.toFixed(2), sim.cell(Math.floor(a.x), Math.floor(a.z))); }
+      maxStuck = Math.max(maxStuck, a.stuckT);
+    }
   }
   const r = sim.remaining(), sc = sim.score();
   console.log(`mission ${mission} "${MISSIONS[mission].name}" seed ${seed}: ${sim.over ? (sim.over.win ? 'WIN' : 'LOSE') : 'timeout'} t=${t.toFixed(0)}s remaining=${JSON.stringify(r)} score=${sc.total} stats=${JSON.stringify(sim.stats)} playerHp=${p.hp.toFixed(0)} officers=${sim.officers.map(o => o.hp.toFixed(0)).join('/')}`);
@@ -154,7 +161,7 @@ function play(mission: number, seed: number, verbose = false) {
   host.command({ team: 'A', action: 'follow' }, null, host.players[1]); host.command({ team: 'B', action: 'breach' }, null, host.players[0]);
   let evs = 0;
   for (let i = 0; i < 400; i++) {
-    const rp = host.players[1]; rp.z -= 0.02; host.pushTrail(rp); // remote player walks north
+    const rp = host.players[1]; host.moveCircle(rp, 0, -0.02); host.pushTrail(rp); // remote player walks north through collision-safe movement
     host.update(1 / 30);
     const wire = JSON.parse(JSON.stringify({ s: encodeSnap(host), e: host.events.map(encodeEv) })); host.events.length = 0;
     applySnap(mir, wire.s, me); for (const e of wire.e) { const d = decodeEv(mir, e); evs++; if ('a' in d) ok(d.a === mir.actors[(d.a as any).id], 'event actor decode'); }
@@ -183,6 +190,38 @@ function play(mission: number, seed: number, verbose = false) {
   }
   ok(stuck === 0, `player blocked by a kneeling person in ${stuck}/${cases} doorway cases`);
   console.log('doorway test done');
+}
+{ // every generated entry/spawn must have full-body clearance from walls, doors, props and vehicles
+  for (let m = 0; m < MISSIONS.length; m++) for (const seed of [1, 2, 14, 22, 77]) for (const entry of [0, 1]) {
+    const sim = new Sim(m, seed, 1, 3, {}, { entry });
+    for (const a of sim.actors) {
+      ok(sim.isActorPositionClear(a.x, a.z, a.r), `spawn ${m}/${seed}/entry${entry}: ${a.kind}#${a.id} overlaps map geometry`);
+      for (const b of sim.actors) {
+        if (b.id <= a.id || !a.alive || !b.alive) continue;
+        ok(Math.hypot(a.x - b.x, a.z - b.z) >= a.r + b.r + 0.04 - 1e-8,
+          `spawn ${m}/${seed}/entry${entry}: ${a.kind}#${a.id} overlaps ${b.kind}#${b.id}`);
+      }
+    }
+  }
+  console.log('spawn clearance test done');
+}
+{ // walls and furniture stop the whole body, not just the actor's centre tile
+  const edge = new Sim(2, 1), p = edge.player;
+  p.x = 22.5; p.z = 29.0;
+  for (let i = 0; i < 40; i++) {
+    edge.moveCircle(p, 0, 0.1);
+    ok(edge.isActorPositionClear(p.x, p.z, p.r), 'player body stays outside the hotel perimeter wall');
+  }
+  ok(p.z <= 31 - p.r + 1e-6, 'player stops at the hotel wall with body clearance');
+
+  const props = new Sim(0, 1), actor = props.player, prop = props.level.props[0];
+  const pw = prop.w ?? 1, pd = prop.d ?? 1;
+  actor.x = prop.cx + pw + 0.5; actor.z = prop.cz + pd / 2;
+  ok(props.isActorPositionClear(actor.x, actor.z, actor.r), 'test actor starts clear of a placed prop');
+  for (let i = 0; i < 24; i++) {
+    props.moveCircle(actor, -0.1, 0);
+    ok(props.isActorPositionClear(actor.x, actor.z, actor.r), 'player body stays outside furniture collision cells');
+  }
 }
 let wins = 0, n = 0;
 for (let m = 0; m < MISSIONS.length; m++) for (let s = 1; s <= 2; s++) { const sim = play(m, s, m === 0 && s === 1); n++; if (sim.over?.win) wins++; }

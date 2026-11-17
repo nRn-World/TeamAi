@@ -563,6 +563,9 @@ export function buildLevel(index: number, seed: number): Level {
       const x = r.x + 1 + Math.floor(rng() * (r.w - 2)), z = r.z + 1 + Math.floor(rng() * (r.h - 2));
       const k = z * b.w + x;
       if (b.get(x, z) !== FLOOR || used.has(k) || b.nearDoor(x, z, 1)) continue;
+      // Keep spawned people out of the bomb's collision footprint; the runtime physics layer also
+      // enforces this for manual/extra spawns, but generated positions should start cleanly too.
+      if (b.bomb && Math.hypot(x + 0.5 - b.bomb.x, z + 0.5 - b.bomb.z) < 0.82) continue;
       if (Math.hypot(x + 0.5 - spawn.x, z + 0.5 - spawn.z) < 7) { ri++; continue; }
       used.add(k); out.push({ x: x + 0.5, z: z + 0.5, room: r.id }); ri++;
     }

@@ -7,11 +7,12 @@ export function cellWalkable(l: Level, cx: number, cz: number) {
 }
 const isDoor = (l: Level, cx: number, cz: number) => l.cells[cz * l.w + cx] === DOOR;
 
-/** Straight line walkable for a body of radius ~0.3. Door cells only allowed at the endpoints. */
+/** Straight-line path check with a 0.40m side-clearance probe for the actor's body. Door cells are only allowed at the endpoints. */
 export function walkLine(l: Level, a: Pt, b: Pt) {
   const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
   if (d < 1e-4) return true;
-  const n = Math.ceil(d / 0.2), px = (-dz / d) * 0.33, pz = (dx / d) * 0.33;
+  const clearance = 0.4;
+  const n = Math.ceil(d / 0.15), px = (-dz / d) * clearance, pz = (dx / d) * clearance;
   const ac = Math.floor(a.z) * l.w + Math.floor(a.x), bc = Math.floor(b.z) * l.w + Math.floor(b.x);
   for (let i = 0; i <= n; i++) {
     const x = a.x + (dx * i) / n, z = a.z + (dz * i) / n;

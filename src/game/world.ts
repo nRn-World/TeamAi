@@ -1137,7 +1137,14 @@ export class ActorView {
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.labelTex(a.name.slice(0, 10), '#f2c14e'), transparent: true, depthWrite: false }));
       sp.scale.set(0.46, 0.22, 1); sp.position.y = 2.05; this.root.add(sp); this.label = sp;
     }
-    r.position.x = lerp(r.position.x, a.x, Math.min(1, dt * 25)); r.position.z = lerp(r.position.z, a.z, Math.min(1, dt * 25));
+    const dx = a.x - r.position.x, dz = a.z - r.position.z;
+    if (dx * dx + dz * dz > 0.25 * 0.25) {
+      // Do not smooth a collision correction or network reconciliation through a wall/prop.
+      r.position.x = a.x; r.position.z = a.z;
+    } else {
+      r.position.x = lerp(r.position.x, a.x, Math.min(1, dt * 25));
+      r.position.z = lerp(r.position.z, a.z, Math.min(1, dt * 25));
+    }
     let dy = a.yaw - r.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); r.rotation.y += dy * Math.min(1, dt * 14);
     if (!this.rig && modelsReady) {
       this.rig = new Rig(a.kind, a.id); for (const l of this.legs) l.hip.visible = false; this.torso.visible = false;
