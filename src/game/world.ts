@@ -28,10 +28,10 @@ function loadCityAsset(name: string): Promise<THREE.Group | null> {
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         for (const m of mats) {
           if (!m) continue;
-          if ('envMapIntensity' in m) m.envMapIntensity = /glass|window|cteclo/i.test(m.name || '') ? 1.35 : 0.85;
+          if ('envMapIntensity' in m) m.envMapIntensity = /glass|window|cteclo/i.test(m.name || '') ? 0.9 : 0.85;
           if (/lamp.*glass|glow/i.test(m.name || '')) {
             m.emissive = new THREE.Color(0xffe4b5);
-            m.emissiveIntensity = 3.2;
+            m.emissiveIntensity = 1.7;
           }
           // GLB textures default to anisotropy 1, which smears facades into soft blobs when you
           // stand next to a building and look up. Ask for the sharpest mip filtering we can get.
@@ -252,7 +252,7 @@ export class LevelView {
     const ceilMat = std({ map: T.floorTex('ceiling'), color: quality > 0 ? 0xa8afba : 0xffffff });
     const lampOn = this.lampOnMat = new THREE.MeshBasicMaterial({ color: l.theme === 'club' ? 0xc864ff : 0xfff4dc });
     // push the panels above 1.0 in linear space so the bloom pass only picks up the light fittings
-    lampOn.color.multiplyScalar(l.theme === 'club' ? 1.4 : 1.5);
+    lampOn.color.multiplyScalar(l.theme === 'club' ? 1.3 : 1.28);
     const lampOff = this.lampOffMat = std({ color: 0x3a3a38 });
     const poolCount = quality >= 3 ? 16 : quality === 2 ? 11 : quality === 1 ? 7 : 0;
     for (let i = 0; i < poolCount; i++) {
@@ -326,7 +326,7 @@ export class LevelView {
     }
     // breakable glass windows (floor-to-ceiling curtain-wall glass on office/hotel/club ground exterior)
     const glassMat = quality > 0
-      ? new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.2, roughness: 0.08, metalness: 0.15 })
+      ? new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.2, roughness: 0.24, metalness: 0.05, specularIntensity: 0.45 })
       : std({ color: 0xaad8ee, transparent: true, opacity: 0.34, roughness: 0.15 });
     const frameAlum = std({ color: 0x161a20, roughness: 0.35, metalness: 0.65 });
     const curtainWall = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'club';
@@ -350,7 +350,7 @@ export class LevelView {
     // doors (+ lock & wedge indicators; glass entrance doors on office/hotel/bank)
     const doorMat = std({ map: T.doorTex(), roughness: 0.6 }), frameMat = std({ color: 0x202328, roughness: 0.4, metalness: 0.4 });
     const glassDoorMat = quality > 0
-      ? new THREE.MeshPhysicalMaterial({ color: 0x99d0e8, transparent: true, opacity: 0.36, roughness: 0.08, metalness: 0.2 })
+      ? new THREE.MeshPhysicalMaterial({ color: 0x99d0e8, transparent: true, opacity: 0.36, roughness: 0.22, metalness: 0.08, specularIntensity: 0.45 })
       : std({ color: 0x99d0e8, transparent: true, opacity: 0.38, roughness: 0.15 });
     const wedgeMat = std({ color: 0xf2a82e, roughness: 0.4 }), lockMat = std({ color: 0xe04848, emissive: 0x801010, emissiveIntensity: 0.6 });
     for (const d of l.doors) {

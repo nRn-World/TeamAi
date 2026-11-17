@@ -113,7 +113,7 @@ class Game {
   lobbyMods: CoopMods & { daily?: boolean } = {};
   debReady = false;
   pings: { x: number; z: number; label: string; color: string; t: number }[] = [];
-  breachBannerT = 0;
+  breachBannerT = 0; mutinyT = 0;
   private lobbyVoiceTimer = 0;
   state: 'menu' | 'play' | 'pause' | 'end' = 'menu'; mission = 0; seed = 1;
   yaw = 0; pitch = 0; keys = new Set<string>(); mouseDown = false; eye = 1.62; bob = 0; stepAcc = 0; recoil = 0; vmKick = 0; sway = new THREE.Vector2();
@@ -882,7 +882,7 @@ class Game {
       void this.ai.ensureLoaded(S.aiModel);
     };
   }
-  toMenu() { this.stopReplay(); this.dispatchPlaying = false; this.audio.stopDispatch(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); this.updateRankDock(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
+  toMenu() { this.stopReplay(); this.dispatchPlaying = false; this.audio.stopDispatch(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn', 'mutinyWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); this.updateRankDock(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
   // ---------------- online co-op ----------------
   private currentMods(): CoopMods & { daily?: boolean } {
     const black = ($('modBlackout') as HTMLInputElement).checked;
@@ -1152,7 +1152,7 @@ class Game {
 
       this.mission = mission; this.seed = seed; this.audio.init(); void this.audio.setMenuMusic(false); this.audio.stopDispatch();
       document.body.classList.remove('menu-wait');
-      this.netTargets.clear(); this.pings = []; this.breachBannerT = 0;
+      this.netTargets.clear(); this.pings = []; this.breachBannerT = 0; this.mutinyT = 0;
       // career roster: injured officers sit out, rookies take their place (solo only)
       if (!this.net.online && !mods.roster) {
         mods.roster = deployRoster(career).map(o => ({ name: o.name, role: o.role, speed: o.speed, hp: o.hp }));
@@ -1166,7 +1166,7 @@ class Game {
       this.recentSay.clear(); this.recentBarkActor.clear(); this.recentBarkKind.clear(); this.recentBarkLine.clear(); this.lastTeamShoutT = 0;
       const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp || career.ironman); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
       show('coopHud', sim.players.length > 1);
-      show('breachBanner', false); show('ffWarn', false);
+      show('breachBanner', false); show('ffWarn', false); show('mutinyWarn', false);
       this.post?.dispose(); this.post = null; this.postScene = null;
       this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x070a10); this.scene.fog = new THREE.FogExp2(0x070a10, 0.0135);
       if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = S.qual >= 3 ? 0.3 : S.qual === 2 ? 0.22 : 0.14; }
@@ -1873,6 +1873,15 @@ class Game {
         }
         break;
       }
+      case 'mutiny': {
+        const mb = $('mutinyWarn');
+        mb.textContent = 'SQUAD HOSTILE — THEY ARE SHOOTING AT YOU';
+        show('mutinyWarn', true); this.mutinyT = 5.5;
+        this.audio.fail(); this.audio.hurt();
+        this.log(`${e.a.name} was hit once too often — the squad has turned on you!`, 'warn');
+        this.speak('Weapon down! You shot one of ours!', null, { voice: 'o1' });
+        break;
+      }
       case 'info': {
         const now = performance.now();
         if (e.text === this.lastInfo && now - this.lastInfoT < 1500) break;
@@ -2208,7 +2217,7 @@ class Game {
     }
     let html = '';
     for (const t of ['A', 'B'] as Team[]) {
-      const T = sim.teams[t]; html += `<div class="tcard ${t} ${this.selTeam === t || this.selTeam === 'ALL' ? 'sel' : ''}"><h4>TEAM ${t}<span>${orderText(T.order.type)}${T.fire === 'hold' ? ' · HOLD FIRE' : ''}</span></h4>`;
+      const T = sim.teams[t]; html += `<div class="tcard ${t} ${this.selTeam === t || this.selTeam === 'ALL' ? 'sel' : ''}"><h4>TEAM ${t}<span>${sim.squadHostile ? 'HOSTILE' : orderText(T.order.type)}${T.fire === 'hold' && !sim.squadHostile ? ' · HOLD FIRE' : ''}</span></h4>`;
       for (const o of sim.officers.filter(o => o.team === t)) html += `<div class="mem ${o.alive ? '' : 'dead'}"><span>${o.name}${o.solo && o.alive ? `<em>${orderText(o.solo.order.type)}</em>` : ''}</span><i><u style="width:${o.hp}%;background:${o.hp > 60 ? '#5fe08a' : o.hp > 30 ? '#f2c14e' : '#e04848'}"></u></i></div>`;
       html += '</div>';
     }
@@ -2353,6 +2362,7 @@ class Game {
     for (const pg of this.pings) pg.t -= dt;
     this.pings = this.pings.filter(pg => pg.t > 0);
     if (this.breachBannerT > 0) { this.breachBannerT -= dt; if (this.breachBannerT <= 0 && sim.breachSyncT <= 0) show('breachBanner', false); }
+    if (this.mutinyT > 0) { this.mutinyT -= dt; if (this.mutinyT <= 0) show('mutinyWarn', false); }
     // camera + recoil recovery + shockwave shake
     this.recoil = Math.max(0, this.recoil - dt * (this.fireMode === 'semi' ? 0.3 : 0.24));
     this.recoilPitch *= Math.max(0, 1 - dt * 11);
@@ -2393,7 +2403,7 @@ class Game {
       const ad = this.aimDir();
       const rh = sim.ray(p.x + lo.lx, this.eye, p.z + lo.lz, ad.x, ad.y, ad.z, 26, p, false);
       nearWall = !this.ads && rh.kind === 'wall' && rh.d < 0.85;
-      const friendly = !!(rh.actor && (rh.actor.kind === 'player' || rh.actor.kind === 'officer' || (rh.actor.kind === 'civ' && !rh.actor.hostile)));
+      const friendly = !!(rh.actor && (rh.actor.kind === 'player' || (rh.actor.kind === 'officer' && !this.sim?.squadHostile) || (rh.actor.kind === 'civ' && !rh.actor.hostile)));
       cross.classList.toggle('friend', friendly);
       if (friendly) {
         $('ffWarn').textContent = rh.actor!.kind === 'civ' ? 'CIVILIAN — HOLD FIRE' : `FRIENDLY (${rh.actor!.name.toUpperCase()}) — HOLD FIRE`;
@@ -2545,9 +2555,11 @@ class Game {
     if (!this.post || this.postScene !== this.scene) {
       this.post?.dispose();
       this.post = new PostFX(this.renderer, this.scene, this.camera, this.viewScene, this.viewCam, {
-        bloom: S.qual >= 3 ? 0.3 : 0.22,
-        radius: S.qual >= 3 ? 0.64 : 0.54,
-        threshold: 1.6,
+        // A threshold of 1.6 let lit walls and glass speculars bloom, which whited out the view
+        // whenever a lamp was close to a surface. Only the fittings and the neon now pass.
+        bloom: S.qual >= 3 ? 0.24 : 0.17,
+        radius: S.qual >= 3 ? 0.52 : 0.45,
+        threshold: 2.7,
       });
       this.postScene = this.scene;
       this.post.setQuality(S.qual);

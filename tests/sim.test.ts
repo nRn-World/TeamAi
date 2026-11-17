@@ -657,6 +657,36 @@ function roomSquad(seed: number) {
   ok(moved >= list.length - 1, `the squad moves again once the player walks (${moved}/${list.length} followed)`);
 }
 
+// ---- friendly fire: one hit is a warning, the second turns the squad on the player ----
+{
+  const sim = new Sim(0, 4242, 1, 1, {}, {});
+  const p = sim.player, o = sim.officers[0];
+  const step = (n = 12) => { for (let i = 0; i < n; i++) sim.update(1 / 60); };
+  sim.damage(o, 6, p, false);
+  ok(!sim.squadHostile && sim.ffHits === 1, 'the first hit on a teammate only draws a warning');
+  ok(sim.events.some(e => e.t === 'info' && /friendly fire/i.test(e.text)), 'the warning is announced');
+  step();
+  sim.damage(sim.officers[1], 6, p, false);
+  ok(!sim.squadHostile, 'a stray round into a second officer inside the window is still forgiven');
+  step();
+  sim.damage(o, 6, p, false);
+  ok(sim.squadHostile, 'the second hit on the same officer turns the squad hostile');
+  ok(sim.events.some(e => e.t === 'mutiny'), 'the mutiny is broadcast as an event');
+
+  // the squad now hunts and shoots the player instead of the suspects
+  p.x = o.x + 1.1; p.z = o.z; p.hp = 100;
+  const before = p.hp;
+  for (let i = 0; i < 60 * 4; i++) sim.update(1 / 60);
+  ok(sim.officers.some(x => x.target === p), 'hostile officers acquire the player as their target');
+  ok(p.hp < before, `hostile officers shoot the player (hp ${before} -> ${Math.round(p.hp)})`);
+
+  // and the friendly-fire guard no longer swallows those hits
+  const s2 = new Sim(0, 4242, 1, 1, {}, {});
+  const p2 = s2.player, o2 = s2.officers[0];
+  s2.damage(p2, 20, o2, false);
+  ok(p2.hp === 100, 'a loyal squadmate cannot hurt the player (friendly fire is off by default)');
+}
+
 // ---- career: ranks, campaign order, ironman, injuries ----
 {
   ok(RANKS.every((r, i) => i === 0 || r.xp > RANKS[i - 1].xp), 'ranks are ordered by XP');

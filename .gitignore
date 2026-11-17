@@ -20,3 +20,6 @@ dist
 
 # generated screenshots
 .lens-preview/
+
+# generated screenshots
+.fix2-preview/

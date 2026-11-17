@@ -137,9 +137,9 @@ export class PostFX {
 
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(Math.max(1, size.x), Math.max(1, size.y)),
-      opts.bloom ?? 0.22,
-      opts.radius ?? 0.56,
-      opts.threshold ?? 1.6,
+      opts.bloom ?? 0.17,
+      opts.radius ?? 0.45,
+      opts.threshold ?? 2.7,
     );
     this.composer.addPass(this.bloomPass);
 
@@ -160,8 +160,8 @@ export class PostFX {
     this.bloomPass.enabled = this.quality >= 1;
     this.grade.enabled = this.quality >= 1;
     this.fxaa.enabled = this.quality >= 2;
-    this.bloomPass.strength = this.quality >= 3 ? 0.3 : 0.22;
-    this.bloomPass.radius = this.quality >= 3 ? 0.64 : 0.54;
+    this.bloomPass.strength = this.quality >= 3 ? 0.24 : 0.17;
+    this.bloomPass.radius = this.quality >= 3 ? 0.52 : 0.45;
   }
 
   get enabled() { return this.quality >= 1; }
