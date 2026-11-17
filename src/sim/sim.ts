@@ -74,7 +74,7 @@ export type Ev =
   | { t: 'breachSync'; step: number }
   | { t: 'share'; from: Actor; to: Actor; kind: 'bang' | 'ammo' }
   | { t: 'bark'; a: Actor; kind: 'spot' | 'surrender' | 'pain' | 'die' | 'panic' | 'unrest' }
-  | { t: 'info'; text: string } | { t: 'end'; win: boolean };
+  | { t: 'info'; text: string } | { t: 'mutiny'; by: Actor; a: Actor } | { t: 'end'; win: boolean };
 
 export interface EvidenceItem { id: number; x: number; z: number; yaw: number; secured: boolean; ownerId: number; kind?: 'rifle' | 'shotgun' | 'pistol'; }
 export interface SensorItem { x: number; z: number; t: number; maxT: number; pulseT: number; }
@@ -199,6 +199,12 @@ export class Sim {
   breachSyncT = 0;
   private breachSyncStep = -1;
   mods: CoopMods = {};
+  /** True once the entry team has turned on the player after repeated friendly fire. */
+  squadHostile = false;
+  /** Hits the player has landed on squadmates this mission (the first one only earns a warning). */
+  ffHits = 0;
+  /** Recent blue-on-blue hits, so two rounds into the same officer is what starts a mutiny. */
+  private ffLog: { id: number; t: number }[] = [];
   preplan: PrePlan = {};
 
   constructor(public mission: number, seed: number, public difficulty = 1, nPlayers = 1, mods: CoopMods = {}, preplan: PrePlan = {}) {
@@ -1189,10 +1195,12 @@ export class Sim {
     if (!a.alive) return;
     if (a.kind === 'player' && a.downed) return; // downed players are protected from stray shots while bleeding out
     // Friendly fire protection in co-op unless explicitly enabled
-    if (a.kind === 'player' && (by.kind === 'player' || by.kind === 'officer') && !this.mods.friendlyFire) return;
+    const retaliation = by.kind === 'officer' && this.squadHostile;
+    if (a.kind === 'player' && (by.kind === 'player' || by.kind === 'officer') && !this.mods.friendlyFire && !retaliation) return;
     if (a.kind === 'officer') dmg *= 0.42;
     if (a.kind === 'player') {
       dmg *= [0.25, 0.36, 0.55][this.difficulty] ?? 0.36;
+      if (retaliation) dmg *= 1.3; // a betrayed squad shoots to stop you
       if (a.shield && Math.abs(angDiff(a.yaw, yawTo(by.x - a.x, by.z - a.z))) < 1.15) {
         dmg *= 0.25;
       } else {
@@ -1218,6 +1226,7 @@ export class Sim {
       return;
     }
     a.hp -= dmg; this.events.push({ t: 'hurt', a, head });
+    if (a.kind === 'officer' && by.kind === 'player') this.registerFriendlyFire(a);
     if (a.kind !== 'player') this.events.push({ t: 'bark', a, kind: a.hp <= 0 ? 'die' : 'pain' });
     const police = by.kind === 'player' || by.kind === 'officer';
     if (a.hp <= 0) {
@@ -1729,7 +1738,40 @@ export class Sim {
     }
   }
 
+  /** Blue-on-blue bookkeeping: the first hit is a warning, more than that and the squad answers fire. */
+  private registerFriendlyFire(a: Actor) {
+    if (this.squadHostile) return;
+    // pellets and penetration hits from the same trigger pull count once, not once per pellet
+    if (this.ffLog.some(h => h.id === a.id && this.time - h.t < 0.14)) return;
+    this.ffHits++;
+    this.ffLog = this.ffLog.filter(h => this.time - h.t < 3.5);
+    this.ffLog.push({ id: a.id, t: this.time });
+    // One stray round in a firefight is forgiven; putting a second round into the same officer is not.
+    if (this.ffLog.filter(h => h.id === a.id).length < 2) {
+      this.say(a, 'Check your fire! That was one of ours!', true);
+      this.events.push({ t: 'info', text: `${a.name} hit by friendly fire — hit a teammate again and the squad turns on you.` });
+      return;
+    }
+    this.squadHostile = true;
+    this.events.push({ t: 'mutiny', by: this.player, a });
+    this.events.push({ t: 'info', text: 'SQUAD HOSTILE — the entry team is returning fire!' });
+    let shouted = 0;
+    for (const o of this.officers) {
+      if (!o.alive) continue;
+      o.target = null; o.percT = 0; o.aimT = 0; o.cuff = null; o.cuffT = 0; o.moving = false; o.path = null;
+      if (shouted++ < 1 && o !== a) this.say(o, 'Drop the weapon! You just shot one of ours!', true);
+    }
+  }
   private pickThreat(o: Actor): Actor | null {
+    if (this.squadHostile) { // the team stopped taking orders: the lead is the target now
+      let worst: Actor | null = null, wd = 1e9;
+      for (const p of this.players) {
+        if (!p.alive || p.downed) continue;
+        const d = dist(o, p);
+        if (d < wd && (d < 9 || this.sees(o, p, 40, 3.0))) { wd = d; worst = p; }
+      }
+      return worst;
+    }
     const range = o.role === 'Marksman' ? 48 : 40;
     let best: Actor | null = null, bd = 1e9;
     for (const s of this.suspects) {
@@ -1747,6 +1789,14 @@ export class Sim {
     const th = o.target;
     if (th && th.alive && !th.down) {
       const want = yawTo(th.x - o.x, th.z - o.z); o.yaw = turn(o.yaw, want, 10 * dt);
+      if (this.squadHostile && th.kind === 'player') {
+        // no more orders, no more warnings — they break ranks and shoot back
+        const d = dist(o, th);
+        if (d > 5.5) this.goTo(o, th.x, th.z, dt, 1.0); else o.moving = false;
+        if (Math.abs(angDiff(o.yaw, want)) < 0.16) o.aimT += dt; else o.aimT = 0;
+        if (o.aimT > 0.14) this.aiFire(o, th, 0.06, 16);
+        return;
+      }
       // During dynamic room breach (phase 2), keep clearing into the room corners instead of stopping in the fatal funnel
       if (ord.type === 'breach' && ord.phase === 2 && ord.pts) {
         const bp = ord.pts[this.idx(o)] ?? ord.pts[0];

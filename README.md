@@ -58,10 +58,21 @@ wall furniture in every mission/seed now has a wall behind it (it used to be abo
 Above graphics level Low every frame goes through a three.js `EffectComposer` chain in `src/game/postfx.ts`:
 
 - the world scene and then the weapon scene are rendered into one HDR (half-float) target, so the gun is never fogged by the level,
-- `UnrealBloomPass` picks up only the light fittings: the ceiling panels are pushed to ~1.5 in linear space so they glow without fogging the room,
+- `UnrealBloomPass` picks up only the light fittings: the ceiling panels are pushed to ~1.28 in linear space and the threshold sits at 2.7, so a lamp close to a wall or a glass pane can no longer bloom the whole screen white — only the fittings themselves and the neon signs glow,
 - `OutputPass` does the ACES tone map and the sRGB conversion (a render target bypasses the renderer's own tone mapping, so this pass is required),
 - a small grade pass adds cool shadows / warm highlights, a vignette, film grain and a touch of edge aberration, and flashes red at the edges when you are hit,
 - `FXAAPass` on High and Ultra.
+
+Glass panes (`MeshPhysicalMaterial`) use a broad, weak specular lobe (`roughness` ~0.22, `specularIntensity` 0.45, `envMapIntensity` 0.9) so a nearby lamp cannot fire a white hotspot across the entrance.
+
+## Friendly fire
+
+The squad takes friendly fire. One stray round draws a warning ("Check your fire!"), but a second
+round into the **same** officer within 3.5 s turns the whole entry team hostile: the team cards flip
+to HOSTILE, a red banner drops, and every officer closes in and returns fire until you are down
+(`Sim.squadHostile`, `Sim.ffHits`). Pellets and penetration hits from a single trigger pull count
+once, so a shotgun blast near a teammate is not an instant mutiny. In co-op the previous rule still
+holds: squadmates cannot hurt each other unless the friendly-fire modifier is on.
 
 The room lighting was rebalanced for it: ambient and hemisphere light were cut back, the wall and ceiling tints are darkened, and the dynamic light pool carries the scene, so corridors read as pools of light instead of a flat white wash. Low keeps the old forward render with brighter ambient light, and `?qual=0` behaves exactly as before.
 
