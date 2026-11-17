@@ -249,6 +249,8 @@ class Game {
     $('mObj').textContent = OBJS[m.objective];
     $('mBrief').textContent = m.brief;
     ($('mPhoto') as HTMLImageElement).src = `./missions/${i}.jpg`;
+    // Warm the KEY ART cache so the briefing never paints black on first open.
+    for (let k = 0; k < MISSIONS.length; k++) { const im = new Image(); im.src = `./keyart/${k}.jpg`; }
     this.drawPlan(i, $<HTMLCanvasElement>('mPlan'), 7);
     $('mFacts').textContent = `${m.suspects} SUSPECTS · ${m.civs} CIVILIANS`;
     const b = $('mBestBadge');
@@ -419,8 +421,11 @@ class Game {
     this.mission = index;
     const m = MISSIONS[index];
     // Per-mission fullscreen key art for the KEY ART briefing look.
-    const briefEl = $('brief');
-    if (briefEl) briefEl.style.setProperty('--keyart', `url("./keyart/${index}.jpg")`);
+    const art = document.getElementById('briefKeyart') as HTMLImageElement | null;
+    if (art) {
+      art.onerror = () => { art.style.opacity = '0'; };
+      art.src = `./keyart/${index}.jpg`;
+    }
     this.briefLevel = buildLevel(index, 1);
     this.preplan = { entry: 0, teamA: [], teamB: [], pins: [] };
     this.planTool = 'B';
