@@ -40,22 +40,6 @@ const dailyBest: Record<string, number> = JSON.parse(localStorage.getItem('teama
 const career = loadCareer();
 const getRank = (xp: number) => rankOf(xp).name;
 if (params.has('q')) S.qual = +params.get('q')!;
-/** The ten selectable looks for the mission briefing (#brief[data-brief] in style.css). */
-const BRIEF_STYLES: { id: string; label: string }[] = [
-  { id: 'cctv', label: 'CCTV Wall' },
-  { id: 'keyart', label: 'Key Art' },
-  { id: 'ops', label: 'Ops Board' },
-  { id: 'blueprint', label: 'Blueprint' },
-  { id: 'dossier', label: 'Dossier' },
-  { id: 'phosphor', label: 'Phosphor' },
-  { id: 'swiss', label: 'Swiss' },
-  { id: 'neon', label: 'Neon Noir' },
-  { id: 'amber', label: 'Amber TTY' },
-  { id: 'nato', label: 'Field Manual' },
-  { id: 'daylight', label: 'Daylight' },
-  { id: 'alert', label: 'Red Alert' },
-];
-
 const saveSettings = () => localStorage.setItem('teamai.settings', JSON.stringify(S));
 const dailyInfo = () => {
   const d = new Date();
@@ -129,7 +113,6 @@ class Game {
   preplan: PrePlan = { entry: 0, teamA: [], teamB: [], pins: [] };
   planTool: 'B' | 'A' | 'c2' | 'flash' = 'B';
   briefLevel: Level | null = null;
-  briefStyle = BRIEF_STYLES.some(b => b.id === localStorage.getItem('teamai.briefStyle')) ? localStorage.getItem('teamai.briefStyle')! : 'cctv';
   dispatchPlaying = false;
   dispatchOn = false; isDaily = false; stress = 0; clubBeatT = 0; hbT = 0; breathT = 0; acousticT = 0; sensorPingSfxT = 0; radioCardT = 0;
   shieldHits = 0; suppressFx = 0; highReadyK = 0; lastRT = 0; speedReload = false; reloadShell = false; reloadDur = 2;
@@ -467,13 +450,11 @@ class Game {
         .map((sp, i) => `<div>S-${String(i + 1).padStart(2, '0')} · ${roomName(sp.room)}</div>`).join('');
     }
 
-    // Briefing look picker — the looks below are remembered between sessions.
-    const stylesBox = $('briefStyles');
-    if (stylesBox) {
-      stylesBox.innerHTML = BRIEF_STYLES.map((st, i) => `<button type="button" class="bsty ${st.id === this.briefStyle ? 'on' : ''}" data-bsty="${st.id}" title="${st.label}">${i + 1} ${st.label}</button>`).join('');
-      stylesBox.querySelectorAll<HTMLElement>('.bsty').forEach(b => { b.onclick = () => { this.audio.ui(); this.applyBriefStyle(b.dataset.bsty!); }; });
-    }
-    this.applyBriefStyle(this.briefStyle, false);
+    // The briefing is always the KEY ART look.
+    const briefEl = document.getElementById('brief');
+    if (briefEl) briefEl.dataset.brief = 'keyart';
+    this.drawBriefPlan();
+    this.drawCamFeeds();
 
     // Entry points selector
     const entriesBox = $('briefEntries');
@@ -499,17 +480,6 @@ class Game {
     this.drawBriefPlan();
     show('menu', false);
     show('brief', true);
-  }
-  /** Switches the look of the briefing screen (see BRIEF_STYLES). */
-  applyBriefStyle(id: string, save = true) {
-    if (!BRIEF_STYLES.some(b => b.id === id)) id = 'ops';
-    this.briefStyle = id;
-    const el = document.getElementById('brief');
-    if (el) el.dataset.brief = id;
-    if (save) localStorage.setItem('teamai.briefStyle', id);
-    document.querySelectorAll<HTMLElement>('#briefStyles .bsty').forEach(b => b.classList.toggle('on', b.dataset.bsty === id));
-    this.drawBriefPlan();
-    this.drawCamFeeds();
   }
   /** Reads one of the --map-* colours the briefing look defines for the floorplan. */
   private briefVar(name: string, fallback: string) {
@@ -1249,13 +1219,6 @@ class Game {
     });
     document.addEventListener('contextmenu', e => { if (this.state === 'play') e.preventDefault(); });
     document.addEventListener('mouseup', e => { if (e.button === 0) { this.mouseDown = false; this.semiLock = false; } if (e.button === 2) this.ads = false; });
-    // Flight through the briefing looks with 1-0 while the briefing is open.
-    document.addEventListener('keydown', e => {
-      if (this.typing || $('brief').classList.contains('hidden')) return;
-      const m = /^Digit([0-9])$/.exec(e.code); if (!m) return;
-      const st = BRIEF_STYLES[+m[1] === 0 ? 9 : +m[1] - 1]; if (!st) return;
-      e.preventDefault(); this.applyBriefStyle(st.id); this.audio.ui();
-    });
     document.addEventListener('keydown', e => {
       if (this.typing) { if (e.code === 'Enter') { const inp = $<HTMLInputElement>('cmdinput'); const v = inp.value.trim(); inp.value = ''; this.setTyping(false); if (v) this.heard(v, false); e.preventDefault(); } else if (e.code === 'Escape') this.setTyping(false); return; }
       if (e.code === 'Escape') { if (this.dispatchOn) { this.toggleDispatch(false); this.lock(); return; } if (this.wheelOn) { this.toggleWheel(false); this.lock(); return; } if (!$('help').classList.contains('hidden') || !$('settings').classList.contains('hidden')) { show('help', false); show('settings', false); } else if (this.state === 'pause') this.resume(); else if (this.state === 'play' && AUTO) this.pause(); return; }

@@ -547,9 +547,8 @@ body.stream-mode #log { bottom:105px; }
 
 
 /* =====================================================================================
-   Mission briefing — one layout, ten selectable looks.
-   Everything below is scoped to #brief; the chosen look lives in data-brief on #brief
-   and is remembered in localStorage (see BRIEF_STYLES in main.ts).
+   Mission briefing — the KEY ART look only: cinematic poster, operator still,
+   huge type, gold rules. Everything below is scoped to #brief.
    ===================================================================================== */
 #brief {
   --bf-panel:rgba(12,16,21,.86); --bf-panel2:#111820; --bf-ink:#e8eef4; --bf-mut:#8fa2b4;
@@ -599,16 +598,12 @@ body.stream-mode #log { bottom:105px; }
 #brief .tips { margin-top:16px; padding:10px 14px; border-left:2px solid var(--bf-acc); background:var(--bf-panel2); color:var(--bf-mut); font:500 12px/1.62 var(--bf-body); }
 #brief .tips b { color:var(--bf-acc); font:600 10.5px/1 var(--bf-head); letter-spacing:.14em; text-transform:uppercase; margin-right:6px; }
 #brief .bfoot { display:flex; justify-content:space-between; align-items:flex-end; gap:18px; margin-top:16px; padding-top:14px; border-top:1px solid var(--bf-line); flex-wrap:wrap; }
-#brief .bstyles { display:flex; flex-direction:column; gap:6px; }
-#brief .bsty-lbl { font:600 9.5px/1 var(--bf-head); letter-spacing:.24em; text-transform:uppercase; color:var(--bf-mut); }
-#brief .bsty-list { display:flex; flex-wrap:wrap; gap:5px; max-width:600px; }
 #brief button { font-family:var(--bf-head); text-transform:uppercase; letter-spacing:.1em; border-radius:calc(var(--bf-r) / 2); background:transparent; border:1px solid var(--bf-line); color:var(--bf-ink); }
 #brief button:hover { background:var(--bf-acc-soft); border-color:var(--bf-acc); color:var(--bf-ink); }
 #brief button.primary { background:var(--bf-acc); border-color:var(--bf-acc); color:var(--bf-onacc); }
 #brief button.primary:hover { filter:brightness(1.08); }
-#brief .ptool, #brief .entry-btn, #brief .bsty { padding:6px 9px; font:600 10px/1.1 var(--bf-head); letter-spacing:.1em; text-transform:uppercase; color:var(--bf-mut); background:transparent; border:1px solid var(--bf-line); }
-#brief .ptool.on, #brief .entry-btn.on, #brief .bsty.on { color:var(--bf-ink); border-color:var(--bf-acc); background:var(--bf-acc-soft); }
-#brief .bsty.on { background:var(--bf-acc); color:var(--bf-onacc); }
+#brief .ptool, #brief .entry-btn { padding:6px 9px; font:600 10px/1.1 var(--bf-head); letter-spacing:.1em; text-transform:uppercase; color:var(--bf-mut); background:transparent; border:1px solid var(--bf-line); }
+#brief .ptool.on, #brief .entry-btn.on { color:var(--bf-ink); border-color:var(--bf-acc); background:var(--bf-acc-soft); }
 #brief .plan-tools { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }
 #brief .row { margin-top:0; }
 #brief .dispatch-play { background:var(--bf-acc-soft); border:1px solid var(--bf-acc); color:var(--bf-ink); padding:8px 13px; }
@@ -620,169 +615,9 @@ body.stream-mode #log { bottom:105px; }
   #brief h2 { font-size:calc(var(--bf-h2) * .7); }
 }
 
-/* 1 — Ops board: dark slate, amber rule, condensed capitals */
-#brief[data-brief="ops"] { --bf-tex:linear-gradient(180deg, rgba(255,255,255,.035), transparent 34%); }
-
-/* 2 — Blueprint: cyan draft on navy, millimetre grid, mono type */
-#brief[data-brief="blueprint"] {
-  --bf-panel:rgba(6,32,58,.88); --bf-panel2:#04182c; --bf-ink:#d6f2ff; --bf-mut:#7fb6d8;
-  --bf-acc:#3ddcff; --bf-acc2:#8fb7ff; --bf-acc-soft:rgba(61,220,255,.16); --bf-onacc:#04121d;
-  --bf-line:rgba(120,220,255,.30); --bf-head:var(--bf-mono); --bf-body:var(--bf-mono); --bf-h2:42px; --bf-ls:.02em;
-  --map-bg:#04182c; --map-grid:rgba(120,220,255,.18); --map-floor:#0a2a44; --map-wall:#9fe4ff; --map-ink:#6fa8c8;
-  --bf-tex:repeating-linear-gradient(0deg, rgba(120,220,255,.09) 0 1px, transparent 1px 26px),
-          repeating-linear-gradient(90deg, rgba(120,220,255,.09) 0 1px, transparent 1px 26px);
-}
-#brief[data-brief="blueprint"] .planframe { border-style:dashed; }
-
-/* 3 — Dossier: cream paper, ink, serif, double rule */
-#brief[data-brief="dossier"] {
-  --bf-panel:rgba(246,240,226,.90); --bf-panel2:#efe6d2; --bf-ink:#221f19; --bf-mut:#6b6152;
-  --bf-acc:#a93124; --bf-acc2:#7a5c1f; --bf-acc-soft:rgba(169,49,36,.12); --bf-onacc:#fff8ec;
-  --bf-line:rgba(34,31,25,.26); --bf-head:Georgia,"Times New Roman",serif; --bf-body:Georgia,"Times New Roman",serif;
-  --bf-h2:42px; --bf-tt:none; --bf-ls:0; --bf-shadow:0 26px 70px rgba(0,0,0,.55);
-  --map-bg:#efe6d2; --map-grid:rgba(34,31,25,.10); --map-floor:#e2d5bb; --map-wall:#3a332a; --map-door:#a93124;
-  --map-win:#4a7d95; --map-prop:#cdbb99; --map-ink:#5b5142;
-  --bf-tex:repeating-linear-gradient(0deg, rgba(34,31,25,.035) 0 2px, transparent 2px 4px);
-}
-#brief[data-brief="dossier"] .briefp { border:1px solid var(--bf-line); border-top:6px double var(--bf-acc); }
-#brief[data-brief="dossier"] .btag { font-family:var(--bf-head); letter-spacing:.2em; }
-
-/* 4 — Phosphor: green CRT, scanlines, glow */
-#brief[data-brief="phosphor"] {
-  --bf-panel:rgba(4,23,12,.86); --bf-panel2:#031208; --bf-ink:#b9ffcf; --bf-mut:#5da478;
-  --bf-acc:#38ff87; --bf-acc2:#7dffb3; --bf-acc-soft:rgba(56,255,135,.14); --bf-onacc:#02150a;
-  --bf-line:rgba(56,255,135,.28); --bf-head:var(--bf-mono); --bf-body:var(--bf-mono); --bf-ls:.06em;
-  --bf-shadow:0 0 70px rgba(56,255,135,.16), 0 30px 90px rgba(0,0,0,.85);
-  --map-bg:#03130a; --map-grid:rgba(56,255,135,.14); --map-floor:#0a2a17; --map-wall:#8dffb8; --map-ink:#4f9a6d;
-  --bf-tex:repeating-linear-gradient(0deg, rgba(0,0,0,.30) 0 1px, transparent 1px 3px);
-}
-#brief[data-brief="phosphor"] h2 { text-shadow:0 0 16px rgba(56,255,135,.55); }
-
-/* 5 — Swiss editorial: white, black, one red, giant type */
-#brief[data-brief="swiss"] {
-  --bf-panel:rgba(255,255,255,.90); --bf-panel2:#f2f2f0; --bf-ink:#0d0d0d; --bf-mut:#6b6b6b;
-  --bf-acc:#e5352b; --bf-acc2:#0d0d0d; --bf-acc-soft:rgba(229,53,43,.10); --bf-onacc:#ffffff;
-  --bf-line:rgba(13,13,13,.16); --bf-head:"Helvetica Neue",Helvetica,Arial,sans-serif;
-  --bf-body:"Helvetica Neue",Helvetica,Arial,sans-serif; --bf-h2:58px; --bf-ls:-.025em; --bf-tt:none;
-  --bf-shadow:0 24px 70px rgba(0,0,0,.45);
-  --map-bg:#f2f2f0; --map-grid:rgba(13,13,13,.08); --map-floor:#e4e4e2; --map-wall:#0d0d0d; --map-prop:#cfcfcd;
-  --map-ink:#7a7a7a; --map-door:#e5352b;
-}
-#brief[data-brief="swiss"] .briefp { border-top:10px solid #0d0d0d; }
-#brief[data-brief="swiss"] h2 { font-weight:800; }
-#brief[data-brief="swiss"] .facts b { font-size:42px; font-weight:800; }
-#brief[data-brief="swiss"] .bkicker { color:#0d0d0d; }
-
-/* 6 — Neon noir: glass, magenta/cyan bloom */
-#brief[data-brief="neon"] {
-  --bf-panel:rgba(18,10,34,.86); --bf-panel2:#0c0618; --bf-ink:#efe9ff; --bf-mut:#a893d6;
-  --bf-acc:#ff35b0; --bf-acc2:#35e6ff; --bf-acc-soft:rgba(255,53,176,.18); --bf-onacc:#14001c;
-  --bf-line:rgba(255,255,255,.16); --bf-r:16px;
-  --bf-shadow:0 0 0 1px rgba(255,255,255,.07), 0 30px 90px rgba(28,0,48,.85);
-  --map-bg:#0d0620; --map-grid:rgba(255,53,176,.14); --map-floor:#1a0d33; --map-wall:#c9a6ff; --map-ink:#8f79b8;
-  --bf-tex:radial-gradient(620px 320px at 88% -12%, rgba(255,53,176,.26), transparent 70%),
-          radial-gradient(520px 280px at 0% 112%, rgba(53,230,255,.20), transparent 70%);
-}
-#brief[data-brief="neon"] h2 { background:linear-gradient(92deg,#ffffff,#ff9ad9 70%); -webkit-background-clip:text; background-clip:text; color:transparent; }
-#brief[data-brief="neon"] .planframe { border-color:rgba(53,230,255,.35); box-shadow:0 0 26px rgba(53,230,255,.16) inset; }
-
-/* 7 — Amber TTY: old console, corner frame, mono */
-#brief[data-brief="amber"] {
-  --bf-panel:rgba(21,13,3,.85); --bf-panel2:#1c1204; --bf-ink:#ffc46b; --bf-mut:#a97c36;
-  --bf-acc:#ff9f1c; --bf-acc2:#ffd089; --bf-acc-soft:rgba(255,159,28,.14); --bf-onacc:#1a0f00;
-  --bf-line:rgba(255,159,28,.28); --bf-head:var(--bf-mono); --bf-body:var(--bf-mono); --bf-ls:.1em;
-  --map-bg:#150d03; --map-grid:rgba(255,159,28,.12); --map-floor:#241503; --map-wall:#ffb457; --map-ink:#a97c36;
-  --bf-tex:repeating-linear-gradient(0deg, rgba(0,0,0,.26) 0 1px, transparent 1px 3px);
-}
-#brief[data-brief="amber"] .briefp::after { content:""; position:absolute; inset:7px; border:1px solid var(--bf-line); pointer-events:none; }
-
-/* 8 — Field manual: olive, stencil tracking */
-#brief[data-brief="nato"] {
-  --bf-panel:rgba(34,43,28,.88); --bf-panel2:#1a2116; --bf-ink:#e8ead9; --bf-mut:#9aa583;
-  --bf-acc:#c9d68f; --bf-acc2:#8fa86a; --bf-acc-soft:rgba(201,214,143,.16); --bf-onacc:#151a10;
-  --bf-line:rgba(201,214,143,.26); --bf-ls:.14em; --bf-h2:44px;
-  --map-bg:#1a2116; --map-grid:rgba(201,214,143,.12); --map-floor:#2a3522; --map-wall:#dfe6c2; --map-ink:#8b9673;
-  --bf-tex:repeating-linear-gradient(115deg, rgba(201,214,143,.05) 0 14px, transparent 14px 28px);
-}
-#brief[data-brief="nato"] .planframe { border-style:dashed; }
-
-/* 9 — Daylight: clean light UI, one blue accent */
-#brief[data-brief="daylight"] {
-  --bf-panel:rgba(255,255,255,.90); --bf-panel2:#f5f7fa; --bf-ink:#16202b; --bf-mut:#6a7a8a;
-  --bf-acc:#2563eb; --bf-acc2:#0ea5e9; --bf-acc-soft:rgba(37,99,235,.10); --bf-onacc:#ffffff;
-  --bf-line:rgba(22,32,43,.12); --bf-r:14px; --bf-tt:none; --bf-h2:40px; --bf-ls:0;
-  --bf-head:"Segoe UI",system-ui,sans-serif; --bf-body:"Segoe UI",system-ui,sans-serif;
-  --bf-shadow:0 20px 60px rgba(16,40,70,.18);
-  --map-bg:#f5f7fa; --map-grid:rgba(22,32,43,.07); --map-floor:#e6ecf3; --map-wall:#33475b; --map-prop:#cbd6e0;
-  --map-ink:#7e8e9d; --map-door:#2563eb;
-}
-#brief[data-brief="daylight"] .briefp { border:1px solid var(--bf-line); border-top:3px solid var(--bf-acc); }
-#brief[data-brief="daylight"] .bhead { border-bottom-color:var(--bf-line); }
-
-/* 10 — Red alert: hostile, hazard stripes, urgent */
-#brief[data-brief="alert"] {
-  --bf-panel:rgba(28,10,11,.85); --bf-panel2:#25090b; --bf-ink:#ffe9e9; --bf-mut:#d19a9a;
-  --bf-acc:#ff3b30; --bf-acc2:#ffb020; --bf-acc-soft:rgba(255,59,48,.18); --bf-onacc:#ffffff;
-  --bf-line:rgba(255,59,48,.30); --bf-ls:.06em;
-  --map-bg:#1a0708; --map-grid:rgba(255,59,48,.14); --map-floor:#2a0d0f; --map-wall:#ffb3ae; --map-ink:#c98a8a;
-  --bf-tex:repeating-linear-gradient(45deg, rgba(255,59,48,.09) 0 12px, transparent 12px 24px);
-}
-#brief[data-brief="alert"] .briefp { border-top:6px solid var(--bf-acc); }
-#brief[data-brief="alert"] .bkicker { color:var(--bf-acc); }
 
 /* =====================================================================================
-   11 — CCTV wall: four live camera feeds over the floorplan, console side panel
-   ===================================================================================== */
-#brief .camwall, #brief .camlist { display:none; }
-#brief[data-brief="cctv"] {
-  --bf-panel:rgba(7,11,9,.86); --bf-panel2:#0a130d; --bf-ink:#d9f7e2; --bf-mut:#7fae90;
-  --bf-acc:#7ef2a8; --bf-acc2:#6fd98c; --bf-acc-soft:rgba(126,242,168,.14); --bf-onacc:#04170a;
-  --bf-line:rgba(126,242,168,.22); --bf-h2:30px; --bf-ls:.16em; --bf-r:0px;
-  --bf-head:"Barlow Condensed","Arial Narrow",sans-serif; --bf-body:"Barlow","Segoe UI",system-ui,sans-serif;
-  --bf-mono:ui-monospace,"SF Mono",Consolas,monospace;
-  --bf-shadow:0 30px 90px rgba(0,0,0,.8);
-  --map-bg:#05100a; --map-grid:rgba(126,242,168,.10); --map-floor:#0e2a1a; --map-wall:#9fe8b0;
-  --map-door:#ffd166; --map-win:#7fd4ff; --map-prop:#12341f; --map-entry:#7ef2a8; --map-ink:#5c8a6b;
-}
-#brief[data-brief="cctv"] .briefp { width:min(1240px,97vw); padding:16px 18px 14px; background:#070b09; border-top:3px solid var(--bf-acc); }
-#brief[data-brief="cctv"] .bhead { border-bottom:1px solid var(--bf-line); padding-bottom:10px; }
-#brief[data-brief="cctv"] .briefgrid { grid-template-columns:minmax(0,1fr) 300px; gap:14px; margin-top:12px; align-items:stretch; }
-#brief[data-brief="cctv"] .camwall { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-#brief[data-brief="cctv"] .plan-tools,
-#brief[data-brief="cctv"] .planframe,
-#brief[data-brief="cctv"] .planlbl { display:none; }
-#brief[data-brief="cctv"] .cam { position:relative; margin:0; overflow:hidden; border:1px solid rgba(126,242,168,.24); background:#05100a; }
-#brief[data-brief="cctv"] .cam canvas { display:block; width:100%; height:auto; image-rendering:pixelated; }
-#brief[data-brief="cctv"] .cam figcaption { position:absolute; top:0; left:0; right:0; display:flex; gap:7px; align-items:baseline; padding:5px 8px; background:linear-gradient(180deg,rgba(5,9,7,.94),rgba(5,9,7,0)); font:600 9px/1 var(--bf-mono); letter-spacing:.14em; text-transform:uppercase; color:#8fe0a5; }
-#brief[data-brief="cctv"] .cam .camroom { color:rgba(200,240,210,.55); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-#brief[data-brief="cctv"] .cam .camtime { position:absolute; top:5px; right:8px; font:600 9px/1 var(--bf-mono); letter-spacing:.1em; color:rgba(190,235,205,.65); }
-#brief[data-brief="cctv"] .cam .camrec { position:absolute; right:8px; bottom:5px; display:flex; align-items:center; gap:5px; font:600 8.5px/1 var(--bf-mono); letter-spacing:.14em; color:#ff8080; }
-#brief[data-brief="cctv"] .cam .camrec::before { content:""; width:6px; height:6px; border-radius:50%; background:#ff4d4d; box-shadow:0 0 6px #ff4d4d; }
-#brief[data-brief="cctv"] .cam::after { content:""; position:absolute; inset:0; pointer-events:none; background:repeating-linear-gradient(0deg,rgba(0,0,0,.26) 0 1px,transparent 1px 3px); }
-#brief[data-brief="cctv"] .bside { display:flex; flex-direction:column; gap:0; padding:13px 14px; border:1px solid var(--bf-line); background:rgba(6,10,8,.78); }
-#brief[data-brief="cctv"] .facts { order:1; margin:0 0 10px; padding:0 0 10px; border-top:0; border-bottom:1px solid var(--bf-line); gap:18px; }
-#brief[data-brief="cctv"] .facts b { font:700 30px/1 var(--bf-mono); color:#b9f5c9; }
-#brief[data-brief="cctv"] .facts .fact-obj { display:none; }
-#brief[data-brief="cctv"] .camlist { order:2; display:grid; gap:5px; margin:0 0 12px; font:500 11px/1.35 var(--bf-mono); color:rgba(200,240,210,.8); }
-#brief[data-brief="cctv"] .camlist div::before { content:"▸"; color:#6fd98c; margin-right:6px; }
-#brief[data-brief="cctv"] #briefText { order:3; font:500 11.5px/1.55 var(--bf-mono); color:rgba(200,240,210,.72); }
-#brief[data-brief="cctv"] .brief-entry-box { order:4; margin:12px 0 0; }
-#brief[data-brief="cctv"] .bintel { order:5; margin-top:12px; padding-top:10px; border-top:1px solid var(--bf-line); }
-#brief[data-brief="cctv"] .bintel div { font:500 10.5px/1.4 var(--bf-mono); }
-#brief[data-brief="cctv"] .bintel b { flex:0 0 74px; font:600 8.5px/1.6 var(--bf-mono); letter-spacing:.1em; color:#6fd98c; }
-#brief[data-brief="cctv"] .tips { margin-top:12px; background:rgba(6,10,8,.9); border:1px solid var(--bf-line); border-left:2px solid var(--bf-acc); color:rgba(200,240,210,.6); font:500 11px/1.55 var(--bf-mono); }
-#brief[data-brief="cctv"] .tips b { color:#6fd98c; font:600 9.5px/1 var(--bf-mono); letter-spacing:.16em; }
-#brief[data-brief="cctv"] .bfoot { margin-top:12px; padding-top:12px; }
-#brief[data-brief="cctv"] button { font-family:var(--bf-mono); letter-spacing:.1em; }
-#brief[data-brief="cctv"] button.primary { background:#7ef2a8; border-color:#7ef2a8; color:#04170a; }
-#brief[data-brief="cctv"] .bsty.on,
-#brief[data-brief="cctv"] .entry-btn.on,
-#brief[data-brief="cctv"] .ptool.on { background:rgba(126,242,168,.16); border-color:#7ef2a8; color:#d9f7e2; }
-#brief[data-brief="cctv"] .bsty-lbl, #brief[data-brief="cctv"] .clabel { color:#7fae90; }
-#brief[data-brief="cctv"] .bsty-lbl { font:600 9px/1 var(--bf-mono); }
-
-/* =====================================================================================
-   12 — Key art: cinematic poster, operator still, huge type, gold rules
+   Key art: cinematic poster, operator still, huge type, gold rules
    ===================================================================================== */
 #brief[data-brief="keyart"] {
   --bf-panel:#05080b; --bf-panel2:rgba(255,255,255,.05); --bf-ink:#ffffff; --bf-mut:rgba(255,255,255,.62);
@@ -798,7 +633,7 @@ body.stream-mode #log { bottom:105px; }
   background:transparent; /* the .screen radial backdrop shows through if the art fails */
 }
 /* Plain <img> key art: no CSS-var/url() subtleties, loads like any other image.
-   Every look shows the mission art: KEY ART full-bleed, other looks faintly through a translucent panel. */
+   The per-mission art fills the briefing panel behind all content. */
 .briefkeyart {
   display:block; position:absolute; inset:0; width:100%; height:100%;
   object-fit:cover; object-position:center 30%; z-index:-2; user-select:none; pointer-events:none;
@@ -832,20 +667,14 @@ body.stream-mode #log { bottom:105px; }
 #brief[data-brief="keyart"] #briefText { order:3; max-width:44%; margin:0; text-align:right; font:400 12.5px/1.6 var(--bf-body); color:rgba(255,255,255,.72); }
 #brief[data-brief="keyart"] .tips { display:none; }
 #brief[data-brief="keyart"] .bfoot { order:3; margin:0; padding:0 34px 18px; border:0; align-items:flex-end; gap:24px; }
-#brief[data-brief="keyart"] .bstyles { margin-bottom:2px; }
-#brief[data-brief="keyart"] .bsty-lbl { color:rgba(255,255,255,.34); }
-#brief[data-brief="keyart"] .bsty-list { max-width:520px; }
 #brief[data-brief="keyart"] button { border-color:rgba(255,255,255,.28); color:#fff; background:rgba(0,0,0,.32); }
 #brief[data-brief="keyart"] button.primary { background:#d9b26a; border-color:#d9b26a; color:#08090b; }
 #brief[data-brief="keyart"] .entry-btn.on { background:rgba(217,178,106,.18); border-color:#d9b26a; color:#fff; }
 #brief[data-brief="keyart"] .bkicker { color:#d9b26a; }
-#brief[data-brief="keyart"] .bsty { background:rgba(0,0,0,.4); }
-#brief[data-brief="keyart"] .bsty.on { background:rgba(217,178,106,.22); border-color:var(--bf-acc); }
 
 @media (max-width:900px) {
   #brief[data-brief="keyart"] .briefgrid { padding-top:80px; }
   #brief[data-brief="keyart"] #briefText { max-width:100%; text-align:left; }
-  #brief[data-brief="cctv"] .briefgrid { grid-template-columns:1fr; }
 }
 
 /* ---------- career: ranks, unlocks, roster, campaign ---------- */
