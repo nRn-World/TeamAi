@@ -21,5 +21,8 @@ dist
 # generated screenshots
 .lens-preview/
 
+# generated screenshots
+.fix2-preview/
+
 # visual review contact sheets (not for repo)
 review/
