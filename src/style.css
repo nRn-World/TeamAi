@@ -552,7 +552,7 @@ body.stream-mode #log { bottom:105px; }
    and is remembered in localStorage (see BRIEF_STYLES in main.ts).
    ===================================================================================== */
 #brief {
-  --bf-panel:#0c1015; --bf-panel2:#111820; --bf-ink:#e8eef4; --bf-mut:#8fa2b4;
+  --bf-panel:rgba(12,16,21,.86); --bf-panel2:#111820; --bf-ink:#e8eef4; --bf-mut:#8fa2b4;
   --bf-acc:#f0b429; --bf-acc2:#4f96ff; --bf-acc-soft:rgba(240,180,41,.16); --bf-onacc:#0b0b0b;
   --bf-line:rgba(255,255,255,.13);
   --bf-head:"Barlow Condensed","Arial Narrow",sans-serif; --bf-body:"Barlow","Segoe UI",system-ui,sans-serif;
@@ -625,7 +625,7 @@ body.stream-mode #log { bottom:105px; }
 
 /* 2 — Blueprint: cyan draft on navy, millimetre grid, mono type */
 #brief[data-brief="blueprint"] {
-  --bf-panel:#06203a; --bf-panel2:#04182c; --bf-ink:#d6f2ff; --bf-mut:#7fb6d8;
+  --bf-panel:rgba(6,32,58,.88); --bf-panel2:#04182c; --bf-ink:#d6f2ff; --bf-mut:#7fb6d8;
   --bf-acc:#3ddcff; --bf-acc2:#8fb7ff; --bf-acc-soft:rgba(61,220,255,.16); --bf-onacc:#04121d;
   --bf-line:rgba(120,220,255,.30); --bf-head:var(--bf-mono); --bf-body:var(--bf-mono); --bf-h2:42px; --bf-ls:.02em;
   --map-bg:#04182c; --map-grid:rgba(120,220,255,.18); --map-floor:#0a2a44; --map-wall:#9fe4ff; --map-ink:#6fa8c8;
@@ -636,7 +636,7 @@ body.stream-mode #log { bottom:105px; }
 
 /* 3 — Dossier: cream paper, ink, serif, double rule */
 #brief[data-brief="dossier"] {
-  --bf-panel:#f6f0e2; --bf-panel2:#efe6d2; --bf-ink:#221f19; --bf-mut:#6b6152;
+  --bf-panel:rgba(246,240,226,.90); --bf-panel2:#efe6d2; --bf-ink:#221f19; --bf-mut:#6b6152;
   --bf-acc:#a93124; --bf-acc2:#7a5c1f; --bf-acc-soft:rgba(169,49,36,.12); --bf-onacc:#fff8ec;
   --bf-line:rgba(34,31,25,.26); --bf-head:Georgia,"Times New Roman",serif; --bf-body:Georgia,"Times New Roman",serif;
   --bf-h2:42px; --bf-tt:none; --bf-ls:0; --bf-shadow:0 26px 70px rgba(0,0,0,.55);
@@ -649,7 +649,7 @@ body.stream-mode #log { bottom:105px; }
 
 /* 4 — Phosphor: green CRT, scanlines, glow */
 #brief[data-brief="phosphor"] {
-  --bf-panel:#04170c; --bf-panel2:#031208; --bf-ink:#b9ffcf; --bf-mut:#5da478;
+  --bf-panel:rgba(4,23,12,.86); --bf-panel2:#031208; --bf-ink:#b9ffcf; --bf-mut:#5da478;
   --bf-acc:#38ff87; --bf-acc2:#7dffb3; --bf-acc-soft:rgba(56,255,135,.14); --bf-onacc:#02150a;
   --bf-line:rgba(56,255,135,.28); --bf-head:var(--bf-mono); --bf-body:var(--bf-mono); --bf-ls:.06em;
   --bf-shadow:0 0 70px rgba(56,255,135,.16), 0 30px 90px rgba(0,0,0,.85);
@@ -660,7 +660,7 @@ body.stream-mode #log { bottom:105px; }
 
 /* 5 — Swiss editorial: white, black, one red, giant type */
 #brief[data-brief="swiss"] {
-  --bf-panel:#ffffff; --bf-panel2:#f2f2f0; --bf-ink:#0d0d0d; --bf-mut:#6b6b6b;
+  --bf-panel:rgba(255,255,255,.90); --bf-panel2:#f2f2f0; --bf-ink:#0d0d0d; --bf-mut:#6b6b6b;
   --bf-acc:#e5352b; --bf-acc2:#0d0d0d; --bf-acc-soft:rgba(229,53,43,.10); --bf-onacc:#ffffff;
   --bf-line:rgba(13,13,13,.16); --bf-head:"Helvetica Neue",Helvetica,Arial,sans-serif;
   --bf-body:"Helvetica Neue",Helvetica,Arial,sans-serif; --bf-h2:58px; --bf-ls:-.025em; --bf-tt:none;
@@ -675,7 +675,7 @@ body.stream-mode #log { bottom:105px; }
 
 /* 6 — Neon noir: glass, magenta/cyan bloom */
 #brief[data-brief="neon"] {
-  --bf-panel:#120a22; --bf-panel2:#0c0618; --bf-ink:#efe9ff; --bf-mut:#a893d6;
+  --bf-panel:rgba(18,10,34,.86); --bf-panel2:#0c0618; --bf-ink:#efe9ff; --bf-mut:#a893d6;
   --bf-acc:#ff35b0; --bf-acc2:#35e6ff; --bf-acc-soft:rgba(255,53,176,.18); --bf-onacc:#14001c;
   --bf-line:rgba(255,255,255,.16); --bf-r:16px;
   --bf-shadow:0 0 0 1px rgba(255,255,255,.07), 0 30px 90px rgba(28,0,48,.85);
@@ -688,7 +688,7 @@ body.stream-mode #log { bottom:105px; }
 
 /* 7 — Amber TTY: old console, corner frame, mono */
 #brief[data-brief="amber"] {
-  --bf-panel:#150d03; --bf-panel2:#1c1204; --bf-ink:#ffc46b; --bf-mut:#a97c36;
+  --bf-panel:rgba(21,13,3,.85); --bf-panel2:#1c1204; --bf-ink:#ffc46b; --bf-mut:#a97c36;
   --bf-acc:#ff9f1c; --bf-acc2:#ffd089; --bf-acc-soft:rgba(255,159,28,.14); --bf-onacc:#1a0f00;
   --bf-line:rgba(255,159,28,.28); --bf-head:var(--bf-mono); --bf-body:var(--bf-mono); --bf-ls:.1em;
   --map-bg:#150d03; --map-grid:rgba(255,159,28,.12); --map-floor:#241503; --map-wall:#ffb457; --map-ink:#a97c36;
@@ -698,7 +698,7 @@ body.stream-mode #log { bottom:105px; }
 
 /* 8 — Field manual: olive, stencil tracking */
 #brief[data-brief="nato"] {
-  --bf-panel:#222b1c; --bf-panel2:#1a2116; --bf-ink:#e8ead9; --bf-mut:#9aa583;
+  --bf-panel:rgba(34,43,28,.88); --bf-panel2:#1a2116; --bf-ink:#e8ead9; --bf-mut:#9aa583;
   --bf-acc:#c9d68f; --bf-acc2:#8fa86a; --bf-acc-soft:rgba(201,214,143,.16); --bf-onacc:#151a10;
   --bf-line:rgba(201,214,143,.26); --bf-ls:.14em; --bf-h2:44px;
   --map-bg:#1a2116; --map-grid:rgba(201,214,143,.12); --map-floor:#2a3522; --map-wall:#dfe6c2; --map-ink:#8b9673;
@@ -708,7 +708,7 @@ body.stream-mode #log { bottom:105px; }
 
 /* 9 — Daylight: clean light UI, one blue accent */
 #brief[data-brief="daylight"] {
-  --bf-panel:#ffffff; --bf-panel2:#f5f7fa; --bf-ink:#16202b; --bf-mut:#6a7a8a;
+  --bf-panel:rgba(255,255,255,.90); --bf-panel2:#f5f7fa; --bf-ink:#16202b; --bf-mut:#6a7a8a;
   --bf-acc:#2563eb; --bf-acc2:#0ea5e9; --bf-acc-soft:rgba(37,99,235,.10); --bf-onacc:#ffffff;
   --bf-line:rgba(22,32,43,.12); --bf-r:14px; --bf-tt:none; --bf-h2:40px; --bf-ls:0;
   --bf-head:"Segoe UI",system-ui,sans-serif; --bf-body:"Segoe UI",system-ui,sans-serif;
@@ -721,7 +721,7 @@ body.stream-mode #log { bottom:105px; }
 
 /* 10 — Red alert: hostile, hazard stripes, urgent */
 #brief[data-brief="alert"] {
-  --bf-panel:#1c0a0b; --bf-panel2:#25090b; --bf-ink:#ffe9e9; --bf-mut:#d19a9a;
+  --bf-panel:rgba(28,10,11,.85); --bf-panel2:#25090b; --bf-ink:#ffe9e9; --bf-mut:#d19a9a;
   --bf-acc:#ff3b30; --bf-acc2:#ffb020; --bf-acc-soft:rgba(255,59,48,.18); --bf-onacc:#ffffff;
   --bf-line:rgba(255,59,48,.30); --bf-ls:.06em;
   --map-bg:#1a0708; --map-grid:rgba(255,59,48,.14); --map-floor:#2a0d0f; --map-wall:#ffb3ae; --map-ink:#c98a8a;
@@ -735,7 +735,7 @@ body.stream-mode #log { bottom:105px; }
    ===================================================================================== */
 #brief .camwall, #brief .camlist { display:none; }
 #brief[data-brief="cctv"] {
-  --bf-panel:#070b09; --bf-panel2:#0a130d; --bf-ink:#d9f7e2; --bf-mut:#7fae90;
+  --bf-panel:rgba(7,11,9,.86); --bf-panel2:#0a130d; --bf-ink:#d9f7e2; --bf-mut:#7fae90;
   --bf-acc:#7ef2a8; --bf-acc2:#6fd98c; --bf-acc-soft:rgba(126,242,168,.14); --bf-onacc:#04170a;
   --bf-line:rgba(126,242,168,.22); --bf-h2:30px; --bf-ls:.16em; --bf-r:0px;
   --bf-head:"Barlow Condensed","Arial Narrow",sans-serif; --bf-body:"Barlow","Segoe UI",system-ui,sans-serif;
@@ -798,10 +798,8 @@ body.stream-mode #log { bottom:105px; }
   background:transparent; /* the .screen radial backdrop shows through if the art fails */
 }
 /* Plain <img> key art: no CSS-var/url() subtleties, loads like any other image.
-   Layers sit behind ALL in-flow content (negative z inside #brief's stacking context),
-   so no child of .briefp needs z-index and absolute-positioned corners stay anchored. */
-.briefkeyart { display:none; }
-#brief[data-brief="keyart"] .briefkeyart {
+   Every look shows the mission art: KEY ART full-bleed, other looks faintly through a translucent panel. */
+.briefkeyart {
   display:block; position:absolute; inset:0; width:100%; height:100%;
   object-fit:cover; object-position:center 30%; z-index:-2; user-select:none; pointer-events:none;
 }
