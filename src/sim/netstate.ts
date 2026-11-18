@@ -8,7 +8,7 @@ export interface Snap {
   a: number[][]; d: number[]; dt?: number[]; o: [string, string, number][]; so?: string[];
   g: number[][]; cl?: [number, number, number, number, number][]; p: number[][];
   ev?: [number, number, number, number, number, number][];
-  sp?: [number, number, number][];
+  sp?: [number, number, number][]; ln?: number[];
   pw?: number; bm?: [number, number] | null; bw?: number[]; bp?: number[]; bd?: number[];
   bs?: number;
   over: number; time: number; st?: unknown;
@@ -37,6 +37,7 @@ export function encodeSnap(sim: Sim): Snap {
     p: sim.players.map(p => [p.bangs, r2(p.flash), p.cuff ? p.cuff.id : -1, r2(p.cuffT), p.c2, p.wedges, Math.round(p.bleedT), p.reviving ? p.reviving.id : -1, r2(p.reviveT), p.smokes, p.gases, p.sensors]),
     ev: sim.evidence.length ? sim.evidence.map(e => [e.id, r2(e.x), r2(e.z), r2(e.yaw), e.kind === 'shotgun' ? 2 : e.kind === 'rifle' ? 1 : 0, e.secured ? 1 : 0]) : undefined,
     sp: sim.sensorPings.length ? sim.sensorPings.map(pg => [r2(pg.x), r2(pg.z), pg.kind === 'suspect' ? 1 : 0]) : undefined,
+    ln: sim.actors.map(a => r2(a.lean)),
     pw: sim.powerOn ? 1 : 0,
     bm: sim.bomb ? [r2(sim.bomb.time), sim.bomb.defused ? 1 : 0] : null,
     bw: sim.brokenWindows.size ? [...sim.brokenWindows] : undefined,
@@ -65,6 +66,7 @@ export function applySnap(sim: Sim, s: Snap, me: Actor, targets?: Map<Actor, Net
         a.x = v[0]; a.z = v[1]; a.yaw = v[2];
       }
       a.crouch = !!(f & 64); a.prone = !!(f & 256); a.moving = !!(f & 16); a.walk = v[5];
+      a.lean = Math.max(-1, Math.min(1, s.ln?.[i] ?? 0));
       a.torch = !!(f & 2048); a.ads = !!(f & 4096); a.shield = !!(f & 8192); a.speaking = !!(f & 16384);
       if (v.length > 7) { a.pitch = v[7]; a.weapon = v[8]; }
     }

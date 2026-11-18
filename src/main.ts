@@ -26,6 +26,9 @@ import type { DataConnection } from 'peerjs';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (id: string, on: boolean) => $(id).classList.toggle('hidden', !on);
+const LEAN_CAMERA_ROLL = 0.34; // radians (~19.5°): a clear tactical shoulder lean, not a barely visible tilt
+const LEAN_CAMERA_DROP = 0.16; // lower the eye slightly while peeking around cover
+const LEAN_RESPONSE = 14;
 const params = new URLSearchParams(location.search);
 const AUTO = params.has('auto');
 
@@ -1089,7 +1092,10 @@ class Game {
           pa.walk += moved * 2.4;
           sim.pushTrail(pa);
         }
-        pa.yaw = num(m.yaw); pa.pitch = num(m.pitch); pa.crouch = !!m.cr; pa.prone = !!m.pr; pa.jumpY = Math.max(0, Math.min(0.8, num(m.jy))); pa.moving = !pa.downed && !!m.mv; pa.torch = m.tc !== undefined ? !!m.tc : pa.torch; pa.ads = !!m.ads; pa.weapon = num(m.wp); pa.shield = !!m.sh; pa.speaking = !!m.sp; break;
+        pa.yaw = num(m.yaw); pa.pitch = num(m.pitch);
+        pa.crouch = !!m.cr; pa.prone = !!m.pr;
+        pa.lean = sim.leanOffset(pa, num(m.ln)).actual;
+        pa.jumpY = Math.max(0, Math.min(0.8, num(m.jy))); pa.moving = !pa.downed && !!m.mv; pa.torch = m.tc !== undefined ? !!m.tc : pa.torch; pa.ads = !!m.ads; pa.weapon = num(m.wp); pa.shield = !!m.sh; pa.speaking = !!m.sp; break;
       }
       case 'fire': if (!pa.downed) sim.fire(pa, num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), Math.min(34, num(m.dmg)), { nonLethal: !!m.nl, taser: !!m.ts, pen: m.pen ? 1 : 0 }); break;
       case 'use': sim.playerUse(pa); break;
@@ -1501,7 +1507,11 @@ class Game {
     this.execBatch({ commands: [cmd] }, byKey);
   }
   aimDir() { const cp = Math.cos(this.pitch); return new THREE.Vector3(-Math.sin(this.yaw) * cp, Math.sin(this.pitch), -Math.cos(this.yaw) * cp); }
-  aimPoint() { const sim = this.sim!, p = sim.player, d = this.aimDir(); const h = sim.ray(p.x, this.eye, p.z, d.x, d.y, d.z, 40, p); return h.kind === 'none' ? null : { x: h.x - d.x * 0.4, z: h.z - d.z * 0.4 }; }
+  aimPoint() {
+    const sim = this.sim!, p = sim.player, d = this.aimDir(), lo = sim.leanOffset(p, this.lean);
+    const h = sim.ray(p.x + lo.lx, this.eye, p.z + lo.lz, d.x, d.y, d.z, 40, p);
+    return h.kind === 'none' ? null : { x: h.x - d.x * 0.4, z: h.z - d.z * 0.4 };
+  }
   private shoutT = 0;
   shout(tts: boolean) {
     const sim = this.sim!; if (!sim.player.alive) return; if (this.mirror) this.net.send({ t: 'shout' }); else sim.playerShout();
@@ -1547,7 +1557,8 @@ class Game {
       gk = alt;
       this.grenadeType = alt;
     }
-    const d = this.aimDir(), o = [p.x + d.x * 0.4, this.eye - 0.1, p.z + d.z * 0.4];
+    const d = this.aimDir(), lo = sim.leanOffset(p, this.lean);
+    const o = [p.x + lo.lx + d.x * 0.4, this.eye - 0.1, p.z + lo.lz + d.z * 0.4];
     if (this.mirror) this.net.send({ t: 'bang', o, d: [d.x, d.y, d.z], kind: gk });
     else {
       if (gk === 'smoke') p.smokes--;
@@ -1560,9 +1571,10 @@ class Game {
   }
   ping() {
     const sim = this.sim; if (!sim || !sim.player.alive || sim.over) return;
-    const p = sim.player, d = this.aimDir();
-    if (this.mirror) this.net.send({ t: 'ping', o: [p.x, this.eye, p.z], d: [d.x, d.y, d.z] });
-    else sim.playerPing(p, p.x, this.eye, p.z, d.x, d.y, d.z);
+    const p = sim.player, d = this.aimDir(), lo = sim.leanOffset(p, this.lean);
+    const ox = p.x + lo.lx, oz = p.z + lo.lz;
+    if (this.mirror) this.net.send({ t: 'ping', o: [ox, this.eye, oz], d: [d.x, d.y, d.z] });
+    else sim.playerPing(p, ox, this.eye, oz, d.x, d.y, d.z);
   }
   breachSync() {
     const sim = this.sim; if (!sim || !sim.player.alive || sim.player.downed || sim.over) return;
@@ -1598,13 +1610,15 @@ class Game {
     // Sync camera world matrix so ADS shots originate at the exact optical screen center (including lean)
     const bobScale = 1 - ak * 0.85;
     const lo = sim.leanOffset(p, this.lean);
-    const ox = p.x + lo.lx, oy = this.eye + Math.sin(this.bob * 2) * 0.022 * bobScale - Math.abs(lo.actual) * 0.06, oz = p.z + lo.lz;
+    // this.eye already includes the lean drop; keep the shot origin on the same optical ray as the camera.
+    const ox = p.x + lo.lx, oy = this.eye + Math.sin(this.bob * 2) * 0.022 * bobScale, oz = p.z + lo.lz;
     this.camera.position.set(ox, oy, oz);
     this.camera.rotation.set(
       Math.min(1.45, this.pitch + this.recoilPitch),
       this.yaw,
-      (!p.alive ? 0.5 : p.downed ? 0.22 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale) - lo.actual * 0.13) + this.recoilRoll,
+      (!p.alive ? 0.5 : p.downed ? 0.22 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale) - lo.actual * LEAN_CAMERA_ROLL) + this.recoilRoll,
     );
+    this.viewCam.rotation.set(0, 0, -lo.actual * LEAN_CAMERA_ROLL);
     this.camera.updateMatrixWorld();
     const baseDir = new THREE.Vector3();
     this.camera.getWorldDirection(baseDir);
@@ -2205,7 +2219,7 @@ class Game {
       html += '</div>';
     }
     $('team').innerHTML = html;
-    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · <kbd>Q/E</kbd> Lean · <kbd>.</kbd> Grenade · <kbd>,</kbd> Sensor · <kbd>Caps</kbd> Shout · <kbd>F2</kbd> Sök &amp; Säkra · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>P</kbd> Cam${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
+    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · Hold <kbd>Q/E</kbd> Lean/peek · <kbd>.</kbd> Grenade · <kbd>,</kbd> Sensor · <kbd>Caps</kbd> Shout · <kbd>F2</kbd> Sök &amp; Säkra · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>P</kbd> Cam${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
     const it = sim.interactTarget(), pr = $('prompt');
     if (p.downed && p.alive) {
       pr.style.opacity = '1'; pr.textContent = `DOWNED — BLEEDOUT IN ${Math.max(0, Math.ceil(p.bleedT))}s (WAIT FOR TEAMMATE)`;
@@ -2320,7 +2334,7 @@ class Game {
         const dy = Math.atan2(Math.sin(tg.yaw - a.yaw), Math.cos(tg.yaw - a.yaw));
         a.yaw += dy * lk;
       }
-      this.inT -= dt; if (this.inT <= 0) { this.inT = 0.05; this.net.send({ t: 'in', x: p.x, z: p.z, yaw: this.yaw, pitch: this.pitch, cr: p.crouch, pr: p.prone, jy: p.jumpY, mv: !p.downed && (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD')), tc: this.torchOn, ads: this.ads, wp: this.weapon, sh: p.shield, sp: p.speaking }); }
+      this.inT -= dt; if (this.inT <= 0) { this.inT = 0.05; this.net.send({ t: 'in', x: p.x, z: p.z, yaw: this.yaw, pitch: this.pitch, cr: p.crouch, pr: p.prone, ln: this.lean, jy: p.jumpY, mv: !p.downed && (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD')), tc: this.torchOn, ads: this.ads, wp: this.weapon, sh: p.shield, sp: p.speaking }); }
       sim.events.length = 0;
     } else {
       sim.update(dt);
@@ -2354,10 +2368,11 @@ class Game {
     this.dmgFx = Math.max(0, this.dmgFx - dt * 1.4); this.hitFx = Math.max(0, this.hitFx - dt * 5);
     // Lean Q / E smooth update + wall-safe camera offset
     this.leanTarget = p.alive && !p.downed && !p.prone && !this.typing ? (K.has('KeyQ') ? -1 : 0) + (K.has('KeyE') ? 1 : 0) : 0;
-    this.lean += (this.leanTarget - this.lean) * Math.min(1, dt * 11);
+    this.lean += (this.leanTarget - this.lean) * Math.min(1, dt * LEAN_RESPONSE);
     const lo = sim.leanOffset(p, this.lean);
+    p.lean = lo.actual;
 
-    const targetEye = (!p.alive ? 0.35 : p.downed ? 0.48 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive && !p.downed ? p.jumpY : 0) - Math.abs(lo.actual) * 0.06;
+    const targetEye = (!p.alive ? 0.35 : p.downed ? 0.48 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive && !p.downed ? p.jumpY : 0) - Math.abs(lo.actual) * LEAN_CAMERA_DROP;
     this.eye += (targetEye - this.eye) * Math.min(1, dt * (p.jumpY > 0 ? 30 : 9));
     { const st = $('stance'), run = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch, t = !p.alive ? '' : p.downed ? 'DOWNED · BLEEDING OUT' : p.prone ? 'CRAWLING · SILENT' : p.crouch ? 'CROUCHING · SILENT' : run ? 'RUNNING · HEARD FAR AWAY' : this.slow ? 'SNEAKING · SILENT' : Math.abs(lo.actual) > 0.25 ? (lo.actual < 0 ? 'LEAN LEFT' : 'LEAN RIGHT') : ''; if (st.textContent !== t) { st.textContent = t; st.className = run || p.downed ? 'loud' : ''; } }
     const bobScale = 1 - this.aimK * 0.85;
@@ -2367,8 +2382,11 @@ class Game {
     this.camera.rotation.set(
       Math.min(1.45, this.pitch + this.recoilPitch + shkY * 0.4),
       this.yaw + shkX * 0.3,
-      (!p.alive ? 0.5 : p.downed ? 0.22 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale) - lo.actual * 0.13) + this.recoilRoll,
+      (!p.alive ? 0.5 : p.downed ? 0.22 : (this.bodycamOn ? 0.035 + Math.sin(this.bob) * 0.015 : Math.sin(this.bob) * 0.004 * bobScale) - lo.actual * LEAN_CAMERA_ROLL) + this.recoilRoll,
     );
+    // The weapon/arms use a separate camera to avoid wall clipping; mirror the lean roll so the
+    // weapon still visibly rides with the player's shoulder instead of staying perfectly upright.
+    this.viewCam.rotation.set(0, 0, -lo.actual * LEAN_CAMERA_ROLL);
     const ws0 = this.weaponSpecs[this.weapon];
     const gun0 = this.activeGun(ws0);
     { const sprint = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch && (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD'));
@@ -2385,7 +2403,8 @@ class Game {
     if (p.alive && !p.downed && !sim.over) {
       const ad = this.aimDir();
       const rh = sim.ray(p.x + lo.lx, this.eye, p.z + lo.lz, ad.x, ad.y, ad.z, 26, p, false);
-      nearWall = !this.ads && rh.kind === 'wall' && rh.d < 0.85;
+      // A leaned ADS weapon also tucks back if the muzzle line is still blocked by nearby cover.
+      nearWall = rh.kind === 'wall' && rh.d < 0.85 && (!this.ads || Math.abs(lo.actual) > 0.15);
       const friendly = !!(rh.actor && (rh.actor.kind === 'player' || (rh.actor.kind === 'officer' && !this.sim?.squadHostile) || (rh.actor.kind === 'civ' && !rh.actor.hostile)));
       cross.classList.toggle('friend', friendly);
       if (friendly) {
@@ -2596,8 +2615,11 @@ class Game {
             this.pipCam.fov = 78;
             this.pipCam.aspect = w / h;
             this.pipCam.updateProjectionMatrix();
-            this.pipCam.position.set(o.x, !o.alive ? 0.35 : o.downed ? 0.52 : o.crouch ? 1.16 : 1.66, o.z);
-            this.pipCam.rotation.set(o.alive && !o.downed ? (o.kind === 'player' ? o.pitch : -0.04) : 0.45, o.yaw, o.alive && !o.downed ? 0.02 : 0.6);
+            const lo = this.sim!.leanOffset(o, o.lean);
+            const eye = (!o.alive ? 0.35 : o.downed ? 0.52 : o.crouch ? 1.16 : 1.66) - Math.abs(lo.actual) * LEAN_CAMERA_DROP;
+            this.pipCam.position.set(o.x + lo.lx, eye, o.z + lo.lz);
+            this.pipCam.rotation.set(o.alive && !o.downed ? (o.kind === 'player' ? o.pitch : -0.04) : 0.45, o.yaw,
+              (o.alive && !o.downed ? 0.02 : 0.6) - lo.actual * LEAN_CAMERA_ROLL);
             const ownView = this.views.get(o);
             if (ownView) ownView.root.visible = false;
             r.setScissorTest(true);
