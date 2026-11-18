@@ -2603,7 +2603,9 @@ class Game {
     (window as any).__taPerfReport = () => this.perfReport();
     if (this.perfOn) {
       this.perfLogT += dt;
-      if (this.perfLogT >= 1) {
+      // The first sample lands as soon as a real frame has been drawn, so an export taken right
+      // after F3 still carries data.
+      if (this.perfLogT >= 1 || this.perfLog.length === 0) {
         this.perfLogT = 0;
         // Skip the kill screen and other frames that drew nothing: a report full of zero draw calls
         // says nothing about a mission frame.

@@ -89,19 +89,29 @@ try {
   ok((perf?.fps ?? 0) > 0, 'the performance probe reports a live frame rate');
   ok(pageErrors.length === 0, `no uncaught page errors${pageErrors.length ? `: ${pageErrors.join(' | ')}` : ''}`);
 
-  // F4 must save the same numbers as a file, labelled with the GPU that produced them.
-  const [download] = await Promise.all([
-    page.waitForEvent('download', { timeout: 30000 }),
-    page.keyboard.press('F4'),
-  ]);
-  const file = await download.path();
-  const report = JSON.parse(readFileSync(file, 'utf8'));
-  console.log(`  report ${download.suggestedFilename()} (${report.quality}, ${report.gpu.renderer})`);
-  ok(report.schema === 'teamai.perf/1', 'F4 exports a versioned performance report');
-  ok(report.quality === 'HIGH' && report.high === true, 'the report records that High was measured');
-  ok(typeof report.gpu.renderer === 'string' && report.gpu.renderer.length > 0, 'the report names the GPU renderer');
-  ok(report.gpu.software === true, 'the software renderer is flagged instead of being reported as a GPU');
-  ok((report.series?.length ?? 0) > 0 && typeof report.now?.fps === 'number', 'the report carries live samples and the current frame');
+  // F4 must save the same numbers as a file, labelled with the GPU that produced them. The block is
+  // guarded so a failure here reports its own reason instead of the whole preview log.
+  try {
+    await page.waitForFunction(() => ((window.__ta as any)?.perfLog?.length ?? 0) > 0, null, { timeout: 90000 });
+    const live = await page.evaluate(() => (window as any).__taPerfReport());
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 30000 }),
+      page.keyboard.press('F4'),
+    ]);
+    const file = await download.path();
+    const saved = JSON.parse(readFileSync(file!, 'utf8'));
+    console.log(`  report ${download.suggestedFilename()} (${live.quality}, ${live.gpu.renderer}, software=${live.gpu.software})`);
+    ok(live.schema === 'teamai.perf/1', 'the live report is versioned');
+    ok(live.quality === 'HIGH' && live.high === true, 'the report records that High was measured');
+    ok(typeof live.gpu.renderer === 'string' && live.gpu.renderer.length > 0, 'the report names the GPU renderer');
+    ok(live.gpu.software === /swiftshader|llvmpipe|software|basic render/i.test(live.gpu.renderer), 'the renderer is labelled hardware or software from its own string');
+    ok((live.series?.length ?? 0) > 0 && typeof live.now?.fps === 'number', 'the report carries live samples and the current frame');
+    ok(/^teamai-perf-high-.+\.json$/.test(download.suggestedFilename()), 'F4 saves the file as teamai-perf-high-<time>.json');
+    ok(saved.schema === live.schema && saved.quality === live.quality && (saved.series?.length ?? 0) > 0, 'the saved file matches the live report');
+  } catch (e) {
+    failures++;
+    console.log('  FAIL performance report:', String(e).slice(0, 400));
+  }
 
   const shot = process.env.SMOKE_SHOT;
   if (shot) {
