@@ -1,7 +1,7 @@
 import { loadModels, modelsReady } from './game/models';
 import * as THREE from 'three';
 import { Sim, Actor, Command, Team, Ev, fwd, PrimaryLoadout, SecondaryLoadout, CoopMods, PrePlan } from './sim/sim';
-import { MISSIONS, WALL, DOOR, LOW, HIGH, WINDOW, buildLevel, Level, Door, Room, roomAt } from './sim/level';
+import { MISSIONS, WALL, DOOR, LOW, HIGH, WINDOW, buildLevel, groundHeightAt, Level, Door, Room, roomAt } from './sim/level';
 import { MenuScene } from './game/menuscene';
 import { operatorEnv } from './game/operator';
 import { loadWeapons, weaponsReady, FpsArms, studioEnv, setShieldCracks } from './game/weapons';
@@ -50,7 +50,7 @@ const dailyInfo = () => {
   const seed = Number(key);
   return { key, seed, mission: seed % MISSIONS.length };
 };
-const SECTOR_LOCS = ['KISTA SECTOR · SE', 'DOCKLANDS · HARBOR', 'CITY CENTER · SE', 'FINANCIAL DIST · SE', 'SUBWAY CLUB · SE', 'OUTSKIRTS COMPOUND'];
+const SECTOR_LOCS = ['KISTA SECTOR · SE', 'DOCKLANDS · HARBOR', 'CITY CENTER · SE', 'FINANCIAL DIST · SE', 'SUBWAY CLUB · SE', 'OUTSKIRTS COMPOUND', 'KISTA TECH PARK · SE'];
 
 // where the animated arms move to when aiming: x, y, z offset and pitch, yaw; carbine, pistol, shotgun, beanbag, taser
 const AIMPOS = [
@@ -223,7 +223,7 @@ class Game {
     if (!missionUnlocked(best, i)) i = nextUncleared(best, MISSIONS.length) ?? 0;
     this.mission = i;
     const m = MISSIONS[i];
-    const LOCS = ['KISTA, STOCKHOLM', 'DOCKLANDS, HARBOR', 'CITY CENTER', 'FINANCIAL DISTRICT', 'DOWNTOWN UNDERGROUND', 'OUTSKIRTS COMPOUND'];
+    const LOCS = ['KISTA, STOCKHOLM', 'DOCKLANDS, HARBOR', 'CITY CENTER', 'FINANCIAL DISTRICT', 'DOWNTOWN UNDERGROUND', 'OUTSKIRTS COMPOUND', 'KISTA SCIENCE TOWER · STOCKHOLM'];
     const OBJS = {
       clear: 'RESCUE ALL CIVILIANS · NEUTRALIZE THREATS',
       hostage: 'RESCUE BANK DIRECTOR (VIP) · ARREST CREW',
@@ -232,9 +232,20 @@ class Game {
     document.querySelectorAll('#mPills .mpill').forEach((el, idx) => el.classList.toggle('on', idx === i));
     $('mTitle').textContent = m.name;
     $('mLoc').textContent = LOCS[i] ?? 'SECTOR UNKNOWN';
-    $('mObj').textContent = OBJS[m.objective];
+    $('mObj').textContent = m.name === 'Kista Tech Center' ? 'RESCUE HIGH-VALUE HOSTAGE (VIP) · ARREST CREW' : OBJS[m.objective];
     $('mBrief').textContent = m.brief;
-    ($('mPhoto') as HTMLImageElement).src = `./missions/${i}.jpg`;
+    const missionPhoto = $('mPhoto') as HTMLImageElement, hasPhoto = i < 6;
+    this.showPlan = !hasPhoto;
+    show('mPhoto', hasPhoto); show('mPlan', !hasPhoto);
+    $('btnViewMode').classList.toggle('hidden', !hasPhoto);
+    $('btnViewMode').textContent = this.showPlan ? 'PHOTO' : 'FLOORPLAN';
+    missionPhoto.onerror = () => {
+      missionPhoto.style.opacity = '0';
+      if (this.mission === i) { this.showPlan = true; show('mPhoto', false); show('mPlan', true); $('btnViewMode').classList.add('hidden'); }
+    };
+    missionPhoto.style.opacity = '1';
+    if (hasPhoto) missionPhoto.src = `./missions/${i}.jpg`;
+    else missionPhoto.removeAttribute('src');
     // Warm the KEY ART cache so the briefing never paints black on first open.
     for (let k = 0; k < MISSIONS.length; k++) { const im = new Image(); im.src = `./keyart/${k}.jpg`; }
     this.drawPlan(i, $<HTMLCanvasElement>('mPlan'), 7);
@@ -399,7 +410,22 @@ class Game {
     const l = buildLevel(index, 1); c.width = l.w * k; c.height = l.h * k; const g = c.getContext('2d')!;
     g.fillStyle = '#0b1118'; g.fillRect(0, 0, c.width, c.height);
     g.strokeStyle = 'rgba(120,160,200,.07)'; g.lineWidth = 1; g.beginPath(); for (let x = 0; x <= l.w; x += 2) { g.moveTo(x * k + 0.5, 0); g.lineTo(x * k + 0.5, c.height); } for (let z = 0; z <= l.h; z += 2) { g.moveTo(0, z * k + 0.5); g.lineTo(c.width, z * k + 0.5); } g.stroke();
-    for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) { const v = l.cells[z * l.w + x]; if (v === 0) continue; g.fillStyle = v === WALL ? '#9db4c8' : v === DOOR ? '#f2c14e' : v === WINDOW ? '#68b6e0' : v === LOW || v === HIGH ? '#263645' : '#152130'; g.fillRect(x * k, z * k, k, k); }
+    for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) {
+      const idx = z * l.w + x, v = l.cells[idx]; if (v === 0) continue;
+      const upper = l.groundY[idx] > 0.7;
+      g.fillStyle = v === WALL ? (upper ? '#b4c7d7' : '#9db4c8') : v === DOOR ? '#f2c14e' : v === WINDOW ? '#68b6e0' : v === LOW || v === HIGH ? '#263645' : (upper ? '#20364a' : '#152130');
+      g.fillRect(x * k, z * k, k, k);
+    }
+    for (const stair of l.staircases) {
+      g.strokeStyle = '#8ee7ff'; g.lineWidth = Math.max(1, k * 0.22); g.beginPath(); g.moveTo(stair.x0 * k, stair.z0 * k); g.lineTo(stair.x1 * k, stair.z1 * k); g.stroke();
+    }
+    for (const lift of l.elevators) for (const stop of lift.stops) {
+      g.fillStyle = '#a78bfa'; g.beginPath(); g.arc(stop.x * k, stop.z * k, k * 0.48, 0, 6.3); g.fill();
+    }
+    if (l.staircases.length) for (const room of l.rooms.filter(r => r.kind !== 'corridor')) {
+      g.fillStyle = '#dbeafe'; g.font = 'bold 8px sans-serif'; g.textAlign = 'center';
+      g.fillText((room.floorY ?? 0) > 0.7 ? 'F2' : 'F1', (room.x + room.w / 2) * k, (room.z + room.h / 2) * k);
+    }
     const s = l.playerSpawn; g.fillStyle = '#4fd07a'; g.beginPath(); g.arc(s.x * k, s.z * k, k * 0.75, 0, 6.3); g.fill();
     if (l.bomb) { g.fillStyle = '#ff3b3b'; g.beginPath(); g.arc(l.bomb.x * k, l.bomb.z * k, k * 0.65, 0, 6.3); g.fill(); }
   }
@@ -423,7 +449,7 @@ class Game {
 
     $('briefTitle').textContent = m.name;
     $('briefText').textContent = m.brief;
-    const objMap = { clear: 'Locate & arrest or neutralize all suspects, secure all civilians.', hostage: 'Rescue the VIP bank director and secure all suspects.', bomb: 'Find and defuse the explosive device before detonation.' } as const;
+    const objMap = { clear: 'Locate & arrest or neutralize all suspects, secure all civilians.', hostage: m.name === 'Kista Tech Center' ? 'Reach the F2 hostage wing, rescue the VIP and secure all suspects.' : 'Rescue the VIP bank director and secure all suspects.', bomb: 'Find and defuse the explosive device before detonation.' } as const;
     if ($('briefTag')) $('briefTag').textContent = `Mission ${String(index + 1).padStart(2, '0')} / ${String(MISSIONS.length).padStart(2, '0')} · Goal ${m.objective}`;
     // The briefing facts live in #briefFacts; never let a missing element block the launch.
     const facts = $('briefFacts');
@@ -441,6 +467,8 @@ class Game {
         ['Glass', bl.windows.length ? `${bl.windows.length} windows — FiberCam can scout them` : 'no exterior glass'],
         ['Power', bl.breaker ? 'Breaker panel — cut it and the site goes dark' : 'mains live'],
       ];
+      if (bl.staircases.length) rows.push(['Stairs', `${bl.staircases.length} walkable flight${bl.staircases.length === 1 ? '' : 's'} between floors`]);
+      if (bl.elevators.length) rows.push(['Elevator', bl.elevators.map(e => `${e.name}: ${e.stops.map(s => s.label).join(' ↔ ')}`).join(' · ')]);
       if (bl.bomb) rows.push(['Device', `Explosive on site · ${Math.ceil(bl.bomb.time)} s on the clock`]);
       intel.innerHTML = rows.map(([k, v]) => `<div><b>${k}</b><span>${v}</span></div>`).join('');
     }
@@ -509,9 +537,25 @@ class Game {
     for (let z = 0; z <= l.h; z += 2) { g.moveTo(0, z * k + 0.5); g.lineTo(c.width, z * k + 0.5); }
     g.stroke();
     for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) {
-      const v = l.cells[z * l.w + x]; if (v === 0) continue;
-      g.fillStyle = v === WALL ? col.wall : v === DOOR ? col.door : v === WINDOW ? col.win : v === LOW || v === HIGH ? col.prop : col.floor;
+      const idx = z * l.w + x, v = l.cells[idx]; if (v === 0) continue;
+      const upper = l.groundY[idx] > 0.7;
+      g.fillStyle = v === WALL ? (upper ? '#bfd0df' : col.wall) : v === DOOR ? col.door : v === WINDOW ? col.win : v === LOW || v === HIGH ? col.prop : (upper ? '#244158' : col.floor);
       g.fillRect(x * k, z * k, k, k);
+    }
+    // Multi-storey routes and lift stops use their own blueprint marks so both ways up are obvious.
+    for (const stair of l.staircases) {
+      g.strokeStyle = '#8ee7ff'; g.lineWidth = 3; g.setLineDash([5, 3]);
+      g.beginPath(); g.moveTo(stair.x0 * k, stair.z0 * k); g.lineTo(stair.x1 * k, stair.z1 * k); g.stroke(); g.setLineDash([]);
+      g.fillStyle = '#8ee7ff'; g.font = 'bold 10px sans-serif'; g.textAlign = 'center';
+      g.fillText('STAIRS ↑↓', ((stair.x0 + stair.x1) / 2) * k, stair.z0 * k - 8);
+    }
+    for (const elevator of l.elevators) for (const stop of elevator.stops) {
+      g.fillStyle = '#a78bfa'; g.beginPath(); g.arc(stop.x * k, stop.z * k, 5, 0, 6.28); g.fill();
+      g.fillStyle = '#ddd6fe'; g.font = 'bold 9px sans-serif'; g.textAlign = 'center'; g.fillText('LIFT', stop.x * k, stop.z * k - 7);
+    }
+    if (l.staircases.length) for (const room of l.rooms.filter(r => r.kind !== 'corridor')) {
+      g.fillStyle = 'rgba(219,234,254,.72)'; g.font = 'bold 10px sans-serif'; g.textAlign = 'center';
+      g.fillText((room.floorY ?? 0) > 0.7 ? 'F2' : 'F1', (room.x + room.w / 2) * k, (room.z + room.h / 2) * k);
     }
     // Entry points
     l.entries.forEach((ep, idx) => {
@@ -594,9 +638,14 @@ class Game {
       g.save(); g.translate(ox, oz); g.scale(k, k);
       g.fillStyle = pal.floor;
       for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) {
-        const v = l.cells[z * l.w + x]; if (v === 0) continue;
-        g.fillStyle = v === WALL ? pal.wall : v === DOOR ? pal.door : v === WINDOW ? pal.win : v === LOW || v === HIGH ? pal.prop : pal.floor;
+        const idx = z * l.w + x, v = l.cells[idx]; if (v === 0) continue;
+        const upper = l.groundY[idx] > 0.7;
+        g.fillStyle = v === WALL ? (upper ? '#b1e1c0' : pal.wall) : v === DOOR ? pal.door : v === WINDOW ? pal.win : v === LOW || v === HIGH ? pal.prop : (upper ? '#17452b' : pal.floor);
         g.fillRect(x, z, 1.02, 1.02);
+      }
+      if (l.staircases.length) {
+        g.fillStyle = 'rgba(126,242,168,.72)'; g.font = 'bold 2px sans-serif'; g.textAlign = 'center';
+        g.fillText(((room.floorY ?? 0) > 0.7 ? 'F2 · ' : 'F1 · ') + room.name.toUpperCase(), room.x + room.w / 2, room.z + room.h / 2);
       }
       const ep = l.entries[this.preplan.entry ?? 0];
       if (ep) {
@@ -1710,12 +1759,20 @@ class Game {
         fx.burst(e.x2, e.y2, e.z2, 10, 0x60e0ff, 2.4, 7, 0.45);
         break;
       }
-      case 'c2': { const q = this.pan(e.x, e.z); this.audio.c2(q.d, q.pan); if (q.d < 14) this.camShake = Math.max(this.camShake, (1 - q.d / 14) * 0.045); fx.flashAt(e.x, 1.2, e.z, 600, 0.12, 0xffa848); fx.burst(e.x, 1.1, e.z, 45, 0xffb860, 6, 4, 0.6); fx.burst(e.x, 1.1, e.z, 25, 0x8a6d48, 4, 6, 0.9); fx.debris(e.x, 1.0, e.z, 14, 'wood'); break; }
-      case 'glass': { const q = this.pan(e.x, e.z); this.audio.glass(q.d, q.pan); fx.burst(e.x, 1.5, e.z, 28, 0xb8e8ff, 4.2, 7, 0.7); fx.debris(e.x, 1.35, e.z, 10, 'glass'); break; }
+      case 'c2': {
+        const q = this.pan(e.x, e.z), y = e.y ?? groundHeightAt(sim.level, e.x, e.z);
+        this.audio.c2(q.d, q.pan); if (q.d < 14) this.camShake = Math.max(this.camShake, (1 - q.d / 14) * 0.045);
+        fx.flashAt(e.x, y + 1.2, e.z, 600, 0.12, 0xffa848); fx.burst(e.x, y + 1.1, e.z, 45, 0xffb860, 6, 4, 0.6);
+        fx.burst(e.x, y + 1.1, e.z, 25, 0x8a6d48, 4, 6, 0.9); fx.debris(e.x, y + 1.0, e.z, 14, 'wood'); break;
+      }
+      case 'glass': {
+        const q = this.pan(e.x, e.z), y = groundHeightAt(sim.level, e.x, e.z);
+        this.audio.glass(q.d, q.pan); fx.burst(e.x, y + 1.5, e.z, 28, 0xb8e8ff, 4.2, 7, 0.7); fx.debris(e.x, y + 1.35, e.z, 10, 'glass'); break;
+      }
       case 'smoke': case 'gas': {
-        const q = this.pan(e.x, e.z);
+        const q = this.pan(e.x, e.z), y = e.y ?? groundHeightAt(sim.level, e.x, e.z) + 0.35;
         this.audio.smokeHiss(q.d, q.pan);
-        fx.burst(e.x, 0.35, e.z, 18, e.t === 'gas' ? 0xa3e635 : 0xd0d8e0, 2.2, -0.3, 0.9);
+        fx.burst(e.x, y, e.z, 18, e.t === 'gas' ? 0xa3e635 : 0xd0d8e0, 2.2, -0.3, 0.9);
         break;
       }
       case 'optiwand': {
@@ -1756,9 +1813,9 @@ class Game {
       }
       case 'power': { if (this.ambLight) this.ambLight.intensity = e.on ? (S.qual ? 0.45 : 1.1) : 0.1; this.audio.nvg(!e.on); this.log(e.on ? 'Power restored.' : 'Building power cut! NVG (N) or Flashlight (T) recommended.', 'me'); break; }
       case 'phone': { const q = this.pan(e.x, e.z); if (q.d < 18) this.audio.phoneRing(q.d, q.pan); break; }
-      case 'bomb': { if (e.kind === 'defused') { this.audio.defuse(); this.log('Explosive device disarmed!', 'me'); } else { this.audio.c2(0, 0); fx.flashAt(e.x, 1, e.z, 900, 0.2, 0xff4020); this.log('Explosive detonated!', 'warn'); } break; }
+      case 'bomb': { if (e.kind === 'defused') { this.audio.defuse(); this.log('Explosive device disarmed!', 'me'); } else { const y = groundHeightAt(sim.level, e.x, e.z); this.audio.c2(0, 0); fx.flashAt(e.x, y + 1, e.z, 900, 0.2, 0xff4020); this.log('Explosive detonated!', 'warn'); } break; }
       case 'hurt': this.views.get(e.a)?.wound(); if (e.a === p) { this.dmgFx = 1; this.stress = Math.min(1, this.stress + 0.42); this.audio.hurt(); this.recoil += 0.03; } else if (e.a.kind !== 'officer') { /* hit marker only for own shots handled below */ } break;
-      case 'death': if (e.a !== p) { fx.burst(e.a.x, 1.1, e.a.z, 26, 0x8a0f0f, 2.6, 8, 0.7); fx.burst(e.a.x, 0.5, e.a.z, 14, 0x6a0808, 1.4, 6, 0.9); } if (e.a.kind === 'officer') this.log(`${e.a.name} has been killed.`, 'warn'); break;
+      case 'death': if (e.a !== p) { const y = groundHeightAt(sim.level, e.a.x, e.a.z); fx.burst(e.a.x, y + 1.1, e.a.z, 26, 0x8a0f0f, 2.6, 8, 0.7); fx.burst(e.a.x, y + 0.5, e.a.z, 14, 0x6a0808, 1.4, 6, 0.9); } if (e.a.kind === 'officer') this.log(`${e.a.name} has been killed.`, 'warn'); break;
       case 'door': { const q = this.pan(e.door.cx + 0.5, e.door.cz + 0.5); this.audio.door(q.d, q.pan, e.open, !!e.kick); break; }
       case 'say': {
         const o = e.a;
@@ -1775,7 +1832,7 @@ class Game {
         if (o.kind === 'officer' && !e.shout) this.audio.radioSquelch(ms ? Math.min(1.8, ms / 1000) : 0.4);
         break;
       }
-      case 'bang': { const q = this.pan(e.x, e.z); this.audio.bang(q.d, q.pan, p.flash); if (q.d < 12) this.camShake = Math.max(this.camShake, (1 - q.d / 12) * 0.032); fx.flashAt(e.x, 1, e.z, 900, 0.12, 0xffffff); fx.burst(e.x, 0.3, e.z, 60, 0xffffff, 7, 3, 0.5); fx.burst(e.x, 0.3, e.z, 30, 0x999999, 2, -0.5, 1.6); break; }
+      case 'bang': { const q = this.pan(e.x, e.z), y = e.y ?? groundHeightAt(sim.level, e.x, e.z); this.audio.bang(q.d, q.pan, p.flash); if (q.d < 12) this.camShake = Math.max(this.camShake, (1 - q.d / 12) * 0.032); fx.flashAt(e.x, y + 0.8, e.z, 900, 0.12, 0xffffff); fx.burst(e.x, y + 0.3, e.z, 60, 0xffffff, 7, 3, 0.5); fx.burst(e.x, y + 0.3, e.z, 30, 0x999999, 2, -0.5, 1.6); break; }
       case 'throw': this.audio.step(0.3); break;
       case 'shout': if (e.a !== p) {
         const now = performance.now(), prevT = this.recentSay.get(SHOUTS[0]) ?? 0;
@@ -1828,7 +1885,7 @@ class Game {
       }
       case 'cuff': { const q = this.pan(e.a.x, e.a.z); if (q.d < 10) this.audio.cuff(); if (e.by === p) this.log(e.a.kind === 'suspect' ? 'You secured a suspect.' : 'You secured a civilian.', 'me'); break; }
       case 'surrender': { const q = this.pan(e.a.x, e.a.z); if (q.d < 14 && sim.los(p.x, p.z, e.a.x, e.a.z)) this.log(e.a.kind === 'suspect' ? 'Suspect gives up – cuff them!' : 'Civilian complies – cuff them before you move on.', ''); break; }
-      case 'marker': fx.marker(e.x, e.z, TEAM_COLOR[e.team]); break;
+      case 'marker': fx.marker(e.x, e.z, TEAM_COLOR[e.team], groundHeightAt(sim.level, e.x, e.z)); break;
       case 'ping': {
         const col = e.label === 'HOSTILE' || e.label === 'BOMB' ? 0xff4a4a : e.label === 'BREACH' ? 0xf0b429 : e.label === 'CIVILIAN' ? 0x4fd07a : 0x38bdf8;
         const hex = '#' + col.toString(16).padStart(6, '0');
@@ -1917,9 +1974,10 @@ class Game {
           const q = this.pan(cx, cz);
           this.audio.c2(q.d, q.pan);
           if (q.d < 12) this.camShake = Math.max(this.camShake, (1 - q.d / 12) * 0.048);
-          fx.flashAt(cx, 1.1, cz, 700, 0.14, 0xff6020);
-          fx.burst(cx, 1.0, cz, 40, 0xff9040, 6.2, 5, 0.65);
-          fx.debris(cx, 1.0, cz, 12, 'wood');
+          const y = e.door.floorY ?? groundHeightAt(sim.level, cx, cz);
+          fx.flashAt(cx, y + 1.1, cz, 700, 0.14, 0xff6020);
+          fx.burst(cx, y + 1.0, cz, 40, 0xff9040, 6.2, 5, 0.65);
+          fx.debris(cx, y + 1.0, cz, 12, 'wood');
           this.log('Door booby-trap detonated!', 'warn');
         }
         break;
@@ -2017,9 +2075,16 @@ class Game {
     base.width = l.w * k; base.height = l.h * k;
     const bg = base.getContext('2d')!;
     for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) {
-      const v = l.cells[z * l.w + x];
-      bg.fillStyle = v === WALL ? '#8fa3b5' : v === DOOR ? '#f2c14e' : v === WINDOW ? '#68b6e0' : v === LOW || v === HIGH ? '#33414d' : v === 1 ? '#18212a' : '#0b0f14';
+      const idx = z * l.w + x, v = l.cells[idx], upper = l.groundY[idx] > 0.7;
+      bg.fillStyle = v === WALL ? (upper ? '#b1c3d1' : '#8fa3b5') : v === DOOR ? '#f2c14e' : v === WINDOW ? '#68b6e0' : v === LOW || v === HIGH ? '#33414d' : v === 1 ? (upper ? '#253a4a' : '#18212a') : '#0b0f14';
       bg.fillRect(x * k, z * k, k, k);
+    }
+    for (const stair of l.staircases) {
+      bg.strokeStyle = '#8ee7ff'; bg.lineWidth = 2; bg.setLineDash([4, 3]);
+      bg.beginPath(); bg.moveTo(stair.x0 * k, stair.z0 * k); bg.lineTo(stair.x1 * k, stair.z1 * k); bg.stroke(); bg.setLineDash([]);
+    }
+    for (const elevator of l.elevators) for (const stop of elevator.stops) {
+      bg.fillStyle = '#a78bfa'; bg.beginPath(); bg.arc(stop.x * k, stop.z * k, 3.5, 0, 6.28); bg.fill();
     }
     this.replayBase = base;
     const c = $<HTMLCanvasElement>('debMap');
@@ -2133,13 +2198,25 @@ class Game {
   }
   buildMap() {
     const sim = this.sim!, l = sim.level, k = 4, c = document.createElement('canvas'); c.width = l.w * k; c.height = l.h * k; const g = c.getContext('2d')!;
-    for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) { const v = l.cells[z * l.w + x]; g.fillStyle = v === WALL ? '#8fa3b5' : v === DOOR ? '#f2c14e' : v === WINDOW ? '#68b6e0' : v === LOW || v === HIGH ? '#33414d' : v === 1 ? '#18212a' : '#0c1116'; g.fillRect(x * k, z * k, k, k); }
+    for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) {
+      const idx = z * l.w + x, v = l.cells[idx], upper = l.groundY[idx] > 0.7;
+      g.fillStyle = v === WALL ? (upper ? '#b1c3d1' : '#8fa3b5') : v === DOOR ? '#f2c14e' : v === WINDOW ? '#68b6e0' : v === LOW || v === HIGH ? '#33414d' : v === 1 ? (upper ? '#253a4a' : '#18212a') : '#0c1116';
+      g.fillRect(x * k, z * k, k, k);
+    }
     this.mapBase = c; const m = $<HTMLCanvasElement>('minimap'); m.width = c.width; m.height = c.height; m.style.width = c.width * 1.15 + 'px';
     this.mapT = 0; this.drawMap();
   }
   drawMap() {
     const m = $<HTMLCanvasElement>('minimap'); m.style.display = this.mapOn ? '' : 'none'; if (!this.mapOn || !this.mapBase) return;
     const g = m.getContext('2d')!, sim = this.sim!, k = 4; g.drawImage(this.mapBase, 0, 0);
+    for (const stair of sim.level.staircases) {
+      g.strokeStyle = '#8ee7ff'; g.lineWidth = 1.7; g.setLineDash([3, 2]);
+      g.beginPath(); g.moveTo(stair.x0 * k, stair.z0 * k); g.lineTo(stair.x1 * k, stair.z1 * k); g.stroke(); g.setLineDash([]);
+    }
+    for (const elevator of sim.level.elevators) for (const stop of elevator.stops) {
+      g.fillStyle = '#a78bfa'; g.strokeStyle = '#ede9fe'; g.lineWidth = 1;
+      g.beginPath(); g.arc(stop.x * k, stop.z * k, 3.3, 0, 6.28); g.fill(); g.stroke();
+    }
     for (const d of sim.level.doors) {
       if (d.open > 0.5) { g.fillStyle = '#18212a'; g.fillRect(d.cx * k, d.cz * k, k, k); }
       else if (d.wedged) { g.fillStyle = '#ff9820'; g.fillRect(d.cx * k, d.cz * k, k, k); }
@@ -2185,7 +2262,10 @@ class Game {
       magEl.classList.toggle('on', this.magnifier);
       magEl.textContent = this.magnifier ? '3× MAGNIFIER ON [SHIFT]' : '1× HOLO [SHIFT]';
     } else magEl.classList.add('hidden');
-    $('objective').innerHTML = `SUSPECTS <b>${r.suspects}</b> · CIVILIANS <b>${r.civs}</b>${sim.level.breaker ? ` · POWER <b>${sim.powerOn ? 'ON' : 'OFF'}</b>` : ''}`;
+    const floorTag = sim.level.staircases.length
+      ? (groundHeightAt(sim.level, p.x, p.z) < 0.55 ? 'F1' : groundHeightAt(sim.level, p.x, p.z) > 2.45 ? 'F2' : 'STAIRS') + ' · '
+      : '';
+    $('objective').innerHTML = `${floorTag}SUSPECTS <b>${r.suspects}</b> · CIVILIANS <b>${r.civs}</b>${sim.level.breaker ? ` · POWER <b>${sim.powerOn ? 'ON' : 'OFF'}</b>` : ''}`;
     const bt = $('bombtimer');
     if (sim.bomb && !sim.bomb.defused) {
       bt.classList.remove('hidden');
@@ -2233,6 +2313,7 @@ class Game {
       if (it?.revive) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Revive ${it.revive.name} (${Math.ceil(it.revive.bleedT)}s)`; }
       else if (it?.actor) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Handcuff'; }
       else if (it?.evidence) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Bag Evidence (+25)'; }
+      else if (it?.elevator && it.elevatorTo) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Ride ${it.elevator.name} → ${it.elevatorTo.label}`; }
       else if (it?.bomb) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Defuse Bomb'; }
       else if (it?.breaker) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> ${sim.powerOn ? 'Cut Building Power' : 'Restore Power'}`; }
       else if (it?.door) {
@@ -2355,7 +2436,7 @@ class Game {
       if (last !== undefined && ph !== last && !a.prone) { const q = this.pan(a.x, a.z); if (q.d < 14) this.audio.step((a.kind === 'officer' || a.kind === 'player' ? 0.2 : 0.14) / (1 + q.d * 0.25), q.pan); }
     }
     if (this.net.online) { const vc = $('vc'); vc.textContent = this.net.micOk ? (this.net.muted ? 'VOICE CHAT: MIC OFF (B)' : `SPATIAL RADIO ON · ${this.net.voiceCount} peers · B = mute`) : 'VOICE CHAT: no microphone – listen-only'; vc.className = this.net.muted || !this.net.micOk ? 'off' : ''; }
-    this.level!.update(dt, sim.time, p.x, p.z); for (const v of this.views.values()) v.update(dt, sim.time); this.fx.update(dt, sim);
+    this.level!.update(dt, sim.time, p.x, p.z); for (const v of this.views.values()) v.update(dt, sim.time, groundHeightAt(sim.level, v.a.x, v.a.z)); this.fx.update(dt, sim);
     for (const pg of this.pings) pg.t -= dt;
     this.pings = this.pings.filter(pg => pg.t > 0);
     if (this.breachBannerT > 0) { this.breachBannerT -= dt; if (this.breachBannerT <= 0 && sim.breachSyncT <= 0) show('breachBanner', false); }
@@ -2372,7 +2453,7 @@ class Game {
     const lo = sim.leanOffset(p, this.lean);
     p.lean = lo.actual;
 
-    const targetEye = (!p.alive ? 0.35 : p.downed ? 0.48 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive && !p.downed ? p.jumpY : 0) - Math.abs(lo.actual) * LEAN_CAMERA_DROP;
+    const targetEye = groundHeightAt(sim.level, p.x, p.z) + (!p.alive ? 0.35 : p.downed ? 0.48 : p.prone ? 0.36 : p.crouch ? 1.12 : 1.62) + (p.alive && !p.downed ? p.jumpY : 0) - Math.abs(lo.actual) * LEAN_CAMERA_DROP;
     this.eye += (targetEye - this.eye) * Math.min(1, dt * (p.jumpY > 0 ? 30 : 9));
     { const st = $('stance'), run = (K.has('ShiftLeft') || K.has('ShiftRight')) && !p.prone && !p.crouch, t = !p.alive ? '' : p.downed ? 'DOWNED · BLEEDING OUT' : p.prone ? 'CRAWLING · SILENT' : p.crouch ? 'CROUCHING · SILENT' : run ? 'RUNNING · HEARD FAR AWAY' : this.slow ? 'SNEAKING · SILENT' : Math.abs(lo.actual) > 0.25 ? (lo.actual < 0 ? 'LEAN LEFT' : 'LEAN RIGHT') : ''; if (st.textContent !== t) { st.textContent = t; st.className = run || p.downed ? 'loud' : ''; } }
     const bobScale = 1 - this.aimK * 0.85;
@@ -2497,7 +2578,7 @@ class Game {
     if (this.censorT <= 0) { this.censorT = 0.04; this.updateCensors(); }
     $('dmg').style.opacity = String(Math.max(this.dmgFx, p.hp < 35 && p.alive ? 0.35 : 0, p.alive ? 0 : 0.8));
     const fl = $('flash');
-    const inGas = sim.clouds.some(cl => cl.kind === 'gas' && Math.hypot(p.x - cl.x, p.z - cl.z) < cl.r);
+    const inGas = sim.clouds.some(cl => cl.kind === 'gas' && Math.abs(groundHeightAt(sim.level, p.x, p.z) - (cl.y ?? groundHeightAt(sim.level, cl.x, cl.z))) < 1.35 && Math.hypot(p.x - cl.x, p.z - cl.z) < cl.r);
     if (inGas && p.flash < 0.2) {
       fl.style.background = 'rgba(170, 215, 75, 0.55)';
       fl.style.opacity = '0.48';
@@ -2541,7 +2622,7 @@ class Game {
       const d = Math.hypot(dx, dz);
       if (d > 22 || dx * fw.x + dz * fw.z <= 0.2) continue;
       if (!sim.los(p.x, p.z, a.x, a.z)) continue;
-      v.set(a.x, a.prone ? 0.32 : a.crouch ? 1.05 : 1.56, a.z).project(this.camera);
+      v.set(a.x, groundHeightAt(sim.level, a.x, a.z) + (a.prone ? 0.32 : a.crouch ? 1.05 : 1.56), a.z).project(this.camera);
       if (v.z > 1) continue;
       const sx = (v.x * 0.5 + 0.5) * 100;
       const sy = (-v.y * 0.5 + 0.5) * 100;
@@ -2599,7 +2680,7 @@ class Game {
           this.pipCam.fov = 98;
           this.pipCam.aspect = w / h;
           this.pipCam.updateProjectionMatrix();
-          this.pipCam.position.set(cx, 0.18, cz);
+          this.pipCam.position.set(cx, (d.floorY ?? groundHeightAt(this.sim!.level, cx, cz)) + 0.18, cz);
           this.pipCam.rotation.set(0.14, yaw, 0);
           r.setScissorTest(true);
           r.setViewport(x, y, w, h);
@@ -2616,7 +2697,7 @@ class Game {
             this.pipCam.aspect = w / h;
             this.pipCam.updateProjectionMatrix();
             const lo = this.sim!.leanOffset(o, o.lean);
-            const eye = (!o.alive ? 0.35 : o.downed ? 0.52 : o.crouch ? 1.16 : 1.66) - Math.abs(lo.actual) * LEAN_CAMERA_DROP;
+            const eye = groundHeightAt(this.sim!.level, o.x, o.z) + (!o.alive ? 0.35 : o.downed ? 0.52 : o.crouch ? 1.16 : 1.66) - Math.abs(lo.actual) * LEAN_CAMERA_DROP;
             this.pipCam.position.set(o.x + lo.lx, eye, o.z + lo.lz);
             this.pipCam.rotation.set(o.alive && !o.downed ? (o.kind === 'player' ? o.pitch : -0.04) : 0.45, o.yaw,
               (o.alive && !o.downed ? 0.02 : 0.6) - lo.actual * LEAN_CAMERA_ROLL);

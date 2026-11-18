@@ -54,7 +54,14 @@ export function encodeSnap(sim: Sim): Snap {
 export function applySnap(sim: Sim, s: Snap, me: Actor, targets?: Map<Actor, NetTarget>) {
   s.a.forEach((v, i) => {
     const a = sim.actors[i]; if (!a) return; const f = v[4];
-    if (a !== me) {
+    if (a === me) {
+      // Preserve local movement prediction, but accept authoritative elevator/floor teleports.
+      if (Math.hypot(v[0] - a.x, v[1] - a.z) > 3.5) {
+        a.x = v[0]; a.z = v[1]; a.yaw = v[2]; a.path = null; a.goal = null; a.moving = false;
+        a.lastX = NaN; a.lastZ = NaN; a.nx = a.x; a.nz = a.z; a.nd = 0; a.nt = 0;
+        a.trail.length = 0; a.trail.push({ x: a.x, z: a.z });
+      }
+    } else {
       if (targets) {
         const cur = targets.get(a);
         // Snap immediately on large teleports (reconnect/spawn), otherwise lerp smoothly

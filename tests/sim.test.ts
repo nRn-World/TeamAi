@@ -3,8 +3,8 @@ import { Sim, yawTo, fwd } from '../src/sim/sim';
 import type { Command } from '../src/sim/sim';
 import { parseCommand, parseCommands, shouldUseAiBrain } from '../src/sim/commands';
 import { buildLocalReport, buildTacticalContext } from '../src/sim/context';
-import { findPath, nearestWalkable } from '../src/sim/nav';
-import { MISSIONS, buildLevel, roomAt, FLOOR, WALL, OUT, HIGH, WINDOW } from '../src/sim/level';
+import { findPath, nearestWalkable, walkLine } from '../src/sim/nav';
+import { MISSIONS, buildLevel, groundHeightAt, roomAt, FLOOR, WALL, OUT, HIGH, WINDOW } from '../src/sim/level';
 import { encodeSnap, applySnap, encodeEv, decodeEv } from '../src/sim/netstate';
 
 let fails = 0;
@@ -174,6 +174,138 @@ function play(mission: number, seed: number, verbose = false) {
   host.damage(host.players[1], 9999, host.suspects[0], false); host.damage(host.players[2], 9999, host.suspects[0], false); ok(!!host.over && !host.over.win, 'mission fails when all players are down');
   console.log('co-op mirror test done');
 }
+// ---- Kista Tech Center: two-storey navigation, interactions, effects and co-op teleports ----
+{
+  const mission = MISSIONS.findIndex(m => m.name === 'Kista Tech Center');
+  ok(mission >= 0, 'Kista Tech Center is in the mission list');
+  if (mission >= 0) {
+    const level = buildLevel(mission, 1), stair = level.staircases[0], lift = level.elevators[0];
+    const vip = level.suspects.find(s => s.hostage);
+    ok(!!stair && !!lift && !!vip, 'Kista has stairs, a paired service elevator and a hostage');
+    if (stair && lift && vip) {
+      ok(Math.abs(stair.toY - stair.fromY - 3) < 0.01
+        && Math.abs(groundHeightAt(level, stair.x0, stair.z0) - stair.fromY) < 0.05
+        && Math.abs(groundHeightAt(level, stair.x1, stair.z1) - stair.toY) < 0.05,
+      'stair floor height interpolates the three-metre rise from F1 to F2');
+      ok(groundHeightAt(level, vip.x, vip.z) > 2.9 && level.rooms[vip.room]?.name === 'Hostage Wing · F2',
+        'hostage suspect spawns in the upper-floor hostage wing');
+      const vipCivilian = new Sim(mission, 3).civs.find(c => c.vip);
+      ok(!!vipCivilian && groundHeightAt(level, vipCivilian.x, vipCivilian.z) > 2.9
+        && roomAt(level, vipCivilian.x, vipCivilian.z)?.name === 'Hostage Wing · F2',
+      'VIP civilian objective spawns on F2 in the hostage wing');
+
+      const route = findPath(level, level.playerSpawn, vip);
+      ok(!!route?.length, 'A* finds a walkable route from the entry to the F2 VIP');
+      if (route?.length) {
+        let from: { x: number; z: number } = level.playerSpawn, climbed = false, smooth = true;
+        for (const to of route) {
+          const d = Math.hypot(to.x - from.x, to.z - from.z), n = Math.max(1, Math.ceil(d / 0.1));
+          let prev = groundHeightAt(level, from.x, from.z);
+          if (!walkLine(level, from, to)) smooth = false;
+          for (let i = 1; i <= n; i++) {
+            const x = from.x + (to.x - from.x) * i / n, z = from.z + (to.z - from.z) * i / n;
+            const y = groundHeightAt(level, x, z);
+            if (Math.abs(y - prev) > 0.12) smooth = false;
+            if (y > 0.25 && y < 2.75) climbed = true;
+            prev = y;
+          }
+          from = to;
+        }
+        ok(smooth && climbed, 'smoothed navigation climbs the graded stair route without a floor-height shortcut');
+      }
+
+      const walker = new Sim(mission, 7), player = walker.player;
+      for (const a of walker.actors) if (a !== player) a.alive = false;
+      player.x = stair.x0 - 0.3; player.z = stair.z0; player.yaw = Math.PI / 2;
+      for (let i = 0; i < 90; i++) walker.movePlayer(0.1, 0);
+      ok(groundHeightAt(walker.level, player.x, player.z) > 2.9,
+        'player collision movement can walk up the rendered staircase to F2');
+
+      const floors = new Sim(mission, 9), lower = { x: stair.x0, z: stair.z0 }, upper = { x: stair.x1, z: stair.z1 };
+      ok(!floors.sameFloor(lower, upper) && !floors.los(lower.x, lower.z, upper.x, upper.z),
+        'line of sight is separated across the F1/F2 floor-height gap');
+      const hostage = floors.suspects.find(a => a.hostage)!;
+      for (const a of floors.actors) if (a !== hostage) a.alive = false;
+      hostage.x = upper.x; hostage.z = upper.z; hostage.stun = 0; hostage.surrendered = false;
+      (floors as any).detonate(lower.x, lower.z, 'bang', groundHeightAt(floors.level, lower.x, lower.z) + 0.06);
+      ok(hostage.stun === 0 && !hostage.surrendered,
+        'a flashbang on F1 does not stun or surrender an actor on F2');
+      floors.clouds.push({ kind: 'gas', x: lower.x, y: 0, z: lower.z, r: 20, t: 10, maxT: 10 });
+      (floors as any).gasTickT = 0;
+      (floors as any).updateClouds(0.5);
+      ok(hostage.stun === 0 && !hostage.surrendered,
+        'gas cloud damage and surrender effects stay on the grenade floor');
+
+      // Synthetic overlapping-floor checks exercise filters at short XZ distance, where a 2D-only
+      // query would incorrectly alert, target, interact with, or blast the actor above.
+      const floorAi = new Sim(mission, 10), lowerPlayer = floorAi.player, upperSuspect = floorAi.suspects[0], officer = floorAi.officers[0];
+      for (const a of floorAi.actors) if (a !== lowerPlayer && a !== upperSuspect && a !== officer) a.alive = false;
+      lowerPlayer.x = 29.5; lowerPlayer.z = 10.5;
+      upperSuspect.x = 30.5; upperSuspect.z = 10.5; upperSuspect.alive = true; upperSuspect.surrendered = false; upperSuspect.armed = true; upperSuspect.alertT = 0;
+      officer.x = 28.5; officer.z = 10.5;
+      floorAi.level.groundY[10 * floorAi.level.w + 30] = 3;
+      floorAi.level.groundY[10 * floorAi.level.w + 31] = 3;
+      (floorAi as any).noise(lowerPlayer.x, lowerPlayer.z, 5);
+      floorAi.playerShout(lowerPlayer);
+      ok(upperSuspect.alertT === 0 && !upperSuspect.surrendered
+        && (floorAi as any).pickThreat(officer) === null
+        && floorAi.interactTarget(lowerPlayer)?.actor !== upperSuspect,
+      'noise, shouts, AI threat selection and interactions reject a nearby actor on another floor');
+      officer.x = 31.5; officer.z = 10.5;
+      ok(buildTacticalContext(floorAi, lowerPlayer).includes('above you'),
+        'tactical report describes an officer on another floor as above/below, not beside the player');
+
+      const c2Floors = new Sim(mission, 21), c2Door = c2Floors.level.doors.find(d => d.cx === 8 && d.cz === 12)!, c2Target = c2Floors.suspects[0];
+      for (const a of c2Floors.actors) if (a !== c2Floors.player && a !== c2Target) a.alive = false;
+      c2Target.x = 9.5; c2Target.z = 11.5; c2Target.hp = 100; c2Target.alive = true;
+      c2Floors.level.groundY[11 * c2Floors.level.w + 9] = 3;
+      c2Floors.c2Door(c2Door, c2Floors.player);
+      const c2Event = c2Floors.events.find(e => e.t === 'c2');
+      ok(c2Target.hp === 100 && c2Event?.t === 'c2' && Math.abs((c2Event.y ?? -1) - (c2Door.floorY ?? 0)) < 0.01,
+        'C2 blast damage and effect height are restricted to the breached floor');
+
+      const trapFloors = new Sim(mission, 23), trapDoor = trapFloors.level.doors.find(d => d.cx === 8 && d.cz === 12)!, trapTarget = trapFloors.suspects[0];
+      for (const a of trapFloors.actors) if (a !== trapFloors.player && a !== trapTarget) a.alive = false;
+      trapTarget.x = 9.5; trapTarget.z = 11.5; trapTarget.hp = 100; trapTarget.alive = true;
+      trapFloors.level.groundY[11 * trapFloors.level.w + 9] = 3;
+      trapDoor.locked = false; trapDoor.trapped = true; trapDoor.trapKnown = false;
+      trapFloors.setDoor(trapDoor, true, false, false, false, trapFloors.player);
+      const trapBang = trapFloors.events.find(e => e.t === 'bang');
+      ok(trapTarget.hp === 100 && trapBang?.t === 'bang' && Math.abs((trapBang.y ?? -1) - (trapDoor.floorY ?? 0)) < 0.01,
+        'tripwire damage and detonation effects do not leak through to another floor');
+
+      const liftSim = new Sim(mission, 11), lp = liftSim.player, [from, to] = lift.stops;
+      for (const a of liftSim.actors) if (a !== lp) a.alive = false;
+      lp.x = from.x; lp.z = from.z; lp.yaw = from.yaw;
+      ok(!!liftSim.interactTarget(lp)?.elevatorTo, 'service elevator stop offers an interaction');
+      liftSim.playerUse(lp);
+      ok(Math.hypot(lp.x - to.x, lp.z - to.z) < 0.01 && Math.abs(groundHeightAt(liftSim.level, lp.x, lp.z) - to.floorY) < 0.1
+        && lp.nx === lp.x && lp.nz === lp.z && lp.nd === 0 && lp.nt === 0,
+        'using the service elevator transfers the player and resets the local footstep-distance accumulator');
+      ok(!!liftSim.interactTarget(lp)?.elevatorTo, 'upper elevator stop offers a return trip');
+      liftSim.playerUse(lp);
+      ok(Math.hypot(lp.x - from.x, lp.z - from.z) < 0.01, 'service elevator works in both directions');
+
+      const grenades = new Sim(mission, 13), gx = vip.x, gz = vip.z, gy = groundHeightAt(grenades.level, gx, gz);
+      for (const a of grenades.actors) if (a !== grenades.player) a.alive = false;
+      grenades.grenades.push({ kind: 'smoke', x: gx, y: gy + 0.01, z: gz, vx: 0, vy: 0, vz: 0, t: 0.01 });
+      (grenades as any).updateGrenades(0.1);
+      const smoke = grenades.clouds[0], smokeEvent = grenades.events.find(e => e.t === 'smoke');
+      ok(gy > 2.9 && Math.abs((smoke?.y ?? 0) - gy) < 0.05 && (smokeEvent?.t === 'smoke' && (smokeEvent.y ?? 0) > 2.9),
+        'grenade bounce, smoke cloud and event stay at the local upper-floor height');
+
+      const host = new Sim(mission, 17, 1, 2), mirror = new Sim(mission, 17, 1, 2), remote = host.players[1], local = mirror.players[1];
+      mirror.player = local;
+      for (const a of host.actors) if (a !== remote) a.alive = false;
+      remote.x = from.x; remote.z = from.z; remote.yaw = from.yaw;
+      host.playerUse(remote);
+      applySnap(mirror, JSON.parse(JSON.stringify(encodeSnap(host))), local);
+      ok(Math.hypot(local.x - to.x, local.z - to.z) < 0.02 && groundHeightAt(mirror.level, local.x, local.z) > 2.9
+        && local.nx === local.x && local.nz === local.z && local.nd === 0 && local.nt === 0,
+        'co-op snapshot applies the elevator teleport and resets the local movement history');
+    }
+  }
+}
 { // a kneeling or cuffed person in a doorway must give way instead of blocking it
   let stuck = 0, cases = 0;
   for (const m of [0, 1, 2]) {
@@ -317,11 +449,11 @@ ok(wins >= 4, 'bot should be able to win across missions');
   sCol.player.x = dr.cx + 0.45; sCol.player.z = dr.cz + 0.05;
   for (let i = 0; i < 20; i++) sCol.movePlayer(-0.08, 0);
   ok(sCol.player.x >= dr.cx + 0.03, 'open door leaf panel remains solid');
-  // 7d. Marauder vehicle OBB blocks player & bullets across all 6 missions
+  // 7d. Marauder vehicle OBB blocks player & bullets in every mission that includes the vehicle
   for (let m = 0; m < MISSIONS.length; m++) {
     const sm = new Sim(m, 1);
-    const v = sm.level.vehicle!;
-    ok(!!v, `mission ${m} has Marauder vehicle collider`);
+    const v = sm.level.vehicle;
+    if (!v) continue;
     // verify zero overlap with building cells
     const cv = Math.cos(v.yaw), sn = Math.sin(v.yaw);
     let hitWall = false;

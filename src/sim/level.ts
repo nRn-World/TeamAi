@@ -2,33 +2,37 @@
 export const OUT = 0, FLOOR = 1, WALL = 2, DOOR = 3, LOW = 4, HIGH = 5, WINDOW = 6;
 
 export interface Door {
-  id: number; cx: number; cz: number; horiz: boolean;
+  id: number; cx: number; cz: number; horiz: boolean; floorY?: number;
   open: number; target: number;
   locked?: boolean; wedged?: boolean;
   trapped?: boolean; trapKnown?: boolean;
 }
 export type FloorKind = 'carpet' | 'tile' | 'concrete' | 'wood';
 export type RoomKind = 'office' | 'corridor' | 'lobby' | 'warehouse' | 'bedroom' | 'storage' | 'vault' | 'club';
-export interface Room { id: number; name: string; x: number; z: number; w: number; h: number; floor: FloorKind; kind: RoomKind; spawn: boolean; }
+export interface Room { id: number; name: string; x: number; z: number; w: number; h: number; floor: FloorKind; kind: RoomKind; spawn: boolean; floorY?: number; }
 export type PropKind = 'desk' | 'pc' | 'shelf' | 'crate' | 'bed' | 'sofa' | 'chair' | 'plant' | 'locker' | 'bar' | 'server';
-export interface Prop { cx: number; cz: number; kind: PropKind; rot: number; w?: number; d?: number; }
+export interface Prop { cx: number; cz: number; kind: PropKind; rot: number; w?: number; d?: number; floorY?: number; }
 export interface Pt { x: number; z: number; }
+export interface Staircase { x0: number; z0: number; x1: number; z1: number; width: number; fromY: number; toY: number; steps: number; }
+export interface ElevatorStop extends Pt { floorY: number; label: string; yaw: number; }
+export interface ElevatorLink { id: number; name: string; stops: [ElevatorStop, ElevatorStop]; }
 export interface BoxCollider { x: number; z: number; hx: number; hz: number; yaw?: number; h?: number; }
 export interface CircleCollider { x: number; z: number; r: number; h?: number; }
 export interface VehicleCollider { x: number; z: number; yaw: number; hx: number; hz: number; h: number; }
 
-export type LevelTheme = 'office' | 'warehouse' | 'hotel' | 'bank' | 'club' | 'raid';
+export type LevelTheme = 'office' | 'warehouse' | 'hotel' | 'bank' | 'club' | 'raid' | 'tower';
 export type ObjectiveKind = 'clear' | 'hostage' | 'bomb';
 export interface EntryPoint { name: string; x: number; z: number; yaw: number; }
 
 export interface Level {
   index: number; name: string; brief: string; theme: LevelTheme; objective: ObjectiveKind;
-  w: number; h: number; cells: Uint8Array;
+  w: number; h: number; cells: Uint8Array; groundY: Float32Array;
   doors: Door[]; doorAt: Map<number, Door>;
-  windows: Pt[];
+  windows: (Pt & { floorY?: number })[];
   rooms: Room[]; props: Prop[]; propAt: Map<number, Prop>;
-  breaker?: Pt;
-  bomb?: Pt & { time: number };
+  staircases: Staircase[]; elevators: ElevatorLink[];
+  breaker?: Pt & { floorY?: number };
+  bomb?: Pt & { time: number; floorY?: number };
   vehicle?: VehicleCollider;
   extBoxes: BoxCollider[];
   extCircles: CircleCollider[];
@@ -36,6 +40,21 @@ export interface Level {
   entries: EntryPoint[];
   suspects: (Pt & { room: number; hostage?: boolean })[];
   civs: (Pt & { room: number; vip?: boolean })[];
+}
+
+/** Physical floor height in world metres at any walkable plan position. Stair surfaces interpolate smoothly between their landings. */
+export function groundHeightAt(l: Pick<Level, 'w' | 'h' | 'groundY' | 'staircases'>, x: number, z: number): number {
+  for (const s of l.staircases) {
+    const dx = s.x1 - s.x0, dz = s.z1 - s.z0, len2 = dx * dx + dz * dz;
+    if (len2 < 1e-6) continue;
+    const t = ((x - s.x0) * dx + (z - s.z0) * dz) / len2;
+    if (t < -0.03 || t > 1.03) continue;
+    const lateral = Math.abs((x - s.x0) * dz - (z - s.z0) * dx) / Math.sqrt(len2);
+    if (lateral <= s.width * 0.5) return s.fromY + Math.max(0, Math.min(1, t)) * (s.toY - s.fromY);
+  }
+  const cx = Math.floor(x), cz = Math.floor(z);
+  if (cx < 0 || cz < 0 || cx >= l.w || cz >= l.h) return 0;
+  return l.groundY[cz * l.w + cx] ?? 0;
 }
 
 export function mulberry32(seed: number) {
@@ -50,36 +69,55 @@ export function mulberry32(seed: number) {
 }
 
 class Builder {
-  cells: Uint8Array; doors: Door[] = []; windows: Pt[] = []; rooms: Room[] = []; props: Prop[] = [];
-  breaker?: Pt; bomb?: Pt & { time: number };
+  cells: Uint8Array; groundY: Float32Array; doors: Door[] = []; windows: (Pt & { floorY?: number })[] = []; rooms: Room[] = []; props: Prop[] = [];
+  staircases: Staircase[] = []; elevators: ElevatorLink[] = [];
+  breaker?: Pt & { floorY?: number }; bomb?: Pt & { time: number; floorY?: number };
   vehicle?: VehicleCollider;
   extBoxes: BoxCollider[] = [];
   extCircles: CircleCollider[] = [];
   entries: EntryPoint[] = [];
   constructor(public w: number, public h: number) {
-    this.cells = new Uint8Array(w * h);
+    this.cells = new Uint8Array(w * h); this.groundY = new Float32Array(w * h);
     for (let x = 0; x < w; x++) { this.set(x, 0, WALL); this.set(x, h - 1, WALL); }
     for (let z = 0; z < h; z++) { this.set(0, z, WALL); this.set(w - 1, z, WALL); }
   }
   set(x: number, z: number, v: number) { this.cells[z * this.w + x] = v; }
   get(x: number, z: number) { return x < 0 || z < 0 || x >= this.w || z >= this.h ? WALL : this.cells[z * this.w + x]; }
-  room(x: number, z: number, w: number, h: number, name: string, kind: RoomKind, floor: FloorKind, spawn = true) {
+  room(x: number, z: number, w: number, h: number, name: string, kind: RoomKind, floor: FloorKind, spawn = true, floorY = 0) {
     for (let i = x; i < x + w; i++) for (let j = z; j < z + h; j++) {
       const edge = i === x || j === z || i === x + w - 1 || j === z + h - 1;
       this.set(i, j, edge ? WALL : FLOOR);
+      this.groundY[j * this.w + i] = floorY;
     }
-    this.rooms.push({ id: this.rooms.length, name, x, z, w, h, floor, kind, spawn });
+    this.rooms.push({ id: this.rooms.length, name, x, z, w, h, floor, kind, spawn, floorY });
   }
+  staircase(x0: number, z0: number, x1: number, z1: number, width: number, fromY: number, toY: number) {
+    const length = Math.hypot(x1 - x0, z1 - z0);
+    const steps = Math.max(4, Math.round(length / 0.36));
+    const ramp = { x0, z0, x1, z1, width, fromY, toY, steps };
+    this.staircases.push(ramp);
+    const minX = Math.floor(Math.min(x0, x1) - width / 2), maxX = Math.ceil(Math.max(x0, x1) + width / 2);
+    const minZ = Math.floor(Math.min(z0, z1) - width / 2), maxZ = Math.ceil(Math.max(z0, z1) + width / 2);
+    for (let z = minZ; z <= maxZ; z++) for (let x = minX; x <= maxX; x++) {
+      if (x < 1 || z < 1 || x >= this.w - 1 || z >= this.h - 1) continue;
+      const h = groundHeightAt({ w: this.w, h: this.h, groundY: this.groundY, staircases: [ramp] }, x + 0.5, z + 0.5);
+      const dx = x + 0.5 - x0, dz = z + 0.5 - z0;
+      const t = (dx * (x1 - x0) + dz * (z1 - z0)) / (length * length);
+      const lateral = Math.abs(dx * (z1 - z0) - dz * (x1 - x0)) / (length || 1);
+      if (t >= -0.1 && t <= 1.1 && lateral <= width / 2) { this.set(x, z, FLOOR); this.groundY[z * this.w + x] = h; }
+    }
+  }
+  elevator(name: string, a: ElevatorStop, b: ElevatorStop) { this.elevators.push({ id: this.elevators.length, name, stops: [a, b] }); }
   door(cx: number, cz: number, locked = false) {
     if (this.doors.some(d => d.cx === cx && d.cz === cz)) return;
     const horiz = this.get(cx - 1, cz) === WALL && this.get(cx + 1, cz) === WALL;
     this.set(cx, cz, DOOR);
-    this.doors.push({ id: this.doors.length, cx, cz, horiz, open: 0, target: 0, locked });
+    this.doors.push({ id: this.doors.length, cx, cz, horiz, floorY: this.groundY[cz * this.w + cx], open: 0, target: 0, locked });
   }
   win(cx: number, cz: number) {
     if (this.get(cx, cz) !== WALL) return;
     this.set(cx, cz, WINDOW);
-    this.windows.push({ x: cx + 0.5, z: cz + 0.5 });
+    this.windows.push({ x: cx + 0.5, z: cz + 0.5, floorY: this.groundY[cz * this.w + cx] });
   }
   walkable(x: number, z: number) { const c = this.get(x, z); return c === FLOOR || c === OUT || c === DOOR; }
   connected(sx: number, sz: number) {
@@ -103,7 +141,12 @@ class Builder {
   nearBreaker(x: number, z: number) {
     return !!this.breaker && Math.abs(x + 0.5 - this.breaker.x) < 1.2 && Math.abs(z + 0.5 - this.breaker.z) < 1.2;
   }
-  placeBreaker(x: number, z: number) { this.breaker = { x: x + 0.5, z: z + 0.5 }; }
+  nearElevator(x: number, z: number) {
+    return this.elevators.some(e => e.stops.some(s => Math.abs(x + 0.5 - s.x) < 1.3 && Math.abs(z + 0.5 - s.z) < 1.3));
+  }
+  placeBreaker(x: number, z: number) {
+    this.breaker = { x: x + 0.5, z: z + 0.5, floorY: this.groundY[z * this.w + x] };
+  }
   private propSpan(kind: PropKind, rot: number): [number, number] {
     if (kind === 'pc' || kind === 'bed') return [2, 2];
     if (kind === 'sofa' || kind === 'desk' || kind === 'bar' || kind === 'locker') return rot % 2 === 0 ? [2, 1] : [1, 2];
@@ -151,7 +194,7 @@ class Builder {
     }
     const blockWin = high || kind === 'sofa' || kind === 'desk' || kind === 'bed' || kind === 'bar' || kind === 'pc';
     for (let iz = cz; iz < cz + d; iz++) for (let ix = cx; ix < cx + w; ix++) {
-      if (this.get(ix, iz) !== FLOOR || this.nearDoor(ix, iz) || this.nearBreaker(ix, iz)) return false;
+      if (this.get(ix, iz) !== FLOOR || this.nearDoor(ix, iz) || this.nearBreaker(ix, iz) || this.nearElevator(ix, iz)) return false;
       if (blockWin && this.nearWindow(ix, iz)) return false;
       if (this.bomb && Math.abs(ix + 0.5 - this.bomb.x) < 1.5 && Math.abs(iz + 0.5 - this.bomb.z) < 1.5) return false;
     }
@@ -162,7 +205,7 @@ class Builder {
       for (let iz = cz; iz < cz + d; iz++) for (let ix = cx; ix < cx + w; ix++) this.set(ix, iz, FLOOR);
       return false;
     }
-    this.props.push({ cx, cz, kind, rot, w, d });
+    this.props.push({ cx, cz, kind, rot, w, d, floorY: this.groundY[cz * this.w + cx] });
     return true;
   }
   /** Rot that puts a prop's back against the wall on that side (0 north, 1 east, 2 south, 3 west). */
@@ -532,6 +575,50 @@ const SPECS: Spec[] = [
       return { x: sx, z: sz, yaw: 0 };
     },
   },
+  {
+    name: 'Kista Tech Center', theme: 'tower', objective: 'hostage', w: 58, h: 40, suspects: 8, civs: 7,
+    brief: 'A coordinated crew has seized the Kista Tech Center. Clear a dense ground-floor office, then push up the full stairwell or use the service elevator to reach the command floor and rescue the VIP.',
+    build(b) {
+      // Ground floor: six linked rooms around a service spine.
+      b.room(3, 3, 11, 10, 'Main Atrium', 'lobby', 'tile', false, 0);
+      b.room(13, 3, 13, 10, 'Records & HR', 'office', 'carpet', true, 0);
+      b.room(3, 12, 11, 10, 'Briefing & Training', 'office', 'wood', true, 0);
+      b.room(13, 12, 13, 10, 'Operations Floor', 'office', 'carpet', true, 0);
+      b.room(3, 21, 11, 12, 'Evidence Intake', 'storage', 'concrete', true, 0);
+      b.room(13, 21, 13, 12, 'Armory & Dispatch', 'office', 'tile', true, 0);
+      b.room(25, 3, 8, 30, 'F1 Service Spine', 'corridor', 'tile', false, 0);
+
+      // The command floor occupies the east wing at a real 3m elevation.
+      b.room(33, 3, 11, 11, 'Control Room · F2', 'office', 'carpet', true, 3);
+      b.room(43, 3, 13, 11, 'Executive Suite · F2', 'office', 'wood', true, 3);
+      b.room(33, 13, 23, 5, 'Command Spine · F2', 'corridor', 'tile', false, 3);
+      b.room(33, 17, 11, 16, 'Server Farm · F2', 'storage', 'concrete', true, 3);
+      b.room(43, 17, 13, 16, 'Hostage Wing · F2', 'bedroom', 'wood', true, 3);
+
+      // An 8m stair flight rises 3m; it is a real walkable route in both directions.
+      b.staircase(25.5, 15.5, 33.5, 15.5, 2.3, 0, 3);
+
+      // Door graph: several loops and side rooms on both storeys.
+      b.door(8, 12); b.door(13, 7); b.door(13, 17); b.door(8, 21); b.door(13, 27);
+      b.door(25, 7); b.door(25, 17); b.door(25, 27, true);
+      b.door(8, 32); b.door(3, 17);
+      b.door(43, 8); b.door(38, 13); b.door(49, 13);
+      b.door(38, 17); b.door(49, 17); b.door(43, 24, true); b.door(55, 27);
+      b.win(7, 32); b.win(10, 32); b.win(36, 32); b.win(48, 32); b.win(51, 32);
+
+      // Paired stops share a visible, interactive service lift; stairs remain available as a second route.
+      b.elevator('Service elevator',
+        { x: 28.5, z: 7.5, floorY: 0, label: 'FLOOR 1', yaw: 0 },
+        { x: 35.5, z: 15.5, floorY: 3, label: 'FLOOR 2', yaw: 0 },
+      );
+      b.placeBreaker(5, 25);
+      b.entries.push(
+        { name: 'South Atrium Entrance', x: 8.5, z: 36.2, yaw: 0 },
+        { name: 'West Emergency Door', x: 1.9, z: 17.5, yaw: Math.PI / 2 },
+      );
+      return { x: 8.5, z: 36.2, yaw: 0 };
+    },
+  },
 ];
 
 export const MISSIONS = SPECS.map(s => ({ name: s.name, brief: s.brief, suspects: s.suspects, civs: s.civs, objective: s.objective }));
@@ -562,7 +649,7 @@ export function buildLevel(index: number, seed: number): Level {
       const r = rooms[ri % rooms.length];
       const x = r.x + 1 + Math.floor(rng() * (r.w - 2)), z = r.z + 1 + Math.floor(rng() * (r.h - 2));
       const k = z * b.w + x;
-      if (b.get(x, z) !== FLOOR || used.has(k) || b.nearDoor(x, z, 1)) continue;
+      if (b.get(x, z) !== FLOOR || used.has(k) || b.nearDoor(x, z, 1) || b.nearElevator(x, z)) continue;
       // Keep spawned people out of the bomb's collision footprint; the runtime physics layer also
       // enforces this for manual/extra spawns, but generated positions should start cleanly too.
       if (b.bomb && Math.hypot(x + 0.5 - b.bomb.x, z + 0.5 - b.bomb.z) < 0.82) continue;
@@ -572,6 +659,27 @@ export function buildLevel(index: number, seed: number): Level {
     return out;
   };
   const suspects = place(spec.suspects).map((s, i) => ({ ...s, hostage: spec.objective === 'hostage' && i === 0 }));
+  // The Kista operation's VIP is always held in the upper-floor hostage wing, so the stair/elevator
+  // route is part of the objective instead of optional scenery.
+  if (spec.name === 'Kista Tech Center' && suspects[0]) {
+    const hostRoom = b.rooms.find(r => r.name === 'Hostage Wing · F2');
+    if (hostRoom) {
+      const old = suspects[0]; used.delete(Math.floor(old.z) * b.w + Math.floor(old.x));
+      const spots: { x: number; z: number; d: number }[] = [];
+      for (let z = hostRoom.z + 1; z < hostRoom.z + hostRoom.h - 1; z++) for (let x = hostRoom.x + 1; x < hostRoom.x + hostRoom.w - 1; x++) {
+        const key = z * b.w + x;
+        if (b.get(x, z) !== FLOOR || used.has(key) || b.nearDoor(x, z, 1)) continue;
+        const d = Math.hypot(x + 0.5 - (hostRoom.x + hostRoom.w / 2), z + 0.5 - (hostRoom.z + hostRoom.h / 2));
+        spots.push({ x, z, d });
+      }
+      spots.sort((a, b) => a.d - b.d);
+      const spot = spots[0];
+      if (spot) {
+        used.add(spot.z * b.w + spot.x);
+        suspects[0] = { x: spot.x + 0.5, z: spot.z + 0.5, room: hostRoom.id, hostage: true };
+      }
+    }
+  }
   const civs = place(spec.civs).map((c, i) => {
     if (spec.objective === 'hostage' && i === 0 && suspects[0]) {
       return { x: suspects[0].x, z: suspects[0].z, room: suspects[0].room, vip: true };
@@ -581,8 +689,8 @@ export function buildLevel(index: number, seed: number): Level {
   const objective: ObjectiveKind = b.bomb ? 'bomb' : spec.objective;
   return {
     index, name: spec.name, brief: spec.brief, theme: spec.theme, objective,
-    w: b.w, h: b.h, cells: b.cells, doors: b.doors, doorAt, windows: b.windows,
-    rooms: b.rooms, props: b.props, propAt, breaker: b.breaker, bomb: b.bomb,
+    w: b.w, h: b.h, cells: b.cells, groundY: b.groundY, doors: b.doors, doorAt, windows: b.windows,
+    rooms: b.rooms, props: b.props, propAt, staircases: b.staircases, elevators: b.elevators, breaker: b.breaker, bomb: b.bomb,
     vehicle: b.vehicle, extBoxes: b.extBoxes, extCircles: b.extCircles,
     playerSpawn: spawn, entries, suspects, civs,
   };

@@ -1,4 +1,4 @@
-import { Level, DOOR, FLOOR, OUT, Pt } from './level';
+import { Level, DOOR, FLOOR, OUT, Pt, groundHeightAt } from './level';
 
 export function cellWalkable(l: Level, cx: number, cz: number) {
   if (cx < 0 || cz < 0 || cx >= l.w || cz >= l.h) return false;
@@ -14,8 +14,13 @@ export function walkLine(l: Level, a: Pt, b: Pt) {
   const clearance = 0.4;
   const n = Math.ceil(d / 0.15), px = (-dz / d) * clearance, pz = (dx / d) * clearance;
   const ac = Math.floor(a.z) * l.w + Math.floor(a.x), bc = Math.floor(b.z) * l.w + Math.floor(b.x);
+  let previousHeight = groundHeightAt(l, a.x, a.z);
   for (let i = 0; i <= n; i++) {
     const x = a.x + (dx * i) / n, z = a.z + (dz * i) / n;
+    const height = groundHeightAt(l, x, z);
+    // Smoothing must not shortcut across a sheer floor edge; a stair flight changes height gradually.
+    if (i > 0 && Math.abs(height - previousHeight) > 0.1) return false;
+    previousHeight = height;
     for (const s of [-1, 0, 1]) {
       const cx = Math.floor(x + px * s), cz = Math.floor(z + pz * s);
       if (!cellWalkable(l, cx, cz)) return false;
@@ -60,6 +65,8 @@ export function findPath(l: Level, from: Pt, to: Pt, blocked?: (cx: number, cz: 
       const nx = cx + dx, nz = cz + dz;
       if (!cellWalkable(l, nx, nz)) continue;
       const nk = nz * w + nx; if (closed[nk]) continue;
+      const fromFloor = groundHeightAt(l, cx + 0.5, cz + 0.5), toFloor = groundHeightAt(l, nx + 0.5, nz + 0.5);
+      if (Math.abs(toFloor - fromFloor) > 0.46) continue; // floors only connect through a traversable stair flight
       if (blocked && nk !== t && blocked(nx, nz)) continue;
       if (dx && dz) { if (!cellWalkable(l, cx + dx, cz) || !cellWalkable(l, cx, cz + dz) || isDoor(l, nx, nz) || isDoor(l, cx, cz) || isDoor(l, cx + dx, cz) || isDoor(l, cx, cz + dz)) continue; }
       const ng = g[cur] + c + (isDoor(l, nx, nz) ? 2.5 : 0);
