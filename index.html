@@ -34,6 +34,20 @@
   <div id="hitmark"></div>
   <div id="dmg"></div><div id="suppress"></div><div id="flash"></div>
   <div id="objective"></div>
+  <div id="perfHud" class="hidden"></div>
+  <div id="training" class="hidden">
+    <div class="tr-head">TRAINING · FIRST DEPLOYMENT</div>
+    <div class="tr-sub">No live threats. Practise the controls and the rules of engagement.</div>
+    <div class="tr-row" data-tr="move"><i>W A S D</i><span>Move from the entry point</span></div>
+    <div class="tr-row" data-tr="aim"><i>RMB</i><span>Aim down the sights</span></div>
+    <div class="tr-row" data-tr="shout"><i>CAPS</i><span>Shout a compliant challenge</span></div>
+    <div class="tr-row" data-tr="order"><i>TAB</i><span>Give the squad an order</span></div>
+    <div class="tr-row" data-tr="crouch"><i>C</i><span>Crouch behind cover</span></div>
+    <div class="tr-row" data-tr="reload"><i>R</i><span>Reload your weapon</span></div>
+    <div class="tr-note">Arrests score higher than bodies. Challenge first, then use the least force that works.</div>
+    <div id="trainingDone" class="tr-done hidden">TRAINING COMPLETE · controls and ROE confirmed</div>
+    <button id="btnTrainingEnd" type="button">END TRAINING</button>
+  </div>
   <div id="compliance"></div>
   <div id="compass">N · 000°</div>
   <div id="bombtimer" class="hidden"></div>
@@ -110,6 +124,7 @@
         </div>
       </div>
       <button id="btnStartMission" class="deploybtn">START MISSION</button>
+      <button id="btnTraining" type="button" class="trainingbtn"><span>TRAINING · CONTROLS &amp; ROE</span><small>optional</small></button>
       <button id="btnDailyRaid" type="button" class="dailybtn"><span>DAILY RAID · IRONMAN</span><small id="dailyBestBadge"></small></button>
     </section>
 
@@ -294,6 +309,7 @@
   <div id="debSquadMvp" class="deb-mvp hidden"></div>
   <div class="debgrid">
     <div>
+      <div id="debRoe" class="deb-roe"></div>
       <table id="debTable"></table>
       <div id="debNotes"></div>
     </div>
@@ -323,7 +339,7 @@
     <div><b>Lean / peek around cover</b><span>Hold <kbd>Q</kbd> / <kbd>E</kbd></span></div>
   </div>
   <p class="note">Arrests score far higher than bodies. Announce yourself, give them a chance to surrender, and watch the corners.</p>
-  <div class="row"><button id="btnFirstRunOk" class="primary">UNDERSTOOD — DEPLOY</button></div>
+  <div class="row"><button id="btnFirstRunTraining">START TRAINING</button><button id="btnFirstRunOk" class="primary">UNDERSTOOD — DEPLOY</button></div>
 </div></div>
 
 <div id="help" class="screen hidden"><div class="panel wide scroll">
@@ -335,6 +351,7 @@
     <div><kbd>O</kbd> FiberCam Live Cam (door) / Share gear</div><div><kbd>U</kbd> Breach Charge · <kbd>Y</kbd> Wedge door · <kbd>,</kbd> Acoustic Sensor</div><div><kbd>N</kbd> Night Vision (NVG + IR Laser)</div>
     <div><kbd>V</kbd> (hold) Talk to your team · <kbd>CapsLock</kbd> Shout compliance</div><div><kbd>T</kbd> Flashlight · <kbd>L</kbd> Tactical Laser · <kbd>K</kbd> Bodycam · <kbd>M</kbd> Map</div>
     <div><kbd>I</kbd> Fire Mode (Auto/Semi) · <kbd>P</kbd> Helmet Cam PiP · <kbd>F8</kbd> Dispatch</div>
+    <div><kbd>F3</kbd> Performance overlay (FPS, frame time, draw calls)</div>
     <div><kbd>Middle Click</kbd> Tactical 3D Ping · <kbd>J</kbd> Sync Breach Countdown</div>
     <div><kbd>B</kbd> Voice chat: microphone on/off (online)</div><div><kbd>H</kbd> Radial Command Wheel</div>
     <div><kbd>Enter</kbd> Type an order (if you have no microphone)</div><div><kbd>Tab</kbd> Choose team for the quick keys</div>

@@ -84,6 +84,8 @@ export interface SensorPing { x: number; z: number; y?: number; kind: 'suspect' 
 
 export interface CoopMods {
   blackout?: boolean;
+  /** Optional tutorial run: the world stays quiet so the player can practise controls and orders. */
+  training?: boolean;
   extraHostiles?: number;
   pistolOnly?: boolean;
   friendlyFire?: boolean;
@@ -1939,6 +1941,7 @@ export class Sim {
     }
   }
   private pickThreat(o: Actor): Actor | null {
+    if (this.mods.training) return null; // training: the squad follows orders but nobody opens fire
     if (this.squadHostile) { // the team stopped taking orders: the lead is the target now
       let worst: Actor | null = null, wd = 1e9;
       for (const p of this.players) {
@@ -2081,6 +2084,7 @@ export class Sim {
   }
   private updateSuspect(s: Actor, dt: number) {
     if (s.stun > 0) { s.stun -= dt; s.moving = false; return; }
+    if (this.mods.training) { s.moving = false; s.target = null; return; } // no live threats during training
     if (s.surrendered) {
       if (s.fakeSurrender && !s.claimedBy && !this.players.some(pl => pl.cuff === s)) {
         s.fakeT -= dt;
@@ -2139,6 +2143,7 @@ export class Sim {
   }
   private updateCiv(c: Actor, dt: number) {
     if (c.stun > 0) { c.stun -= dt; c.moving = false; return; }
+    if (this.mods.training) { c.moving = false; return; } // civilians stay put during training
     const police = (r: number) => this.actors.some(o => (o.kind === 'player' || o.kind === 'officer') && o.alive && dist(o, c) < r && this.los(o.x, o.z, c.x, c.z));
     if (c.surrendered) {
       c.unwatchedT = c.claimedBy || this.players.some(pl => pl.cuff === c) || police(11) ? 0 : c.unwatchedT + dt;

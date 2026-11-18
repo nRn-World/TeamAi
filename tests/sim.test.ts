@@ -174,6 +174,15 @@ function play(mission: number, seed: number, verbose = false) {
   host.damage(host.players[1], 9999, host.suspects[0], false); host.damage(host.players[2], 9999, host.suspects[0], false); ok(!!host.over && !host.over.win, 'mission fails when all players are down');
   console.log('co-op mirror test done');
 }
+// ---- training mode: no live threats while the player practises ----
+{
+  const train = new Sim(0, 1, 0, 1, { training: true });
+  const hp = train.player.hp;
+  for (let i = 0; i < 5 * 30; i++) { train.update(1 / 30); train.events.length = 0; }
+  ok(train.player.hp === hp && !train.suspects.some(s => s.hostile) && !train.over,
+    'training mode keeps suspects and civilians quiet and the trainee unhurt');
+}
+
 // ---- Kista Tech Center: two-storey navigation, interactions, effects and co-op teleports ----
 {
   const mission = MISSIONS.findIndex(m => m.name === 'Kista Tech Center');
@@ -232,6 +241,22 @@ function play(mission: number, seed: number, verbose = false) {
       for (let i = 0; i < 90; i++) walker.movePlayer(0.1, 0);
       ok(groundHeightAt(walker.level, player.x, player.z) > 2.9,
         'player collision movement can walk up the rendered staircase to F2');
+
+      // The player route also has to work with the live squad behind it: follow uses the player
+      // trail and has to cross the same graded stair cells without a floor-height jump.
+      const squad = new Sim(mission, 12, 0), lead = squad.player;
+      lead.x = 24.2; lead.z = 15.5; lead.yaw = Math.PI / 2;
+      squad.officers.forEach((o, i) => { o.x = 22.8; o.z = 14.2 + i * 0.9; o.path = null; o.goal = null; });
+      squad.command({ team: 'ALL', action: 'follow' });
+      for (let i = 0; i < 600; i++) {
+        lead.yaw = Math.PI / 2;
+        if (squad.floorY(lead.x, lead.z) < 2.95 && lead.x < stair.x1 + 0.7) squad.movePlayer(0.03, 0);
+        squad.update(1 / 30);
+        squad.events.length = 0;
+      }
+      const followersUp = squad.officers.filter(o => squad.floorY(o.x, o.z) > 2.9).length;
+      ok(squad.floorY(lead.x, lead.z) > 2.9 && followersUp === squad.officers.length,
+        `the live squad follows the player up the staircase (${followersUp}/${squad.officers.length} on F2)`);
 
       const floors = new Sim(mission, 9), lower = { x: stair.x0, z: stair.z0 }, upper = { x: stair.x1, z: stair.z1 };
       ok(!floors.sameFloor(lower, upper) && !floors.los(lower.x, lower.z, upper.x, upper.z),

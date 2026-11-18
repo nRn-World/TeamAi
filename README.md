@@ -10,6 +10,7 @@ npm run dev      # http://localhost:5173 – use Chrome or Edge for voice contro
 npm test         # headless simulation + tests of the voice-command parser
 npm run playtest # fast headless playthrough used as a CI gate (a few seconds)
 npm run build    # production build in dist/
+npm run smoke:browser # Chromium smoke at High (shadows, post FX, F3 metrics)
 ```
 
 ## Structure
@@ -39,7 +40,25 @@ Code dependencies: three.js (MIT), Vite (MIT), TypeScript (Apache-2.0), PeerJS (
 - **Ironman.** A toggle in the Armory: no restarts (the pause menu hides *Restart mission*) and a failed
   operation earns no XP — but the injuries still come home. The daily raid always runs under the same rule.
 - **Onboarding.** The first launch shows a *First deployment* card with the six controls that matter and
-  the scoring rule (arrests pay, bodies do not).
+  the scoring rule (arrests pay, bodies do not). *START TRAINING* (or `?training=1`) runs an optional,
+  repeatable first deployment with no live threats and a six-step controls/ROE checklist; finishing it
+  marks the tutorial as done, while *END TRAINING* returns to the menu without changing progress.
+
+## Feedback, performance and stairs
+
+- **Debrief.** The debrief keeps the score, awards, notes and replay, and adds a *Rules of engagement*
+  block: arrests, unauthorized force, civilians killed by police, officers down, evidence and non-lethal
+  hits. It ends in CLEAN or REVIEW with a short explanation of what to correct.
+- **High performance.** `F3` (or `?perf=1`) shows FPS, p95 frame time, draw calls, triangles and the
+  active render scale. On High/Ultra the render scale adapts between 70 % and 100 % when frame time
+  stays above 24 ms, so a slower GPU keeps a playable frame rate; the menu and mission start reset it.
+- **Smoke test.** `tools/browser-smoke.mts` boots the production build at High in Chromium/SwiftShader,
+  checks shadows, post FX, first-person arms and the perf probe, and runs in GitHub Actions with a
+  screenshot artifact. It intentionally reports timings on the software renderer instead of enforcing
+  an FPS threshold.
+- **Stairs.** Kista's stair flights are walkable by both the player and the live squad; the minimap
+  marks stair endpoints with their floor (`F1`, `F2`) and the HUD shows `STAIRS ↑/↓` when you are on
+  a flight.
 
 ## Bomb operations and insertion points
 

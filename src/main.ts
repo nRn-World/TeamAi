@@ -133,6 +133,10 @@ class Game {
   breachBannerT = 0; mutinyT = 0;
   private lobbyVoiceTimer = 0;
   state: 'menu' | 'play' | 'pause' | 'end' = 'menu'; mission = 0; seed = 1;
+  perfOn = params.has('perf'); perfSamples: number[] = []; perfRender: number[] = []; perfFrame = 0; perfT = 0; perfFps = 0; perfMs = 0; perfP95 = 0;
+  renderScale = 1; perfGuardT = 0; perfGuardAt = 0; perfGuardOn = !params.has('noperfguard');
+  trainingOn = false; trainingDone = false; trainingStart = { x: 0, z: 0 };
+  trainingSteps = { move: false, aim: false, shout: false, order: false, crouch: false, reload: false };
   yaw = 0; pitch = 0; keys = new Set<string>(); mouseDown = false; eye = 1.62; bob = 0; stepAcc = 0; recoil = 0; vmKick = 0; sway = new THREE.Vector2();
   weapon = 0; ammo = [30, 15]; reserve = [150, 60]; fireCd = 0; reloadT = 0; semiLock = false; torchOn = true; laserOn = true; fireMode: 'auto' | 'semi' = 'auto'; mapOn = true;
   nvgOn = false; bodycamOn = false; wheelOn = false; nvgLight: THREE.AmbientLight | null = null; ambLight: THREE.AmbientLight | null = null;
@@ -196,7 +200,8 @@ class Game {
     window.addEventListener('pointerdown', unlockMenuAudio, { once: true });
     window.addEventListener('keydown', unlockMenuAudio, { once: true });
     requestAnimationFrame(() => this.frame());
-    if (AUTO) this.start(+(params.get('auto') || 0), +(params.get('seed') || 1));
+    if (params.has('training')) this.startTraining();
+    else if (AUTO) this.start(+(params.get('auto') || 0), +(params.get('seed') || 1));
   }
   syncMenuMusic() {
     void this.audio.setMenuMusic(this.state === 'menu' && !!S.music && !AUTO);
@@ -209,13 +214,14 @@ class Game {
   resize() {
     const w = innerWidth, h = innerHeight;
     const cap = S.qual >= 3 ? 2 : S.qual === 2 ? 1.5 : S.qual === 1 ? 1.15 : 1;
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, cap));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, cap) * this.renderScale);
     this.renderer.setSize(w, h, false);
     this.camera.aspect = this.viewCam.aspect = w / h; this.camera.updateProjectionMatrix(); this.viewCam.updateProjectionMatrix();
     this.post?.setSize(w, h, this.renderer.getPixelRatio());
   }
   applySettings() {
     ActorView.detailed = S.qual > 0;
+    this.renderScale = 1; this.perfGuardT = 0; this.perfGuardAt = 0;
     this.post?.setQuality(S.qual);
     this.renderer.shadowMap.enabled = S.qual >= 2;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -424,6 +430,8 @@ class Game {
     ($('btnFirstRunOk') as HTMLButtonElement).onclick = () => {
       career.tutorialDone = true; saveCareer(career); show('firstrun', false); this.audio.ui();
     };
+    ($('btnFirstRunTraining') as HTMLButtonElement).onclick = () => this.startTraining();
+    ($('btnTraining') as HTMLButtonElement).onclick = () => this.startTraining();
     if (!career.tutorialDone) show('firstrun', true);
     this.refreshCareerUi();
     this.menu.setHeroLoadout(S.primary, S.secondary);
@@ -906,6 +914,7 @@ class Game {
       if (next >= MISSIONS.length || !missionUnlocked(best, next)) return;
       show('debrief', false); this.isDaily = false; this.newRound(next);
     });
+    click('btnTrainingEnd', () => this.endTraining());
     click('btnDispatchToggle', () => { show('pause', false); this.state = 'play'; this.toggleDispatch(true); });
     click('btnCloseDispatch', () => { this.toggleDispatch(false); if (this.state === 'play') this.lock(); });
     document.querySelectorAll<HTMLElement>('#dispatchPanel [data-dp]').forEach(b => b.onclick = () => {
@@ -950,7 +959,43 @@ class Game {
       void this.ai.ensureLoaded(S.aiModel);
     };
   }
-  toMenu() { this.stopReplay(); this.dispatchPlaying = false; this.audio.stopDispatch(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn', 'mutinyWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); this.updateRankDock(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
+  toMenu() { this.stopReplay(); this.trainingOn = false; this.renderScale = 1; this.perfGuardT = 0; this.perfGuardAt = 0; this.resize(); show('training', false); this.dispatchPlaying = false; this.audio.stopDispatch(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn', 'mutinyWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); this.updateRankDock(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
+  // ---------------- optional training ----------------
+  startTraining() {
+    this.audio.init(); this.audio.ui();
+    this.trainingOn = true; this.trainingDone = false;
+    this.trainingSteps = { move: false, aim: false, shout: false, order: false, crouch: false, reload: false };
+    this.isDaily = false;
+    show('trainingDone', false);
+    for (const id of ['firstrun', 'menu', 'help', 'settings', 'brief']) show(id, false);
+    void this.start(0, 1, 1, 0, 0, [], { training: true });
+  }
+  endTraining() {
+    this.trainingOn = false; show('training', false); this.toMenu();
+  }
+  updateTraining() {
+    const sim = this.sim; if (!sim || !this.trainingOn) return;
+    const p = sim.player;
+    // Count the input immediately; a trainee can be standing against a door or a wall and still
+    // be practising the movement keys.
+    if (this.keys.has('KeyW') || this.keys.has('KeyA') || this.keys.has('KeyS') || this.keys.has('KeyD') || Math.hypot(p.x - this.trainingStart.x, p.z - this.trainingStart.z) > 0.35) this.trainingSteps.move = true;
+    if (this.ads) this.trainingSteps.aim = true;
+    if (p.crouch) this.trainingSteps.crouch = true;
+    for (const el of document.querySelectorAll<HTMLElement>('[data-tr]')) {
+      const key = el.dataset.tr as keyof typeof this.trainingSteps;
+      el.classList.toggle('done', !!this.trainingSteps[key]);
+    }
+    const done = Object.values(this.trainingSteps).filter(Boolean).length;
+    const total = Object.keys(this.trainingSteps).length;
+    if (done === total && !this.trainingDone) {
+      this.trainingDone = true; career.tutorialDone = true; saveCareer(career);
+      show('trainingDone', true); this.audio.ok();
+      this.log('Training complete: controls and rules of engagement confirmed.', 'me');
+    }
+    const obj = $('objective');
+    if (obj) obj.innerHTML = `TRAINING · ${done}/${total} COMPLETE`;
+  }
+
   // ---------------- online co-op ----------------
   private currentMods(): CoopMods & { daily?: boolean } {
     const black = ($('modBlackout') as HTMLInputElement).checked;
@@ -1233,7 +1278,7 @@ class Game {
       setLoad(62, 'Building operation environment...');
       await nextFrame();
 
-      this.mission = mission; this.seed = seed; this.audio.init(); void this.audio.setMenuMusic(false); this.audio.stopDispatch();
+      this.mission = mission; this.seed = seed; this.renderScale = 1; this.perfGuardT = 0; this.perfGuardAt = 0; this.resize(); this.audio.init(); void this.audio.setMenuMusic(false); this.audio.stopDispatch();
       document.body.classList.remove('menu-wait');
       this.netTargets.clear(); this.pings = []; this.breachBannerT = 0; this.mutinyT = 0;
       // career roster: injured officers sit out, rookies take their place (solo only)
@@ -1281,8 +1326,15 @@ class Game {
       setLoad(100, 'Deployment ready.');
       await nextFrame();
       this.state = 'play'; this.last = performance.now(); $('log').innerHTML = ''; $('heard').textContent = ''; $('parsed').textContent = '';
+      this.perfFrame = 0; this.perfSamples = []; this.perfRender = []; this.perfT = 0;
       this.ai.resetHistory();
-      this.buildMap(); show('loading', false); show('menu', false); show('hud', true); this.updateHud(true);
+      this.buildMap(); show('loading', false); show('menu', false); show('hud', true); this.togglePerf(this.perfOn);
+      if (this.trainingOn) {
+        this.trainingStart = { x: sim.player.x, z: sim.player.z };
+        this.trainingDone = false;
+        show('training', true); this.updateTraining();
+      } else show('training', false);
+      this.updateHud(true);
       if (S.mic && !AUTO) this.voice.start();
       if (S.ai && !mp && !AUTO) void this.ai.ensureLoaded(S.aiModel);
       this.aiState(this.ai.state, this.ai.state === 'loading' ? this.ai.progress : this.ai.error);
@@ -1356,7 +1408,7 @@ class Game {
         if (sp?.alive && !sp.downed && !this.typing && !this.wheelOn && this.fireCd <= 0 && this.reloadT <= 0 && this.ammo[this.weapon] > 0 && !this.semiLock && !this.preShot && !ws.taser) { this.preShot = true; this.audio.shot(0, 0, true, this.activeGun(ws)); }
       }
       if (e.button === 1) { e.preventDefault(); this.ping(); }
-      if (e.button === 2) this.ads = true;
+      if (e.button === 2) { this.ads = true; if (this.trainingOn) { this.trainingSteps.aim = true; this.updateTraining(); } }
     });
     document.addEventListener('contextmenu', e => { if (this.state === 'play') e.preventDefault(); });
     document.addEventListener('mouseup', e => { if (e.button === 0) { this.mouseDown = false; this.semiLock = false; } if (e.button === 2) this.ads = false; });
@@ -1366,7 +1418,9 @@ class Game {
       if (this.state !== 'play') return;
       const code = this.logicalCode(e.code);
       if (code === 'Tab' || code === 'Space' || code === 'CapsLock') e.preventDefault();
-      if (e.repeat) return; this.keys.add(code); this.onKey(code, e.shiftKey);
+      if (e.repeat) return; this.keys.add(code);
+      if (this.trainingOn && (code === 'KeyW' || code === 'KeyA' || code === 'KeyS' || code === 'KeyD')) { this.trainingSteps.move = true; this.updateTraining(); }
+      this.onKey(code, e.shiftKey);
     });
     document.addEventListener('wheel', e => {
       if (this.state !== 'play' || !this.ads || !document.pointerLockElement) return;
@@ -1418,6 +1472,7 @@ class Game {
       case 'KeyH': this.toggleWheel(); if (!this.wheelOn) this.lock(); break;
       case 'KeyB': if (this.net.online) { this.net.setMuted(!this.net.muted); this.audio.ui(); } break;
       case 'KeyR': {
+        if (this.trainingOn) { this.trainingSteps.reload = true; this.updateTraining(); }
         const now = performance.now();
         const isDouble = now - this.lastRT < 360;
         this.lastRT = now;
@@ -1453,6 +1508,7 @@ class Game {
         break;
       }
       case 'KeyM': this.mapOn = !this.mapOn; break;
+      case 'F3': this.togglePerf(); break;
       case 'KeyC': if (sim.player.prone) { sim.player.prone = false; sim.player.crouch = true; } else sim.player.crouch = !sim.player.crouch; break;
       case 'KeyZ': sim.player.prone = !sim.player.prone; sim.player.crouch = false; break;
       case 'KeyX': this.slow = !this.slow; this.audio.ui(); break;
@@ -1579,7 +1635,7 @@ class Game {
     p.textContent = labels.length ? `AI › ${labels.join(' · ')}` : `AI › ${speaker ? speaker.name.toUpperCase() : 'SWAT'} RADIO`;
     const heardTxt = $('heard').textContent?.replace(/^«\s*|\s*»$/g, '') || '';
     if (heardTxt) this.showRadioCard(heardTxt, labels.join(' · ') || 'RADIO REPLY');
-    if (res.commands.length && !anyOk) this.audio.fail(); else this.audio.ok();
+    if (res.commands.length && !anyOk) this.audio.fail(); else { this.audio.ok(); if (this.trainingOn && res.commands.length) { this.trainingSteps.order = true; this.updateTraining(); } }
     if (speaker && res.reply) sim.say(speaker, res.reply);
     if (res.relayTo != null && res.relayMsg) {
       setTimeout(() => {
@@ -1624,7 +1680,7 @@ class Game {
     p.textContent = labels.join(' · ');
     const heardTxt = $('heard').textContent?.replace(/^«\s*|\s*»$/g, '') || '';
     if (heardTxt && labels.length) this.showRadioCard(heardTxt, labels.join(' · '));
-    if (anyOk) this.audio.ok(); else this.audio.fail();
+    if (anyOk) { this.audio.ok(); if (this.trainingOn) { this.trainingSteps.order = true; this.updateTraining(); } } else this.audio.fail();
     this.updateHud(true);
   }
   exec(cmd: Command, byKey: boolean) {
@@ -1638,7 +1694,7 @@ class Game {
   }
   private shoutT = 0;
   shout(tts: boolean) {
-    const sim = this.sim!; if (!sim.player.alive) return; if (this.mirror) this.net.send({ t: 'shout' }); else sim.playerShout();
+    const sim = this.sim!; if (!sim.player.alive) return; if (this.trainingOn) { this.trainingSteps.shout = true; this.updateTraining(); } if (this.mirror) this.net.send({ t: 'shout' }); else sim.playerShout();
     void tts; const now = performance.now(); if (now - this.shoutT > 900) { this.shoutT = now; this.speak(SHOUTS[0], null, { pitch: 0.7, rate: 1.3, gain: 1 }); } // your own voice yells the challenge, also when you gave it by microphone
     this.log('YOU: Police! Drop the weapon!', 'me');
   }
@@ -2097,6 +2153,22 @@ class Game {
     } else show('debSquadMvp', false);
     this.updateDebReadyUi();
     $('debTable').innerHTML = sc.parts.filter(p => p.max > 0 || p.pts < 0).map(p => `<tr><td>${p.label}</td><td class="${p.pts < 0 ? 'neg' : ''}">${p.pts}${p.max ? ' / ' + p.max : ''}</td></tr>`).join('') + `<tr class="total"><td>Total</td><td>${sc.total} / 100</td></tr>`;
+    const st = sim.stats;
+    const cleanRoe = st.unauthorized === 0 && st.civsKilledByPolice === 0;
+    const roeHint = cleanRoe
+      ? (st.officersDown ? 'Use of force stayed inside policy; keep the squad behind cover next time.' : 'Challenges, arrests and controlled force — a clean tactical result.')
+      : st.civsKilledByPolice > 0
+        ? 'A civilian was killed by police. Identify the target and challenge before firing.'
+        : 'One or more suspects were engaged without a challenge. Shout first and use less-lethal tools.';
+    const roeCards: [string, string, string][] = [
+      ['SUSPECTS ARRESTED', `${st.suspectsArrested}/${sim.suspects.length}`, st.suspectsArrested === sim.suspects.length ? 'good' : 'warn'],
+      ['UNAUTHORIZED FORCE', String(st.unauthorized), st.unauthorized ? 'bad' : 'good'],
+      ['CIVILIANS KILLED BY POLICE', String(st.civsKilledByPolice), st.civsKilledByPolice ? 'bad' : 'good'],
+      ['OFFICERS DOWN', String(st.officersDown), st.officersDown ? 'warn' : 'good'],
+      ['EVIDENCE BAGGED', sim.evidence.length ? `${st.evidenceSecured ?? 0}/${sim.evidence.length}` : '—', 'good'],
+      ['NON-LETHAL HITS', String(st.nonLethalHits), st.nonLethalHits ? 'good' : 'warn'],
+    ];
+    $('debRoe').innerHTML = `<div class="roe-head ${cleanRoe ? 'good' : 'bad'}"><b>RULES OF ENGAGEMENT · ${cleanRoe ? 'CLEAN' : 'REVIEW'}</b><span>${roeHint}</span></div><div class="roe-grid">${roeCards.map(([label, value, tone]) => `<div class="roe-card ${tone}"><span>${label}</span><b>${value}</b></div>`).join('')}</div>`;
     $('debNotes').innerHTML = sim.debriefNotes().map(n => `<div>• ${n}</div>`).join('');
     // ---- career: XP, unlocks, injuries, campaign order ----
     const solo = !this.net.online;
@@ -2287,10 +2359,21 @@ class Game {
     for (const stair of sim.level.staircases) {
       g.strokeStyle = '#8ee7ff'; g.lineWidth = 1.7; g.setLineDash([3, 2]);
       g.beginPath(); g.moveTo(stair.x0 * k, stair.z0 * k); g.lineTo(stair.x1 * k, stair.z1 * k); g.stroke(); g.setLineDash([]);
+      // Mark the two ends with their floor and travel direction, so a stairwell is readable
+      // without guessing which dashed line goes up or down.
+      const low = stair.fromY <= stair.toY ? { x: stair.x0, z: stair.z0, y: stair.fromY } : { x: stair.x1, z: stair.z1, y: stair.toY };
+      const high = stair.fromY <= stair.toY ? { x: stair.x1, z: stair.z1, y: stair.toY } : { x: stair.x0, z: stair.z0, y: stair.fromY };
+      const floorName = (y: number) => y > 0.7 ? 'F2' : 'F1';
+      g.font = '600 7px ui-monospace, Consolas, monospace'; g.textAlign = 'center';
+      g.fillStyle = '#bff4ff'; g.fillText(floorName(low.y), Math.max(8, Math.min(m.width - 8, low.x * k)), Math.min(m.height - 4, low.z * k + 9));
+      g.fillText(floorName(high.y), Math.max(8, Math.min(m.width - 8, high.x * k)), Math.max(8, high.z * k - 5));
+      g.fillStyle = '#8ee7ff'; g.fillText('↑', ((stair.x0 + stair.x1) / 2) * k, Math.max(8, ((stair.z0 + stair.z1) / 2) * k - 4));
     }
     for (const elevator of sim.level.elevators) for (const stop of elevator.stops) {
       g.fillStyle = '#a78bfa'; g.strokeStyle = '#ede9fe'; g.lineWidth = 1;
       g.beginPath(); g.arc(stop.x * k, stop.z * k, 3.3, 0, 6.28); g.fill(); g.stroke();
+      g.fillStyle = '#ede9fe'; g.font = '600 7px ui-monospace, Consolas, monospace'; g.textAlign = 'center';
+      g.fillText(stop.label.replace('FLOOR ', 'F'), Math.max(8, Math.min(m.width - 8, stop.x * k)), Math.max(8, stop.z * k - 6));
     }
     for (const d of sim.level.doors) {
       if (d.open > 0.5) { g.fillStyle = '#18212a'; g.fillRect(d.cx * k, d.cz * k, k, k); }
@@ -2337,10 +2420,17 @@ class Game {
       magEl.classList.toggle('on', this.magnifier);
       magEl.textContent = this.magnifier ? '3× MAGNIFIER ON [SHIFT]' : '1× HOLO [SHIFT]';
     } else magEl.classList.add('hidden');
-    const floorTag = sim.level.staircases.length
-      ? (groundHeightAt(sim.level, p.x, p.z) < 0.55 ? 'F1' : groundHeightAt(sim.level, p.x, p.z) > 2.45 ? 'F2' : 'STAIRS') + ' · '
-      : '';
-    $('objective').innerHTML = `${floorTag}SUSPECTS <b>${r.suspects}</b> · CIVILIANS <b>${r.civs}</b>${sim.level.breaker ? ` · POWER <b>${sim.powerOn ? 'ON' : 'OFF'}</b>` : ''}`;
+    let floorTag = '';
+    if (sim.level.staircases.length) {
+      const y = groundHeightAt(sim.level, p.x, p.z);
+      const stair = sim.level.staircases.find(s => Math.hypot(p.x - (s.x0 + s.x1) / 2, p.z - (s.z0 + s.z1) / 2) < 12);
+      const up = stair ? stair.toY > stair.fromY : true;
+      floorTag = (y < 0.55 ? 'F1' : y > 2.45 ? 'F2' : 'STAIRS') + (stair ? ` · STAIRS ${up ? '↑' : '↓'}` : '') + ' · ';
+    }
+    const trDone = Object.values(this.trainingSteps).filter(Boolean).length;
+    $('objective').innerHTML = this.trainingOn
+      ? `TRAINING · ${trDone}/6 COMPLETE · ${floorTag.replace(/ · $/, '')}`
+      : `${floorTag}SUSPECTS <b>${r.suspects}</b> · CIVILIANS <b>${r.civs}</b>${sim.level.breaker ? ` · POWER <b>${sim.powerOn ? 'ON' : 'OFF'}</b>` : ''}`;
     const bt = $('bombtimer'), bh = $('bombHint');
     if (sim.bomb && !sim.bomb.defused) {
       bt.classList.remove('hidden');
@@ -2424,8 +2514,57 @@ class Game {
   frame() {
     requestAnimationFrame(() => this.frame());
     const now = performance.now(), dt = Math.min(0.05, (now - this.last) / 1000); this.last = now;
+    const t0 = performance.now();
     if ((this.state === 'play' || (this.state === 'pause' && this.net.online)) && this.sim) this.tick(dt);
     this.render();
+    this.samplePerf(dt, performance.now() - t0);
+  }
+  /** Live performance probe used by the F3 overlay and the browser smoke test. */
+  togglePerf(on = !this.perfOn) {
+    this.perfOn = on;
+    show('perfHud', on);
+    this.perfT = 0;
+    this.samplePerf(0, 0);
+  }
+  samplePerf(dt: number, renderMs: number) {
+    this.perfFrame++;
+    if (dt > 0) {
+      this.perfSamples.push(dt * 1000);
+      if (this.perfSamples.length > 120) this.perfSamples.shift();
+    }
+    if (renderMs > 0) {
+      this.perfRender.push(renderMs);
+      if (this.perfRender.length > 120) this.perfRender.shift();
+    }
+    if (this.perfSamples.length) {
+      const recent = this.perfSamples.slice(-30);
+      this.perfMs = recent.reduce((a, v) => a + v, 0) / recent.length;
+      this.perfFps = this.perfMs > 0 ? 1000 / this.perfMs : 0;
+      const sorted = [...this.perfSamples].sort((a, b) => a - b);
+      this.perfP95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0;
+    }
+    const r = this.renderer;
+    (window as any).__taPerf = {
+      quality: S.qual, shadows: r.shadowMap.enabled, post: !!this.post?.enabled, postQuality: (this.post as any)?.quality ?? -1, hasPost: !!this.post, state: this.state,
+      arms: !!this.arms.ready, fps: +this.perfFps.toFixed(1), frameMs: +this.perfMs.toFixed(2),
+      p95Ms: +this.perfP95.toFixed(2), drawCalls: r.info.render.calls, triangles: r.info.render.triangles,
+      frames: this.perfFrame, pixelRatio: r.getPixelRatio(), renderScale: this.renderScale, width: innerWidth, height: innerHeight,
+    };
+    if (this.perfGuardOn && this.state === 'play' && S.qual >= 2) {
+      const now = performance.now();
+      if (!this.perfGuardAt) this.perfGuardAt = now;
+      this.perfGuardT += (now - this.perfGuardAt) / 1000; this.perfGuardAt = now;
+      if (this.perfGuardT > 2) {
+        this.perfGuardT = 0;
+        if (this.perfMs > 24 && this.renderScale > 0.7) { this.renderScale = Math.max(0.7, this.renderScale - 0.1); this.resize(); }
+        else if (this.perfMs < 15 && this.renderScale < 1) { this.renderScale = Math.min(1, this.renderScale + 0.05); this.resize(); }
+      }
+    } else this.perfGuardAt = 0;
+    this.perfT += dt;
+    if (!this.perfOn || this.perfT < 0.25) return;
+    this.perfT = 0;
+    const q = S.qual >= 3 ? 'ULTRA' : S.qual === 2 ? 'HIGH' : S.qual === 1 ? 'MEDIUM' : 'LOW';
+    $('perfHud').innerHTML = `<b>PERF · ${q}</b><br>${this.perfFps.toFixed(0)} FPS · ${this.perfMs.toFixed(1)} ms<br>p95 ${this.perfP95.toFixed(1)} ms · ${r.info.render.calls} calls<br>${(r.info.render.triangles / 1000).toFixed(0)}k tris · scale ${(this.renderScale * 100).toFixed(0)}%<br>shadows ${r.shadowMap.enabled ? 'on' : 'off'} · post ${this.post?.enabled ? 'on' : 'off'} · arms ${this.arms.ready ? 'ready' : '—'}`;
   }
   tick(dt: number) {
     const sim = this.sim!, p = sim.player, K = this.keys;
@@ -2688,6 +2827,7 @@ class Game {
     cross.classList.toggle('ads', this.aimK > 0.35);
     cross.style.opacity = p.alive ? '1' : '0'; // keep crisp optical center dot visible when zooming down sights
     if (this.parsedT > 0) { this.parsedT -= dt; if (this.parsedT <= 0) { $('parsed').textContent = ''; $('heard').textContent = ''; } }
+    if (this.trainingOn) this.updateTraining();
     this.updateHud();
     this.mapT -= dt;
     if (this.mapT <= 0) { this.mapT = 0.055; this.drawMap(); }
@@ -2751,6 +2891,9 @@ class Game {
       r.render(this.menu.scene, this.menu.cam);
     }
     else if (this.sim) {
+      // Keep one stats window across the world, weapon and post passes; otherwise the last
+      // full-screen FXAA pass reports only one draw call and hides the real High workload.
+      r.info.autoReset = false; r.info.reset();
       const post = this.ensurePost();
       if (post) {
         post.flash = Math.min(1, this.dmgFx * 0.6 + this.hitFx * 0.3);
@@ -2803,6 +2946,7 @@ class Game {
           }
         }
       }
+      r.info.autoReset = true;
     }
   }
 }

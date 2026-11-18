@@ -1,0 +1,29 @@
+name: Browser smoke
+
+# Boots the production build in a real Chromium (SwiftShader in CI), waits for High to render,
+# and checks shadows, post-processing, first-person arms and the F3 performance probe.
+on:
+  push:
+  pull_request:
+
+jobs:
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run smoke:browser
+        env:
+          SMOKE_SHOT: artifacts/browser-smoke.png
+      - name: Upload smoke screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-smoke
+          path: artifacts/browser-smoke.png
+          if-no-files-found: ignore
