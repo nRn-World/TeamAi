@@ -313,7 +313,7 @@ function eotechReticleTex() {
 export async function loadWeapons(base = './models/weapons/'): Promise<void> {
   try {
     const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
-    await Promise.all((Object.keys(SPECS) as ('rifle' | 'pistol' | 'shotgun')[]).map(async k => {
+    const loaded = await Promise.allSettled((Object.keys(SPECS) as ('rifle' | 'pistol' | 'shotgun')[]).map(async k => {
       const sp = SPECS[k], src = (await loader.loadAsync(base + sp.dir + '/' + sp.file)).scene, drop: THREE.Object3D[] = [];
       src.traverse((o: any) => {
         if (o.isLight || o.isCamera) drop.push(o);
@@ -352,8 +352,11 @@ export async function loadWeapons(base = './models/weapons/'): Promise<void> {
         TPL[k] = g;
       }
     }));
+    // One bad source model must not throw away the others: the carbine is the weapon the player
+    // sees almost all the time, so keep whatever loaded instead of falling back to the box guns.
+    for (const r of loaded) if (r.status === 'rejected') console.warn('weapon model failed', r.reason);
     TPL.taser = buildTaser();
-    weaponsReady = true;
+    weaponsReady = !!(TPL.rifle || TPL.pistol || TPL.shotgun);
   } catch (e) { console.warn('weapon models', e); }
 }
 /** A copy of a weapon (shares geometry and materials). Null until the models are loaded. */

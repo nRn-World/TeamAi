@@ -97,16 +97,20 @@ function normalizeAsset(src: THREE.Object3D, spec: (typeof PROP_FILES)[PropAsset
 export function loadProps(base = './models/props/'): Promise<void> {
   if (loadingPromise) return loadingPromise;
   const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
-  loadingPromise = Promise.allSettled(
-    (Object.keys(PROP_FILES) as PropAssetKey[]).map(async key => {
+  loadingPromise = (async () => {
+    for (const key of Object.keys(PROP_FILES) as PropAssetKey[]) {
       const spec = PROP_FILES[key];
-      const gltf = await loader.loadAsync(base + spec.file);
-      TPL[key] = normalizeAsset(gltf.scene, spec);
-    }),
-  ).then(() => {
+      try {
+        const gltf = await loader.loadAsync(base + spec.file);
+        TPL[key] = normalizeAsset(gltf.scene, spec);
+      } catch (e) { console.warn('prop model', spec.file, e); }
+      // Loading all twenty scans at once blocks the main thread long enough that the loading
+      // screen never gets a frame. Yield between models so the game can start and fill in props.
+      await new Promise<void>(r => setTimeout(r, 0));
+    }
     propsReady = Object.keys(TPL).length > 0;
     for (const fn of WAITERS.splice(0)) fn();
-  });
+  })();
   return loadingPromise;
 }
 

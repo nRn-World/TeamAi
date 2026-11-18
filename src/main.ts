@@ -33,7 +33,7 @@ const params = new URLSearchParams(location.search);
 const AUTO = params.has('auto');
 
 // ---------------- settings & career ----------------
-const defaults = { sens: 1, adsSens: 0.65, vol: 0.8, music: 1, mic: 1, ptt: 1, lang: 'en-US', asr: 'local', tts: 1, head: 0, qual: 1, diff: 1, name: '', ai: 0, aiModel: AI_MODELS[0].id as string, primary: 'carbine' as PrimaryLoadout, secondary: 'pistol' as SecondaryLoadout, stream: 0, censor: 1, pip: 1, binds: {} as Record<string, string> };
+const defaults = { sens: 1, adsSens: 0.65, vol: 0.8, music: 1, mic: 1, ptt: 1, lang: 'en-US', asr: 'local', tts: 1, head: 0, qual: 2, diff: 1, name: '', ai: 0, aiModel: AI_MODELS[0].id as string, primary: 'carbine' as PrimaryLoadout, secondary: 'pistol' as SecondaryLoadout, stream: 0, censor: 1, pip: 1, binds: {} as Record<string, string> };
 type Settings = typeof defaults;
 /** Read a JSON value without letting a corrupt save take the whole game down before the menu paints. */
 function readStore<T>(key: string, fallback: T): T {
@@ -2808,7 +2808,9 @@ class Game {
 }
 
 const game = new Game();
-const propsDone = loadProps();
+// The scanned props are 42 MB of GLBs. Low and Medium use the procedural props instead and
+// start instantly; High/Ultra stream the scans in while the operation is already running.
+const propsDone = S.qual >= 2 ? loadProps() : Promise.resolve();
 const weaponsDone = loadWeapons().then(async () => {
   if (weaponsReady) { upgradeViewModel(game.vm); game.menu.upgradeWeapons(); }
   if (S.qual > 0 && await game.arms.load()) { // animated arms replace the static weapon (not on the lowest graphics setting)

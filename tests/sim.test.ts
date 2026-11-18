@@ -187,6 +187,15 @@ function play(mission: number, seed: number, verbose = false) {
         && Math.abs(groundHeightAt(level, stair.x0, stair.z0) - stair.fromY) < 0.05
         && Math.abs(groundHeightAt(level, stair.x1, stair.z1) - stair.toY) < 0.05,
       'stair floor height interpolates the three-metre rise from F1 to F2');
+      ok(level.cells[15 * level.w + 33] === FLOOR
+        && walkLine(level, { x: 32.8, z: 15.5 }, { x: 33.6, z: 15.5 }),
+      'the top of the flight opens through the F2 command-floor wall');
+      ok(level.props.every(p => {
+        const dx = p.cx + 0.5 - stair.x0, dz = p.cz + 0.5 - stair.z0;
+        const t = (dx * (stair.x1 - stair.x0) + dz * (stair.z1 - stair.z0)) / Math.hypot(stair.x1 - stair.x0, stair.z1 - stair.z0) ** 2;
+        const lat = Math.abs(dx * (stair.z1 - stair.z0) - dz * (stair.x1 - stair.x0)) / Math.hypot(stair.x1 - stair.x0, stair.z1 - stair.z0);
+        return !(t >= -0.15 && t <= 1.15 && lat <= stair.width / 2 + 1.1);
+      }), 'furniture stays clear of the stair flight');
       ok(groundHeightAt(level, vip.x, vip.z) > 2.9 && level.rooms[vip.room]?.name === 'Hostage Wing · F2',
         'hostage suspect spawns in the upper-floor hostage wing');
       const vipCivilian = new Sim(mission, 3).civs.find(c => c.vip);

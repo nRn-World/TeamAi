@@ -286,10 +286,13 @@ export class LevelView {
       const ax0 = Math.min(s.x0, s.x1), ax1 = Math.max(s.x0, s.x1);
       const az0 = Math.min(s.z0, s.z1), az1 = Math.max(s.z0, s.z1);
       return {
-        x0: alongX ? ax0 - s.width / 2 : Math.floor(ax0 - s.width / 2),
-        x1: alongX ? ax1 + s.width / 2 : Math.ceil(ax1 + s.width / 2),
-        z0: alongX ? Math.floor(az0 - s.width / 2) : az0 - s.width / 2,
-        z1: alongX ? Math.ceil(az1 + s.width / 2) : az1 + s.width / 2,
+        // The opening ends exactly at the first/last tread along the flight, so the top step
+        // meets the upper floor instead of leaving a walkable gap. Only the cross-flight span
+        // is widened to the cell boundaries to keep the handrails clear of the shaft walls.
+        x0: alongX ? ax0 : Math.floor(ax0 - s.width / 2),
+        x1: alongX ? ax1 : Math.ceil(ax1 + s.width / 2),
+        z0: alongX ? Math.floor(az0 - s.width / 2) : az0,
+        z1: alongX ? Math.ceil(az1 + s.width / 2) : az1,
       };
     };
     const slabHoles = l.staircases.map(s => {

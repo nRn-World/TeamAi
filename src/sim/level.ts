@@ -144,6 +144,16 @@ class Builder {
   nearElevator(x: number, z: number) {
     return this.elevators.some(e => e.stops.some(s => Math.abs(x + 0.5 - s.x) < 1.3 && Math.abs(z + 0.5 - s.z) < 1.3));
   }
+  /** True inside a stair flight plus a little shoulder room, where furniture would clip the treads or rails. */
+  nearStair(x: number, z: number, clear = 1.1) {
+    return this.staircases.some(s => {
+      const dx = s.x1 - s.x0, dz = s.z1 - s.z0, len2 = dx * dx + dz * dz;
+      if (len2 < 1e-6) return false;
+      const px = x + 0.5 - s.x0, pz = z + 0.5 - s.z0;
+      const t = (px * dx + pz * dz) / len2, lat = Math.abs(px * dz - pz * dx) / Math.sqrt(len2);
+      return t >= -0.15 && t <= 1.15 && lat <= s.width / 2 + clear;
+    });
+  }
   placeBreaker(x: number, z: number) {
     this.breaker = { x: x + 0.5, z: z + 0.5, floorY: this.groundY[z * this.w + x] };
   }
@@ -194,7 +204,7 @@ class Builder {
     }
     const blockWin = high || kind === 'sofa' || kind === 'desk' || kind === 'bed' || kind === 'bar' || kind === 'pc';
     for (let iz = cz; iz < cz + d; iz++) for (let ix = cx; ix < cx + w; ix++) {
-      if (this.get(ix, iz) !== FLOOR || this.nearDoor(ix, iz) || this.nearBreaker(ix, iz) || this.nearElevator(ix, iz)) return false;
+      if (this.get(ix, iz) !== FLOOR || this.nearDoor(ix, iz) || this.nearBreaker(ix, iz) || this.nearElevator(ix, iz) || this.nearStair(ix, iz)) return false;
       if (blockWin && this.nearWindow(ix, iz)) return false;
       if (this.bomb && Math.abs(ix + 0.5 - this.bomb.x) < 1.5 && Math.abs(iz + 0.5 - this.bomb.z) < 1.5) return false;
     }
@@ -599,6 +609,9 @@ const SPECS: Spec[] = [
       // A 7.5m stair flight rises 3m and lands flush with the F2 floor edge (x=33), so the top
       // step is not buried under the command floor. It is a real walkable route both ways.
       b.staircase(25.5, 15.5, 33.0, 15.5, 2.3, 0, 3);
+      // The F2 command spine starts at x = 33, so its west wall would cover the top tread.
+      // Open the three cells the 2.3 m flight crosses, making the landing a real stair doorway.
+      b.set(33, 14, FLOOR); b.set(33, 15, FLOOR); b.set(33, 16, FLOOR);
 
       // Door graph: several loops and side rooms on both storeys.
       b.door(8, 12); b.door(13, 7); b.door(13, 17); b.door(8, 21); b.door(13, 27);
