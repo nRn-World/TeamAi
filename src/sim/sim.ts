@@ -101,6 +101,7 @@ export interface ReplayEvent {
 const ACTOR_RADIUS = 0.37;
 const SPAWN_BODY_GAP = 0.04;
 const COLLISION_EPS = 1e-4; // tolerate sub-millimetre float drift at exact contact
+const LEAN_MAX_DISTANCE = 0.62;
 
 export class Actor {
   x = 0; z = 0; yaw = 0; r = ACTOR_RADIUS; hp = 100; alive = true; speed = 3.2;
@@ -374,17 +375,20 @@ export class Sim {
     return r1?.kind === 'vault' || r2?.kind === 'vault' || (this.level.theme === 'warehouse' && d.locked);
   }
   leanOffset(a: Actor, targetLean: number): { lx: number; lz: number; actual: number } {
-    if (Math.abs(targetLean) < 0.01) return { lx: 0, lz: 0, actual: 0 };
-    const maxLat = 0.36 * targetLean;
+    const lean = Math.max(-1, Math.min(1, Number.isFinite(targetLean) ? targetLean : 0));
+    if (Math.abs(lean) < 0.01) return { lx: 0, lz: 0, actual: 0 };
+    const maxLat = LEAN_MAX_DISTANCE * lean;
     const rx = Math.cos(a.yaw), rz = -Math.sin(a.yaw);
+    const cameraY = a.down ? 0.48 : a.prone ? 0.36 : a.crouch ? 1.12 : 1.62;
     let actual = 0;
-    for (let f = 0.25; f <= 1.001; f += 0.25) {
-      const tx = a.x + rx * maxLat * f, tz = a.z + rz * maxLat * f;
+    // Sample every ~6cm so a long, useful lean cannot skip through a thin wall, door leaf or post.
+    for (let i = 1; i <= 10; i++) {
+      const f = i / 10, tx = a.x + rx * maxLat * f, tz = a.z + rz * maxLat * f;
       const cx = Math.floor(tx), cz = Math.floor(tz);
-      if (this.solidCell(cx, cz) || this.hitDoorLeaf3D(tx, 1.4, tz) || this.hitExterior3D(tx, 1.4, tz, true)) break;
-      actual = targetLean * f;
+      if (this.solidCell(cx, cz) || this.hitDoorLeaf3D(tx, cameraY, tz) || this.hitExterior3D(tx, cameraY, tz, true)) break;
+      actual = lean * f;
     }
-    return { lx: rx * 0.36 * actual, lz: rz * 0.36 * actual, actual };
+    return { lx: rx * LEAN_MAX_DISTANCE * actual, lz: rz * LEAN_MAX_DISTANCE * actual, actual };
   }
   sees(a: Actor, b: Actor, range: number, fov: number) {
     let effRange = range;

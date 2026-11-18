@@ -1075,6 +1075,8 @@ export class ActorView {
     }
     this.proneK = lerp(this.proneK, a.alive && (a.prone || a.downed) ? 1 : 0, Math.min(1, dt * 7));
     g.obj.rotation.x = -this.proneK * Math.PI / 2; // crawling or downed: lying low
+    g.obj.rotation.z = -this.leanK * 0.28;
+    g.obj.position.x = this.leanK * 0.12;
     g.obj.position.y = -P_DROP() * this.kneelK - (a.kind === 'player' && a.crouch && a.alive ? 0.25 : 0) + this.proneK * 0.2 + (a.alive ? a.jumpY : 0); g.obj.position.z = this.proneK * 0.8;
     if (g.gun) g.gun.visible = armed && a.alive && !a.down && !a.downed;
     if (this.op) { this.op.update(g, dt, { alive: a.alive, aim: !!a.target || a.ads || this.shootT > 0, armed }); this.gun.visible = false; }
@@ -1086,7 +1088,7 @@ export class ActorView {
       this.poolT = Math.min(1, this.poolT + dt / 5); const e = 1 - (1 - this.poolT) * (1 - this.poolT); this.pool.scale.setScalar(0.35 + e * (1.25 + (a.id % 3) * 0.2));
     }
   }
-  private kneelK = 0; private proneK = 0;
+  private kneelK = 0; private proneK = 0; private leanK = 0;
   /** Visible bullet wound on the clothes. */
   wound() {
     if (this.wounds >= 6) return; this.wounds++;
@@ -1103,6 +1105,8 @@ export class ActorView {
   }
   update(dt: number, time: number) {
     const a = this.a, k = Math.min(1, dt * 12), r = this.root;
+    const leanTarget = a.alive && !a.down && !a.downed && !a.prone ? Math.max(-1, Math.min(1, a.lean)) : 0;
+    this.leanK = lerp(this.leanK, leanTarget, Math.min(1, dt * 12));
     if (a.kind === 'player') {
       if (this.playerShield) this.playerShield.visible = a.alive && !a.downed && a.shield;
       if (this.torchGlow) this.torchGlow.visible = a.alive && !a.downed && a.torch;
@@ -1179,8 +1183,8 @@ export class ActorView {
       else if (a.moving) { aL = -hipL * 0.7; aR = -hipR * 0.7; }
       else if (a.kind === 'civ') { by = -0.12; lean = 0.25; aL = aR = 1.9; eL = eR = 1.9; zL = 0.3; zR = -0.3; hipL = hipR = 0.35; kneeL = kneeR = 0.55; headX = 0.3 + Math.sin(time * 14 + a.id) * 0.015; }
     }
-    const b = this.body; b.position.y = lerp(b.position.y, by + this.fall * 0.14, k);
-    const f = this.fall * this.fall * (3 - 2 * this.fall); b.rotation.x = f * (Math.PI / 2) * (a.id % 2 ? 1 : -1); b.rotation.z = f * ((a.id % 3) - 1) * 0.2;
+    const b = this.body; b.position.x = lerp(b.position.x, this.leanK * 0.12, k); b.position.y = lerp(b.position.y, by + this.fall * 0.14, k);
+    const f = this.fall * this.fall * (3 - 2 * this.fall); b.rotation.x = f * (Math.PI / 2) * (a.id % 2 ? 1 : -1); b.rotation.z = f * ((a.id % 3) - 1) * 0.2 - this.leanK * 0.28;
     this.torso.rotation.x = lerp(this.torso.rotation.x, -lean, k); this.head.rotation.x = lerp(this.head.rotation.x, -headX + lean, k);
     const [L, R] = this.legs; L.hip.rotation.x = lerp(L.hip.rotation.x, hipL, k); R.hip.rotation.x = lerp(R.hip.rotation.x, hipR, k); L.knee.rotation.x = lerp(L.knee.rotation.x, -kneeL, k); R.knee.rotation.x = lerp(R.knee.rotation.x, -kneeR, k);
     const [AL, AR] = this.arms; AL.sh.rotation.x = lerp(AL.sh.rotation.x, aL, k); AR.sh.rotation.x = lerp(AR.sh.rotation.x, aR, k); AL.sh.rotation.z = lerp(AL.sh.rotation.z, zL, k); AR.sh.rotation.z = lerp(AR.sh.rotation.z, zR, k);

@@ -4,7 +4,7 @@ import type { Command } from '../src/sim/sim';
 import { parseCommand, parseCommands, shouldUseAiBrain } from '../src/sim/commands';
 import { buildLocalReport, buildTacticalContext } from '../src/sim/context';
 import { findPath, nearestWalkable } from '../src/sim/nav';
-import { MISSIONS, buildLevel, roomAt, FLOOR, OUT, HIGH, WINDOW } from '../src/sim/level';
+import { MISSIONS, buildLevel, roomAt, FLOOR, WALL, OUT, HIGH, WINDOW } from '../src/sim/level';
 import { encodeSnap, applySnap, encodeEv, decodeEv } from '../src/sim/netstate';
 
 let fails = 0;
@@ -488,12 +488,13 @@ ok(wins >= 4, 'bot should be able to win across missions');
   for (let k = 0; k < 33; k++) sCoop.update(0.1);
   ok(door.target === 1, 'breach sync opens door at 0');
 
-  // Snap sync for downed, torch, ads, speaking, shield & NetTarget interpolation
-  p1.torch = false; p1.ads = true; p1.shield = true; p1.speaking = true; p1.weapon = 1; p1.pitch = 0.42;
+  // Snap sync for downed, lean, torch, ads, speaking, shield & NetTarget interpolation
+  p1.torch = false; p1.ads = true; p1.shield = true; p1.speaking = true; p1.weapon = 1; p1.pitch = 0.42; p1.lean = -0.86;
   const mir2 = new Sim(0, 1, 1, 2);
   const tgMap = new Map<any, { x: number; z: number; yaw: number }>();
   applySnap(mir2, JSON.parse(JSON.stringify(encodeSnap(sCoop))), mir2.players[1], tgMap);
   ok(mir2.players[0].torch === false && mir2.players[0].ads === true && mir2.players[0].shield === true && mir2.players[0].speaking === true && mir2.players[0].weapon === 1 && Math.abs(mir2.players[0].pitch - 0.42) < 0.02, 'encodeSnap/applySnap syncs torch, ads, shield, speaking, weapon & pitch');
+  ok(Math.abs(mir2.players[0].lean + 0.86) < 0.02, 'encodeSnap/applySnap syncs the third-person co-op lean pose');
   ok(tgMap.has(mir2.players[0]), 'applySnap populates NetTarget map for smooth client interpolation');
   ok(sCoop.squadMvp().length === 2 && sCoop.squadMvp()[0].badge === 'SQUAD MVP', 'squadMvp ranks co-op players');
 }
@@ -515,12 +516,52 @@ ok(wins >= 4, 'bot should be able to win across missions');
   simPlan.executePreplan();
   ok(simPlan.teams.B.order.type === 'move' && simPlan.teams.A.order.type === 'move', 'executePreplan dispatches drawn routes to Team A and Team B');
 
-  // 2) Lean offset + wall-safe clamping
+  // 2) Strong Q/E lean + safe clamping at walls
   const sim = new Sim(0, 1, 1);
   const pl = sim.player;
   pl.yaw = 0;
+  const start = { x: pl.x, z: pl.z };
   const lo = sim.leanOffset(pl, 1);
-  ok(lo.actual > 0.5 && lo.lx > 0.15, 'leanOffset shifts camera laterally in open space');
+  ok(lo.actual > 0.98 && lo.lx > 0.60, 'full lean gives a clear 62cm right-side peek in open space');
+  const left = sim.leanOffset(pl, -1);
+  ok(left.actual < -0.98 && left.lx < -0.60, 'Q gives the same strong peek on the opposite side');
+
+  // Find an interior floor cell beside an east wall and prove the camera stops before crossing it.
+  let wallCase: { x: number; z: number } | null = null;
+  for (let z = 2; z < sim.level.h - 2 && !wallCase; z++) for (let x = 2; x < sim.level.w - 2 && !wallCase; x++) {
+    if (sim.cell(x, z) !== FLOOR || sim.cell(x + 1, z) !== WALL) continue;
+    pl.x = x + 0.5; pl.z = z + 0.5;
+    const clamped = sim.leanOffset(pl, 1);
+    if (clamped.actual > 0.4 && clamped.actual < 0.99) wallCase = { x: pl.x, z: pl.z };
+  }
+  ok(!!wallCase, 'wall test found a usable cover edge');
+  if (wallCase) {
+    pl.x = wallCase.x; pl.z = wallCase.z;
+    const clamped = sim.leanOffset(pl, 1);
+    ok(clamped.actual < 1 && clamped.actual > 0.4, 'lean amount clamps smoothly at a wall instead of passing through it');
+    ok(!sim.solidCell(Math.floor(pl.x + clamped.lx), Math.floor(pl.z + clamped.lz)), 'leaned camera stays on the visible side of cover');
+  }
+  pl.x = start.x; pl.z = start.z;
+
+  // A leaned shot uses that same safe shoulder origin and still stops on cover.
+  const shotSim = new Sim(0, 1, 1), shooter = shotSim.player;
+  let shotCover: { x: number; z: number } | null = null;
+  for (let z = 3; z < shotSim.level.h - 3 && !shotCover; z++) for (let x = 3; x < shotSim.level.w - 3 && !shotCover; x++) {
+    if (shotSim.cell(x, z) !== FLOOR || shotSim.cell(x, z - 1) !== FLOOR || shotSim.cell(x + 1, z) !== WALL || shotSim.cell(x + 1, z - 1) !== WALL) continue;
+    shooter.x = x + 0.5; shooter.z = z + 0.5; shooter.yaw = -Math.PI / 2;
+    const side = shotSim.leanOffset(shooter, -1);
+    if (shotSim.ray(shooter.x + side.lx, 1.46, shooter.z + side.lz, 1, 0, 0, 8, shooter, false).kind === 'wall') shotCover = { x: shooter.x, z: shooter.z };
+  }
+  ok(!!shotCover, 'found a cover position for a leaned-shot regression test');
+  if (shotCover) {
+    shooter.x = shotCover.x; shooter.z = shotCover.z; shooter.yaw = -Math.PI / 2;
+    const side = shotSim.leanOffset(shooter, -1), ox = shooter.x + side.lx, oz = shooter.z + side.lz;
+    shotSim.events.length = 0;
+    const hit = shotSim.fire(shooter, ox, 1.46, oz, 1, 0, 0, 5, { pen: 0 });
+    const shot = shotSim.events.find(e => e.t === 'shot');
+    ok(hit.kind === 'wall' && shot?.t === 'shot' && Math.abs(shot.x - ox) < 0.01 && Math.abs(shot.z - oz) < 0.01,
+      'leaned shot starts at the peek position and cannot pass through the covering wall');
+  }
 
   // 3) Smoke occlusion & CS gas stun/surrender
   const sus = sim.suspects[0];
