@@ -4,7 +4,7 @@
 // a frame-rate threshold.
 import { chromium, type Browser } from 'playwright';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 declare global {
@@ -88,6 +88,20 @@ try {
   ok((perf?.frames ?? 0) > 0 && (perf?.drawCalls ?? 0) > 0, 'the frame loop is rendering draw calls');
   ok((perf?.fps ?? 0) > 0, 'the performance probe reports a live frame rate');
   ok(pageErrors.length === 0, `no uncaught page errors${pageErrors.length ? `: ${pageErrors.join(' | ')}` : ''}`);
+
+  // F4 must save the same numbers as a file, labelled with the GPU that produced them.
+  const [download] = await Promise.all([
+    page.waitForEvent('download', { timeout: 30000 }),
+    page.keyboard.press('F4'),
+  ]);
+  const file = await download.path();
+  const report = JSON.parse(readFileSync(file, 'utf8'));
+  console.log(`  report ${download.suggestedFilename()} (${report.quality}, ${report.gpu.renderer})`);
+  ok(report.schema === 'teamai.perf/1', 'F4 exports a versioned performance report');
+  ok(report.quality === 'HIGH' && report.high === true, 'the report records that High was measured');
+  ok(typeof report.gpu.renderer === 'string' && report.gpu.renderer.length > 0, 'the report names the GPU renderer');
+  ok(report.gpu.software === true, 'the software renderer is flagged instead of being reported as a GPU');
+  ok((report.series?.length ?? 0) > 0 && typeof report.now?.fps === 'number', 'the report carries live samples and the current frame');
 
   const shot = process.env.SMOKE_SHOT;
   if (shot) {

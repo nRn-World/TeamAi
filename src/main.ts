@@ -134,6 +134,8 @@ class Game {
   private lobbyVoiceTimer = 0;
   state: 'menu' | 'play' | 'pause' | 'end' = 'menu'; mission = 0; seed = 1;
   perfOn = params.has('perf'); perfSamples: number[] = []; perfRender: number[] = []; perfFrame = 0; perfT = 0; perfFps = 0; perfMs = 0; perfP95 = 0;
+  /** One entry per second of the live overlay, so an exported report shows the curve, not a single frame. */
+  perfLog: { t: number; fps: number; frameMs: number; p95Ms: number; scale: number; calls: number; tris: number }[] = []; perfLogT = 0;
   renderScale = 1; perfGuardT = 0; perfGuardAt = 0; perfGuardOn = !params.has('noperfguard');
   trainingOn = false; trainingDone = false; trainingStart = { x: 0, z: 0 };
   trainingSteps = { move: false, aim: false, shout: false, order: false, crouch: false, reload: false };
@@ -1465,6 +1467,7 @@ class Game {
       case 'KeyU': if (this.mirror) this.net.send({ t: 'c2' }); else sim.playerC2(sim.player); break;
       case 'KeyY': if (this.mirror) this.net.send({ t: 'wedge' }); else if (sim.playerWedge(sim.player)) this.audio.wedge(); break;
       case 'KeyN': this.toggleNvg(); break;
+      case 'F4': this.exportPerf(); break;
       case 'KeyK': this.toggleBodycam(); break;
       case 'KeyP': this.togglePip(true); break;
       case 'KeyJ': this.breachSync(); break;
@@ -2513,18 +2516,65 @@ class Game {
   // ---------------- frame ----------------
   frame() {
     requestAnimationFrame(() => this.frame());
-    const now = performance.now(), dt = Math.min(0.05, (now - this.last) / 1000); this.last = now;
+    const now = performance.now(), raw = Math.max(0, (now - this.last) / 1000), dt = Math.min(0.05, raw); this.last = now;
     const t0 = performance.now();
     if ((this.state === 'play' || (this.state === 'pause' && this.net.online)) && this.sim) this.tick(dt);
     this.render();
-    this.samplePerf(dt, performance.now() - t0);
+    // Simulate with the clamped delta (a long stall must not teleport anyone), but measure the real
+    // frame: feeding the probe the clamped value pinned FPS at 20 and p95 at 50 ms during hitches.
+    this.samplePerf(raw, performance.now() - t0);
   }
   /** Live performance probe used by the F3 overlay and the browser smoke test. */
   togglePerf(on = !this.perfOn) {
     this.perfOn = on;
     show('perfHud', on);
     this.perfT = 0;
+    this.perfLog = []; this.perfLogT = 0;
     this.samplePerf(0, 0);
+  }
+  /** GPU actually drawing the frame. SwiftShader/llvmpipe means this is not a measurement of real hardware. */
+  private gpuInfo() {
+    const gl = this.renderer.getContext();
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const renderer = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) ?? '') : String(gl.getParameter(gl.RENDERER) ?? '');
+    const vendor = ext ? String(gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) ?? '') : String(gl.getParameter(gl.VENDOR) ?? '');
+    const software = /swiftshader|llvmpipe|software|basic render|microsoft basic/i.test(renderer);
+    return { vendor, renderer, software };
+  }
+  /**
+   * The numbers from the F3 overlay as a portable report. A player on a real GPU presses F4 (or
+   * calls `__taPerfReport()`) and gets a JSON file that shows which GPU produced the timings, so a
+   * software-rendered CI machine can never be mistaken for a graphics-card measurement.
+   */
+  perfReport() {
+    const gl = this.gpuInfo();
+    const quality = S.qual >= 3 ? 'ULTRA' : S.qual === 2 ? 'HIGH' : S.qual === 1 ? 'MEDIUM' : 'LOW';
+    return {
+      schema: 'teamai.perf/1',
+      generatedAt: new Date().toISOString(),
+      note: gl.software
+        ? 'Software renderer: these timings do not represent a real GPU. Run the export on the target graphics card.'
+        : 'Hardware measurement from the browser that produced it.',
+      gpu: gl,
+      quality, qualityIndex: S.qual,
+      high: S.qual >= 2,
+      device: { userAgent: navigator.userAgent, devicePixelRatio, width: innerWidth, height: innerHeight, pixelRatio: this.renderer.getPixelRatio(), renderScale: this.renderScale, perfGuard: this.perfGuardOn },
+      scene: { mission: this.mission, missionName: MISSIONS[this.mission]?.name ?? '', state: this.state, arms: !!this.arms.ready, post: !!this.post?.enabled, shadows: this.renderer.shadowMap.enabled },
+      now: { fps: +this.perfFps.toFixed(1), frameMs: +this.perfMs.toFixed(2), p95Ms: +this.perfP95.toFixed(2), drawCalls: this.renderer.info.render.calls, triangles: this.renderer.info.render.triangles, frames: this.perfFrame },
+      series: this.perfLog.map(s => ({ ...s })),
+    };
+  }
+  exportPerf() {
+    const report = this.perfReport();
+    const stamp = report.generatedAt.replace(/[:.]/g, '-');
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `teamai-perf-${report.quality.toLowerCase()}-${stamp}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    if (this.sim) this.log(`Performance report exported (${report.quality}${report.gpu.software ? ', software renderer — not a GPU measurement' : ''}).`, 'me');
+    return report;
   }
   samplePerf(dt: number, renderMs: number) {
     this.perfFrame++;
@@ -2550,6 +2600,19 @@ class Game {
       p95Ms: +this.perfP95.toFixed(2), drawCalls: r.info.render.calls, triangles: r.info.render.triangles,
       frames: this.perfFrame, pixelRatio: r.getPixelRatio(), renderScale: this.renderScale, width: innerWidth, height: innerHeight,
     };
+    (window as any).__taPerfReport = () => this.perfReport();
+    if (this.perfOn) {
+      this.perfLogT += dt;
+      if (this.perfLogT >= 1) {
+        this.perfLogT = 0;
+        // Skip the kill screen and other frames that drew nothing: a report full of zero draw calls
+        // says nothing about a mission frame.
+        if (r.info.render.calls > 0) {
+          this.perfLog.push({ t: +performance.now().toFixed(0), fps: +this.perfFps.toFixed(1), frameMs: +this.perfMs.toFixed(2), p95Ms: +this.perfP95.toFixed(2), scale: +this.renderScale.toFixed(2), calls: r.info.render.calls, tris: r.info.render.triangles });
+          if (this.perfLog.length > 300) this.perfLog.shift();
+        }
+      }
+    }
     if (this.perfGuardOn && this.state === 'play' && S.qual >= 2) {
       const now = performance.now();
       if (!this.perfGuardAt) this.perfGuardAt = now;
@@ -2564,7 +2627,7 @@ class Game {
     if (!this.perfOn || this.perfT < 0.25) return;
     this.perfT = 0;
     const q = S.qual >= 3 ? 'ULTRA' : S.qual === 2 ? 'HIGH' : S.qual === 1 ? 'MEDIUM' : 'LOW';
-    $('perfHud').innerHTML = `<b>PERF · ${q}</b><br>${this.perfFps.toFixed(0)} FPS · ${this.perfMs.toFixed(1)} ms<br>p95 ${this.perfP95.toFixed(1)} ms · ${r.info.render.calls} calls<br>${(r.info.render.triangles / 1000).toFixed(0)}k tris · scale ${(this.renderScale * 100).toFixed(0)}%<br>shadows ${r.shadowMap.enabled ? 'on' : 'off'} · post ${this.post?.enabled ? 'on' : 'off'} · arms ${this.arms.ready ? 'ready' : '—'}`;
+    $('perfHud').innerHTML = `<b>PERF · ${q}</b><br>${this.perfFps.toFixed(0)} FPS · ${this.perfMs.toFixed(1)} ms<br>p95 ${this.perfP95.toFixed(1)} ms · ${r.info.render.calls} calls<br>${(r.info.render.triangles / 1000).toFixed(0)}k tris · scale ${(this.renderScale * 100).toFixed(0)}%<br>shadows ${r.shadowMap.enabled ? 'on' : 'off'} · post ${this.post?.enabled ? 'on' : 'off'} · arms ${this.arms.ready ? 'ready' : '—'}<br><b>F4</b> EXPORT REPORT`;
   }
   tick(dt: number) {
     const sim = this.sim!, p = sim.player, K = this.keys;

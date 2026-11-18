@@ -52,6 +52,11 @@ Code dependencies: three.js (MIT), Vite (MIT), TypeScript (Apache-2.0), PeerJS (
 - **High performance.** `F3` (or `?perf=1`) shows FPS, p95 frame time, draw calls, triangles and the
   active render scale. On High/Ultra the render scale adapts between 70 % and 100 % when frame time
   stays above 24 ms, so a slower GPU keeps a playable frame rate; the menu and mission start reset it.
+- **Performance report.** `F4` downloads the overlay as `teamai-perf-high-<timestamp>.json`: the GPU
+  vendor and renderer string, the graphics settings, the current frame, and one sample per second of
+  the overlay. The file says whether the renderer was hardware or a software fallback
+  (SwiftShader/llvmpipe), so a measurement from a real graphics card can be told apart from the CI
+  machine. `__taPerfReport()` returns the same object in the console without downloading it.
 - **Smoke test.** `tools/browser-smoke.mts` boots the production build at High in Chromium/SwiftShader,
   checks shadows, post FX, first-person arms and the perf probe, and runs in GitHub Actions with a
   screenshot artifact. It intentionally reports timings on the software renderer instead of enforcing
