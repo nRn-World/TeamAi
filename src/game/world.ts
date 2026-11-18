@@ -1,7 +1,7 @@
 // three.js presentation of the simulation: level geometry, characters, effects. All geometry is procedural.
 import * as THREE from 'three';
 import { Sim, Actor, Team } from '../sim/sim';
-import { WALL, OUT, WINDOW, FLOOR, Door, Prop } from '../sim/level';
+import { WALL, OUT, WINDOW, FLOOR, Door, Prop, groundHeightAt } from '../sim/level';
 import * as T from './textures';
 import { modelsReady, Rig, droppedPistol } from './models';
 import { weaponModel, buildBallisticShield } from './weapons';
@@ -205,6 +205,7 @@ const THEME = {
   bank: { wall: '#d6d4ce', trim: '#2d3b4e', brickA: '#6d737c', brickB: '#5d636b', fog: 0x0a0d12 },
   club: { wall: '#282633', trim: '#6a1b6a', brickA: '#28202c', brickB: '#1f1823', fog: 0x05030a },
   raid: { wall: '#b8b4aa', trim: '#3b3c40', brickA: '#635c54', brickB: '#524b44', fog: 0x090b0e },
+  tower: { wall: '#c7d0d9', trim: '#253b52', brickA: '#384552', brickB: '#2d3945', fog: 0x09111a },
 };
 
 export class LevelView {
@@ -241,7 +242,7 @@ export class LevelView {
   constructor(public sim: Sim, quality: number) {
     const l = sim.level, th = THEME[l.theme], g = this.group;
     // exterior ground: wet stone plaza for architectural themes, dark wet asphalt elsewhere
-    const plazaGround = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'bank';
+    const plazaGround = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'bank' || l.theme === 'tower';
     const groundMap = plazaGround ? T.plazaTex(l.theme) : T.floorTex('asphalt');
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(l.w + 72, l.h + 72),
@@ -261,21 +262,61 @@ export class LevelView {
       this.lightPool.push(pl);
     }
     for (const r of l.rooms) {
+      const floorY = r.floorY ?? 0;
       const fl = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), std({ map: T.floorTex(r.floor), roughness: r.floor === 'tile' ? 0.35 : 0.95 }));
-      scaleUV(fl.geometry, r.w / 2, r.h / 2); fl.rotation.x = -Math.PI / 2; fl.position.set(r.x + r.w / 2, r.id * 0.0006, r.z + r.h / 2); g.add(fl);
+      scaleUV(fl.geometry, r.w / 2, r.h / 2); fl.rotation.x = -Math.PI / 2; fl.position.set(r.x + r.w / 2, floorY + r.id * 0.0006, r.z + r.h / 2); g.add(fl);
       const ce = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), ceilMat.clone()); (ce.material as THREE.MeshStandardMaterial).map = T.floorTex('ceiling');
-      scaleUV(ce.geometry, r.w / 2, r.h / 2); ce.rotation.x = Math.PI / 2; ce.position.set(r.x + r.w / 2, 3 - r.id * 0.0006, r.z + r.h / 2); g.add(ce);
+      scaleUV(ce.geometry, r.w / 2, r.h / 2); ce.rotation.x = Math.PI / 2; ce.position.set(r.x + r.w / 2, floorY + 3 - r.id * 0.0006, r.z + r.h / 2); g.add(ce);
       const dark = l.theme === 'club' ? (r.kind === 'club') : (r.kind !== 'corridor' && r.kind !== 'lobby' && ((r.id * 7 + sim.mission * 3 + Math.floor(l.suspects[0]?.x ?? 0)) % 4 === 0));
       const nx = Math.max(1, Math.round((r.w - 2) / 6)), nz = Math.max(1, Math.round((r.h - 2) / 6));
       for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
         const x = r.x + 1 + ((i + 0.5) * (r.w - 2)) / nx, z = r.z + 1 + ((j + 0.5) * (r.h - 2)) / nz;
-        const lm = box(r.kind === 'warehouse' ? 0.4 : 1.1, 0.05, r.kind === 'corridor' ? 0.3 : 0.5, dark ? lampOff : lampOn, x, 2.97, z);
+        const lm = box(r.kind === 'warehouse' ? 0.4 : 1.1, 0.05, r.kind === 'corridor' ? 0.3 : 0.5, dark ? lampOff : lampOn, x, floorY + 2.97, z);
         g.add(lm);
         if (!dark) this.lampMeshes.push(lm);
         if ((!dark || l.theme === 'club') && poolCount > 0) {
           const col = l.theme === 'club' ? (i % 2 ? 0xff3ea5 : 0x3ea8ff) : r.kind === 'warehouse' ? 0xdfe8ff : 0xffe9c8;
           const baseInt = l.theme === 'club' ? 9 : r.kind === 'warehouse' ? 17 : 10.5;
-          this.lightSources.push({ x, y: 2.55, z, color: col, intensity: baseInt, distance: 11, decay: 1.7, isRoom: true });
+          this.lightSources.push({ x, y: floorY + 2.55, z, color: col, intensity: baseInt, distance: 11, decay: 1.7, isRoom: true });
+        }
+      }
+    }
+    // Stair flights are built as real rising treads, with two metal handrails. The simulation samples
+    // the same flight endpoints to give the player a continuous walkable height while they climb.
+    if (l.staircases.length) {
+      const treadMat = std({ color: 0x687581, roughness: 0.82, metalness: 0.12 });
+      const treadAlt = std({ color: 0x586571, roughness: 0.85, metalness: 0.1 });
+      const nosingMat = std({ color: 0x9ca8b1, roughness: 0.56, metalness: 0.28 });
+      const railMat = std({ color: 0x26323c, roughness: 0.32, metalness: 0.78 });
+      const up = new THREE.Vector3(0, 1, 0);
+      for (const s of l.staircases) {
+        const dx = s.x1 - s.x0, dz = s.z1 - s.z0, length = Math.hypot(dx, dz);
+        if (length < 0.1 || s.steps < 1) continue;
+        const ux = dx / length, uz = dz / length, px = -uz, pz = ux, stepDepth = length / s.steps, yaw = Math.atan2(ux, uz);
+        for (let i = 0; i < s.steps; i++) {
+          const t0 = i / s.steps, t1 = (i + 1) / s.steps;
+          const y0 = s.fromY + (s.toY - s.fromY) * t0, y1 = s.fromY + (s.toY - s.fromY) * t1;
+          const rise = Math.max(0.07, Math.abs(y1 - y0));
+          const cx = s.x0 + ux * ((i + 0.5) * stepDepth), cz = s.z0 + uz * ((i + 0.5) * stepDepth);
+          const tread = box(s.width, rise, stepDepth + 0.02, i % 2 ? treadMat : treadAlt, cx, (y0 + y1) / 2, cz);
+          tread.rotation.y = yaw; tread.castShadow = quality >= 2; tread.receiveShadow = true; g.add(tread);
+          const nosing = box(s.width * 0.98, 0.035, 0.055, nosingMat,
+            cx + ux * (stepDepth * 0.46), Math.max(y0, y1) + 0.018, cz + uz * (stepDepth * 0.46));
+          nosing.rotation.y = yaw; g.add(nosing);
+        }
+        for (const side of [-1, 1]) {
+          const railOffset = side * (s.width / 2 + 0.1);
+          for (let i = 0; i <= Math.ceil(length / 1.7); i++) {
+            const t = Math.min(1, (i * 1.7) / length), x = s.x0 + dx * t + px * railOffset, z = s.z0 + dz * t + pz * railOffset;
+            const y = s.fromY + (s.toY - s.fromY) * t;
+            const post = box(0.065, 1.02, 0.065, railMat, x, y + 0.51, z); post.rotation.y = yaw; g.add(post);
+          }
+          for (const height of [0.78, 1.02]) {
+            const a = new THREE.Vector3(s.x0 + px * railOffset, s.fromY + height, s.z0 + pz * railOffset);
+            const b = new THREE.Vector3(s.x1 + px * railOffset, s.toY + height, s.z1 + pz * railOffset);
+            const span = b.clone().sub(a), bar = new THREE.Mesh(new THREE.CylinderGeometry(height === 1.02 ? 0.035 : 0.022, height === 1.02 ? 0.035 : 0.022, span.length(), 8), railMat);
+            bar.position.copy(a).add(b).multiplyScalar(0.5); bar.quaternion.setFromUnitVectors(up, span.normalize()); g.add(bar);
+          }
         }
       }
     }
@@ -291,7 +332,10 @@ export class LevelView {
     const mk = (cells: [number, number][], mat: THREE.Material, h = 3) => {
       const im = new THREE.InstancedMesh(wallGeo, mat, cells.length); const m = new THREE.Matrix4();
       if (quality >= 2) { im.castShadow = true; im.receiveShadow = true; }
-      cells.forEach(([x, z], i) => { m.makeScale(1, h / 3, 1); m.setPosition(x + 0.5, h / 2, z + 0.5); im.setMatrixAt(i, m); }); g.add(im);
+      cells.forEach(([x, z], i) => {
+        const floorY = l.groundY[z * l.w + x] ?? 0;
+        m.makeScale(1, h / 3, 1); m.setPosition(x + 0.5, floorY + h / 2, z + 0.5); im.setMatrixAt(i, m);
+      }); g.add(im);
     };
     const wallMat = std({ map: T.wallTex(th.wall, th.trim, l.theme), color: quality > 0 ? 0xb2b8c2 : 0xffffff });
     const brickMat = l.theme === 'office'
@@ -303,13 +347,13 @@ export class LevelView {
     // Perimeter cells are drawn with the dark exterior brick/curb material, but many of them also
     // face a playable room. Skin those faces in the interior plaster so the level does not end in
     // a matte-black wall like the corridor corner did.
-    const skins: { x: number; z: number; ry: number }[] = [];
+    const skins: { x: number; y: number; z: number; ry: number }[] = [];
     for (const [x, z] of outer) {
       for (const [dx, dz] of [[0, -1], [0, 1], [-1, 0], [1, 0]] as const) {
         const nx = x + dx, nz = z + dz;
         if (nx < 0 || nz < 0 || nx >= l.w || nz >= l.h) continue;
         if (sim.cell(nx, nz) !== FLOOR) continue;   // only open floor gets a plaster face; frames dress themselves
-        skins.push({ x: x + 0.5 + dx * 0.503, z: z + 0.5 + dz * 0.503, ry: Math.atan2(dx, dz) });
+        skins.push({ x: x + 0.5 + dx * 0.503, y: (l.groundY[z * l.w + x] ?? 0) + 1.5, z: z + 0.5 + dz * 0.503, ry: Math.atan2(dx, dz) });
       }
     }
     if (skins.length) {
@@ -319,7 +363,7 @@ export class LevelView {
       im.receiveShadow = quality >= 2;
       skins.forEach((s, i) => {
         q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), s.ry);
-        m4.compose(pos.set(s.x, 1.5, s.z), q, one);
+        m4.compose(pos.set(s.x, s.y, s.z), q, one);
         im.setMatrixAt(i, m4);
       });
       g.add(im);
@@ -329,20 +373,20 @@ export class LevelView {
       ? new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.2, roughness: 0.24, metalness: 0.05, specularIntensity: 0.45 })
       : std({ color: 0xaad8ee, transparent: true, opacity: 0.34, roughness: 0.15 });
     const frameAlum = std({ color: 0x161a20, roughness: 0.35, metalness: 0.65 });
-    const curtainWall = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'club';
+    const curtainWall = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'club' || l.theme === 'tower';
     for (const w of l.windows) {
-      const cx = Math.floor(w.x), cz = Math.floor(w.z);
+      const cx = Math.floor(w.x), cz = Math.floor(w.z), floorY = w.floorY ?? groundHeightAt(l, w.x, w.z);
       const horiz = sim.cell(cx - 1, cz) === WALL || sim.cell(cx - 1, cz) === WINDOW || sim.cell(cx + 1, cz) === WALL || sim.cell(cx + 1, cz) === WINDOW;
       const isFront = sim.cell(cx, cz + 1) === OUT || sim.cell(cx, cz - 1) === OUT || sim.cell(cx + 1, cz) === OUT || sim.cell(cx - 1, cz) === OUT;
       if (curtainWall && isFront) {
-        g.add(box(1, 0.12, 1, frameAlum, w.x, 0.06, w.z), box(1, 0.25, 1, frameAlum, w.x, 2.875, w.z));
-        g.add(box(horiz ? 0.08 : 0.14, 2.7, horiz ? 0.14 : 0.08, frameAlum, w.x + (horiz ? 0.46 : 0), 1.45, w.z + (horiz ? 0 : 0.46)));
-        const pane = box(horiz ? 0.96 : 0.06, 2.65, horiz ? 0.06 : 0.96, glassMat, w.x, 1.44, w.z);
+        g.add(box(1, 0.12, 1, frameAlum, w.x, floorY + 0.06, w.z), box(1, 0.25, 1, frameAlum, w.x, floorY + 2.875, w.z));
+        g.add(box(horiz ? 0.08 : 0.14, 2.7, horiz ? 0.14 : 0.08, frameAlum, w.x + (horiz ? 0.46 : 0), floorY + 1.45, w.z + (horiz ? 0 : 0.46)));
+        const pane = box(horiz ? 0.96 : 0.06, 2.65, horiz ? 0.06 : 0.96, glassMat, w.x, floorY + 1.44, w.z);
         g.add(pane);
         this.windows.set(cz * l.w + cx, pane);
       } else {
-        g.add(box(1, 0.9, 1, wallMat, w.x, 0.45, w.z), box(1, 0.7, 1, wallMat, w.x, 2.65, w.z));
-        const pane = box(horiz ? 0.98 : 0.06, 1.4, horiz ? 0.06 : 0.98, glassMat, w.x, 1.6, w.z);
+        g.add(box(1, 0.9, 1, wallMat, w.x, floorY + 0.45, w.z), box(1, 0.7, 1, wallMat, w.x, floorY + 2.65, w.z));
+        const pane = box(horiz ? 0.98 : 0.06, 1.4, horiz ? 0.06 : 0.98, glassMat, w.x, floorY + 1.6, w.z);
         g.add(pane);
         this.windows.set(cz * l.w + cx, pane);
       }
@@ -354,8 +398,9 @@ export class LevelView {
       : std({ color: 0x99d0e8, transparent: true, opacity: 0.38, roughness: 0.15 });
     const wedgeMat = std({ color: 0xf2a82e, roughness: 0.4 }), lockMat = std({ color: 0xe04848, emissive: 0x801010, emissiveIntensity: 0.6 });
     for (const d of l.doors) {
+      const floorY = d.floorY ?? groundHeightAt(l, d.cx + 0.5, d.cz + 0.5);
       const frontGlassDoor = (l.theme === 'office' || l.theme === 'hotel' || l.theme === 'bank') && (sim.cell(d.cx, d.cz + 1) === OUT || sim.cell(d.cx, d.cz - 1) === OUT);
-      const lintel = box(1, 0.8, 1, frontGlassDoor ? frameAlum : wallMat, d.cx + 0.5, 2.6, d.cz + 0.5); g.add(lintel);
+      const lintel = box(1, 0.8, 1, frontGlassDoor ? frameAlum : wallMat, d.cx + 0.5, floorY + 2.6, d.cz + 0.5); g.add(lintel);
       const pivot = new THREE.Group();
       let glass: THREE.Mesh | undefined;
       if (frontGlassDoor) {
@@ -374,17 +419,44 @@ export class LevelView {
       const tripwire = box(0.92, 0.012, 0.012, tripMat, 0.47, 0.24, 0);
       tripwire.visible = !!(d.trapped && d.trapKnown);
       if (d.horiz) {
-        pivot.position.set(d.cx + 0.03, 0, d.cz + 0.5);
-        tripwire.position.set(d.cx + 0.5, 0.24, d.cz + 0.5);
-        g.add(box(0.06, 2.2, 1.02, frameMat, d.cx + 0.0, 1.1, d.cz + 0.5), box(0.06, 2.2, 1.02, frameMat, d.cx + 1.0, 1.1, d.cz + 0.5), tripwire);
+        pivot.position.set(d.cx + 0.03, floorY, d.cz + 0.5);
+        tripwire.position.set(d.cx + 0.5, floorY + 0.24, d.cz + 0.5);
+        g.add(box(0.06, 2.2, 1.02, frameMat, d.cx + 0.0, floorY + 1.1, d.cz + 0.5), box(0.06, 2.2, 1.02, frameMat, d.cx + 1.0, floorY + 1.1, d.cz + 0.5), tripwire);
       } else {
-        pivot.position.set(d.cx + 0.5, 0, d.cz + 0.03);
+        pivot.position.set(d.cx + 0.5, floorY, d.cz + 0.03);
         tripwire.rotation.y = Math.PI / 2;
-        tripwire.position.set(d.cx + 0.5, 0.24, d.cz + 0.5);
-        g.add(box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 0.0), box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, 1.1, d.cz + 1.0), tripwire);
+        tripwire.position.set(d.cx + 0.5, floorY + 0.24, d.cz + 0.5);
+        g.add(box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, floorY + 1.1, d.cz + 0.0), box(1.02, 2.2, 0.06, frameMat, d.cx + 0.5, floorY + 1.1, d.cz + 1.0), tripwire);
       }
       if (quality >= 2) pivot.traverse((o: any) => { if (o.isMesh && o !== glass) { o.castShadow = true; o.receiveShadow = true; } });
       const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base, wedge, lock, tripwire, glass });
+    }
+    // Functional lifts: each stop is rendered as a compact, open service-elevator landing. F activates
+    // the matching stop in Sim and transfers the operator to its paired floor.
+    if (l.elevators.length) {
+      const liftFrame = std({ color: 0x26323d, roughness: 0.38, metalness: 0.74 });
+      const liftBack = std({ color: 0x3b4651, roughness: 0.58, metalness: 0.45 });
+      const liftFloor = std({ color: 0x56616b, roughness: 0.64, metalness: 0.34 });
+      const liftGlass = new THREE.MeshPhysicalMaterial({ color: 0x4cc9f0, transparent: true, opacity: 0.25, roughness: 0.18, metalness: 0.18 });
+      for (const elevator of l.elevators) for (const stop of elevator.stops) {
+        const cab = new THREE.Group(); cab.position.set(stop.x, stop.floorY, stop.z); cab.rotation.y = stop.yaw;
+        cab.add(box(1.92, 0.08, 1.92, liftFloor, 0, 0.04, 0));
+        cab.add(
+          box(0.09, 2.8, 1.95, liftFrame, -0.94, 1.4, 0),
+          box(0.09, 2.8, 1.95, liftFrame, 0.94, 1.4, 0),
+          box(1.95, 2.8, 0.11, liftBack, 0, 1.4, 0.92),
+          box(0.12, 2.8, 0.12, liftFrame, -0.87, 1.4, -0.94),
+          box(0.12, 2.8, 0.12, liftFrame, 0.87, 1.4, -0.94),
+          box(1.82, 0.13, 0.12, liftFrame, 0, 2.74, -0.94),
+        );
+        // A split glazed gate sits open at the landing; the center stays visually clear and walkable.
+        cab.add(box(0.34, 2.34, 0.035, liftGlass, -0.68, 1.19, -0.90), box(0.34, 2.34, 0.035, liftGlass, 0.68, 1.19, -0.90));
+        cab.add(box(0.14, 0.42, 0.08, std({ color: 0x111820, metalness: 0.5 }), 0.73, 1.48, -0.87));
+        cab.add(box(0.045, 0.08, 0.085, new THREE.MeshBasicMaterial({ color: 0x4ade80 }), 0.73, 1.7, -0.87));
+        const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.32, 0.25), new THREE.MeshBasicMaterial({ map: T.signTex(`${elevator.name.toUpperCase()} · ${stop.label}`, '#0b1620', '#dbeafe', '#38bdf8') }));
+        sign.position.set(0, 2.91, -1.015); sign.rotation.y = Math.PI; cab.add(sign);
+        g.add(cab);
+      }
     }
     g.add(this.sensorGroup);
     // breaker box (wall-mounted flush to an adjacent solid wall if available)
@@ -397,7 +469,7 @@ export class LevelView {
       else if (sim.cell(bx, bz + 1) === WALL) { oz = 0.38; ry = Math.PI; }
       else if (sim.cell(bx - 1, bz) === WALL) { ox = -0.38; ry = Math.PI / 2; }
       else if (sim.cell(bx + 1, bz) === WALL) { ox = 0.38; ry = -Math.PI / 2; }
-      bg.position.set(l.breaker.x + ox, 0, l.breaker.z + oz);
+      bg.position.set(l.breaker.x + ox, l.breaker.floorY ?? groundHeightAt(l, l.breaker.x, l.breaker.z), l.breaker.z + oz);
       bg.rotation.y = ry;
       bg.add(box(0.32, 1.4, 0.22, bm, 0, 0.7, 0), box(0.16, 0.12, 0.25, new THREE.MeshBasicMaterial({ color: 0x4fd07a }), 0, 1.15, 0));
       g.add(bg);
@@ -405,7 +477,7 @@ export class LevelView {
     // bomb device
     if (l.bomb) {
       const bm = std({ color: 0x1e2228, metalness: 0.4, roughness: 0.5 });
-      const bg = new THREE.Group(); bg.position.set(l.bomb.x, 0, l.bomb.z);
+      const bg = new THREE.Group(); bg.position.set(l.bomb.x, l.bomb.floorY ?? groundHeightAt(l, l.bomb.x, l.bomb.z), l.bomb.z);
       bg.add(box(0.55, 0.28, 0.38, bm, 0, 0.14, 0), box(0.42, 0.16, 0.28, std({ color: 0x5c2222 }), 0, 0.3, 0));
       this.bombLed = box(0.12, 0.04, 0.08, new THREE.MeshBasicMaterial({ color: 0xff2a2a }), 0, 0.4, 0);
       bg.add(this.bombLed);
@@ -418,7 +490,7 @@ export class LevelView {
     for (const p of l.props) {
       const o = new THREE.Group();
       const pw = p.w ?? 1, pd = p.d ?? 1;
-      o.position.set(p.cx + pw / 2, 0, p.cz + pd / 2);
+      o.position.set(p.cx + pw / 2, p.floorY ?? groundHeightAt(l, p.cx + pw / 2, p.cz + pd / 2), p.cz + pd / 2);
       const rj = ((p.cx * 13 + p.cz * 7) % 10) / 10;
       const seed = p.cx * 31 + p.cz * 17 + p.rot;
       const high = sim.cell(p.cx, p.cz) === 5;
@@ -747,6 +819,27 @@ export class LevelView {
       placeCityModel('concrete_road_barrier', { x: sx - 3.6, y: 0, z: fz + 1.1, ry: 0.2 });
       placeCityModel('metal_trash_can', { x: 6.4, y: 0, z: fz + 0.9 });
       addTree(4.5, fz + 1.4, 1.5); addTree(36.6, fz + 1.4, 1.5);
+    } else if (l.theme === 'tower') {
+      // Kista-inspired glass-and-steel campus: the licensed office-tower asset is a skyline
+      // silhouette beyond the playable perimeter, while the actual F1/F2 walls remain walkable.
+      const glass = new THREE.MeshPhysicalMaterial({ color: 0x5b829b, roughness: 0.22, metalness: 0.35, transparent: true, opacity: 0.56 });
+      const steel = std({ color: 0x202a35, roughness: 0.32, metalness: 0.72 });
+      g.add(box(12.4, 0.22, 3.0, steel, 8.5, 3.12, 34.2));
+      for (const x of [3.2, 13.8]) g.add(box(0.22, 3.05, 0.22, steel, x, 1.52, 34.5));
+      for (const x of [4.0, 5.8, 7.6, 9.4, 11.2, 13.0]) g.add(box(1.55, 2.35, 0.045, glass, x, 1.55, 33.56));
+      const entrySign = new THREE.Mesh(new THREE.PlaneGeometry(4.8, 0.62), new THREE.MeshBasicMaterial({ map: T.signTex('KISTA TECH CENTER', '#0c1624', '#dbeafe', '#3b82f6') }));
+      entrySign.position.set(8.5, 3.5, 35.73); entrySign.rotation.y = Math.PI; g.add(entrySign);
+      const exitSign = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 0.28), new THREE.MeshBasicMaterial({ map: T.signTex('NÖDUTGÅNG · EXIT', '#093818', '#52ff88', '#34e86a') }));
+      exitSign.position.set(8.5, 2.48, 32.87); g.add(exitSign);
+      for (const x of [5.2, 8.5, 11.8]) addLight(x, 2.85, 34.6, 0xdbeafe, 16, 12, 1.45);
+      placeCityModel('office_tower', { x: 44.5, y: 0, z: -14.5, w: 31, h: 34, d: 21, ry: -0.12 });
+      placeCityModel('office_tower', { x: -13.5, y: 0, z: 10.0, w: 22, h: 18, d: 15, ry: Math.PI / 2 });
+      placeCityModel('street_lamp_01', { x: 2.6, y: 0, z: 36.3, scale: 1.1 });
+      placeCityModel('street_lamp_02', { x: 15.3, y: 0, z: 36.1, scale: 1.05 });
+      addLight(2.6, 4.2, 36.3, 0xcde7ff, 12, 13, 1.5);
+      addLight(15.3, 4.0, 36.1, 0xcde7ff, 12, 13, 1.5);
+      placeCityModel('metal_trash_can', { x: 16.8, y: 0, z: 35.9 });
+      addBollard(4.0, 36.0); addBollard(13.0, 36.0);
     }
     if (l.vehicle) {
       extPromises.push(this.spawnPoliceUnit(l.vehicle.x, l.vehicle.z, l.vehicle.yaw, quality));
@@ -829,7 +922,7 @@ export class LevelView {
         halo.position.y = 0.02;
         halo.name = 'halo';
         g.add(gunMesh, halo);
-        g.position.set(ev.x, 0.01, ev.z);
+        g.position.set(ev.x, groundHeightAt(this.sim.level, ev.x, ev.z) + 0.01, ev.z);
         g.rotation.y = ev.yaw;
         this.group.add(g);
         this.evidenceViews.set(ev.id, g);
@@ -855,7 +948,7 @@ export class LevelView {
         new THREE.CylinderGeometry(0.08, 0.08, 0.04, 12),
         new THREE.MeshStandardMaterial({ color: 0x20262e, emissive: 0x1ee6b8, emissiveIntensity: 0.8, roughness: 0.35 }),
       );
-      puck.position.set(sn.x, 1.3, sn.z);
+      puck.position.set(sn.x, (sn.floorY ?? groundHeightAt(this.sim.level, sn.x, sn.z)) + 1.3, sn.z);
       puck.rotation.x = Math.PI / 2;
       this.sensorGroup.add(puck);
     }
@@ -867,7 +960,7 @@ export class LevelView {
           new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.85, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
         );
         ring.rotation.x = -Math.PI / 2;
-        ring.position.set(pg.x, 0.9, pg.z);
+        ring.position.set(pg.x, pg.y ?? groundHeightAt(this.sim.level, pg.x, pg.z) + 0.9, pg.z);
         ring.renderOrder = 10;
         this.group.add(ring);
         this.pingRings.push({ mesh: ring, t: 1.1 });
@@ -894,7 +987,7 @@ export class LevelView {
         for (const lm of serverLeds) (lm.material as THREE.MeshBasicMaterial).color.setHex(0x0c0f14);
       } else if (prop.kind === 'plant') {
         group.rotation.set(1.28, group.rotation.y, 0.25);
-        group.position.y = 0.2;
+        group.position.y = (prop.floorY ?? groundHeightAt(this.sim.level, prop.cx, prop.cz)) + 0.2;
       } else if (prop.kind === 'desk' || prop.kind === 'pc') {
         const ud = group.userData;
         if (ud.vase) ud.vase.visible = false;
@@ -1103,8 +1196,9 @@ export class ActorView {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(0.1 + Math.random() * 0.08, 0.1 + Math.random() * 0.1), new THREE.MeshBasicMaterial({ map: T.bloodTex(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 }));
     const front = Math.random() < 0.7; m.position.set((Math.random() - 0.5) * 0.3, 0.2 + Math.random() * 0.36, front ? -0.156 : 0.156); if (front) m.rotation.y = Math.PI; this.torso.add(m);
   }
-  update(dt: number, time: number) {
+  update(dt: number, time: number, floorY = 0) {
     const a = this.a, k = Math.min(1, dt * 12), r = this.root;
+    r.position.y = lerp(r.position.y, floorY, Math.min(1, dt * 22));
     const leanTarget = a.alive && !a.down && !a.downed && !a.prone ? Math.max(-1, Math.min(1, a.lean)) : 0;
     this.leanK = lerp(this.leanK, leanTarget, Math.min(1, dt * 12));
     if (a.kind === 'player') {
@@ -1375,8 +1469,8 @@ export class FX {
     const p = t.line.geometry.attributes.position as THREE.BufferAttribute; p.setXYZ(0, a.x, a.y, a.z); p.setXYZ(1, b.x, b.y, b.z); p.needsUpdate = true; t.line.visible = true; t.t = color === 0x50d8ff ? 0.14 : 0.06;
   }
   flashAt(x: number, y: number, z: number, intensity = 30, dur = 0.06, color = 0xffc070) { this.light.position.set(x, y, z); this.light.intensity = intensity; this.light.color.setHex(color); this.lightT = dur; }
-  marker(x: number, z: number, color: number) {
-    const m = new THREE.Mesh(new THREE.RingGeometry(0.32, 0.42, 28), new THREE.MeshBasicMaterial({ color, transparent: true, depthTest: false, side: THREE.DoubleSide })); m.rotation.x = -Math.PI / 2; m.position.set(x, 0.05, z); m.renderOrder = 5; this.group.add(m); this.markers.push({ m, t: 2.5 });
+  marker(x: number, z: number, color: number, floorY = 0) {
+    const m = new THREE.Mesh(new THREE.RingGeometry(0.32, 0.42, 28), new THREE.MeshBasicMaterial({ color, transparent: true, depthTest: false, side: THREE.DoubleSide })); m.rotation.x = -Math.PI / 2; m.position.set(x, floorY + 0.05, z); m.renderOrder = 5; this.group.add(m); this.markers.push({ m, t: 2.5 });
   }
   ping(x: number, y: number, z: number, color: number, label: string) {
     const g = new THREE.Group();
@@ -1396,7 +1490,8 @@ export class FX {
       if (this.life[j] <= 0) continue; this.life[j] -= dt;
       if (this.life[j] <= 0) { this.pos[j * 3 + 1] = -999; continue; }
       this.vel[j * 3 + 1] -= this.grav[j] * dt; for (let k = 0; k < 3; k++) this.pos[j * 3 + k] += this.vel[j * 3 + k] * dt;
-      if (this.pos[j * 3 + 1] < 0.02) { this.pos[j * 3 + 1] = 0.02; this.vel[j * 3] = this.vel[j * 3 + 2] = 0; }
+      const particleFloor = groundHeightAt(sim.level, this.pos[j * 3], this.pos[j * 3 + 2]) + 0.02;
+      if (this.pos[j * 3 + 1] < particleFloor) { this.pos[j * 3 + 1] = particleFloor; this.vel[j * 3] = this.vel[j * 3 + 2] = 0; }
     }
     this.pts.geometry.attributes.position.needsUpdate = true; this.pts.geometry.attributes.color.needsUpdate = true;
     for (const t of this.tracers) if (t.line.visible) { t.t -= dt; if (t.t <= 0) t.line.visible = false; }
@@ -1405,8 +1500,9 @@ export class FX {
       d.vy -= 9.8 * dt;
       d.m.position.x += d.vx * dt; d.m.position.y += d.vy * dt; d.m.position.z += d.vz * dt;
       d.m.rotation.x += d.rx * dt; d.m.rotation.z += d.rz * dt;
-      if (d.m.position.y <= 0.012) {
-        d.m.position.y = 0.012;
+      const debrisFloor = groundHeightAt(sim.level, d.m.position.x, d.m.position.z) + 0.012;
+      if (d.m.position.y <= debrisFloor) {
+        d.m.position.y = debrisFloor;
         if (Math.abs(d.vy) > 0.5) { d.vy = -d.vy * 0.25; d.vx *= 0.4; d.vz *= 0.4; }
         else { d.settled = true; d.m.rotation.x = 0; d.m.rotation.z = 0; }
       }
@@ -1429,7 +1525,7 @@ export class FX {
       let cg = this.cloudGroups.get(cl);
       if (!cg) {
         const g = new THREE.Group();
-        g.position.set(cl.x, 0, cl.z);
+        g.position.set(cl.x, cl.y ?? groundHeightAt(sim.level, cl.x, cl.z), cl.z);
         const puffs: { s: THREE.Sprite; ox: number; oy: number; oz: number; phase: number }[] = [];
         const tex = cl.kind === 'gas' ? this.gasTex : this.smokeTex;
         for (let i = 0; i < 22; i++) {
@@ -1465,12 +1561,12 @@ export class FX {
       if (!s.m.visible) continue;
       s.life -= dt;
       if (s.life <= 0) { s.m.visible = false; continue; }
-      if (s.m.position.y > 0.015 || s.vy > 0.05) {
+      const shellFloor = groundHeightAt(sim.level, s.m.position.x, s.m.position.z) + 0.015;
+      if (s.m.position.y > shellFloor || s.vy > 0.05) {
         s.vy -= 9.8 * dt;
         s.m.position.x += s.vx * dt; s.m.position.y += s.vy * dt; s.m.position.z += s.vz * dt;
-        s.m.rotation.x += s.rx * dt; s.m.rotation.z += s.rz * dt;
-        if (s.m.position.y <= 0.015) {
-          s.m.position.y = 0.015;
+        if (s.m.position.y <= groundHeightAt(sim.level, s.m.position.x, s.m.position.z) + 0.015) {
+          s.m.position.y = groundHeightAt(sim.level, s.m.position.x, s.m.position.z) + 0.015;
           if (Math.abs(s.vy) > 0.45) { s.vy = -s.vy * 0.35; s.vx *= 0.45; s.vz *= 0.45; s.rx *= 0.5; s.rz *= 0.5; }
           else { s.vy = s.vx = s.vz = 0; s.m.rotation.x = Math.PI / 2; }
         }

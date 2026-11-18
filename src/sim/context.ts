@@ -2,9 +2,10 @@
 import { roomAt } from './level';
 import type { Actor, Sim, Team } from './sim';
 
-function relDir(from: Actor, to: Actor): string {
+function relDir(from: Actor, to: Actor, dy = 0): string {
   const dx = to.x - from.x, dz = to.z - from.z;
-  const d = Math.hypot(dx, dz);
+  const d = Math.hypot(dx, dy, dz);
+  if (Math.abs(dy) > 1.35) return `${Math.round(d)}m ${dy > 0 ? 'above' : 'below'} you`;
   if (d < 2.2) return 'right beside you';
   const fx = -Math.sin(from.yaw), fz = -Math.cos(from.yaw);
   const rx = Math.cos(from.yaw), rz = -Math.sin(from.yaw);
@@ -41,7 +42,7 @@ export function buildTacticalContext(sim: Sim, player: Actor = sim.player): stri
     const seenSurr = sim.actors.filter(a => a.alive && a.surrendered && !a.restrained && sim.sees(o, a, 16, 3.2)).length;
     const room = roomAt(sim.level, o.x, o.z)?.name ?? 'corridor';
     lines.push(
-      `- ${o.name} (Team ${o.team}, role ${o.role}, slot ${o.slot}): HP ${Math.ceil(o.hp)}, order=${ord}, pos=${relDir(player, o)} in ${room}, sees ${seenSuspects} armed suspects, ${seenSurr} waiting for cuffs`,
+      `- ${o.name} (Team ${o.team}, role ${o.role}, slot ${o.slot}): HP ${Math.ceil(o.hp)}, order=${ord}, pos=${relDir(player, o, sim.floorY(o.x, o.z) - sim.floorY(player.x, player.z))} in ${room}, sees ${seenSuspects} armed suspects, ${seenSurr} waiting for cuffs`,
     );
   }
   return lines.join('\n');
