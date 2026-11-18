@@ -382,7 +382,18 @@ export class FpsArms {
       const g = await new GLTFLoader().loadAsync(url), sc = g.scene; let cam: THREE.Object3D | null = null, rif: THREE.Object3D | null = null;
       sc.traverse((o: any) => {
         if (o.name.startsWith('Head_Cam_0')) cam = o; if (o.name.startsWith('Hand_R_')) rif = o; if (/^(Arm_L_|IK_Hand_Cntrl_L_|IK_PoleTrgt_L_)/.test(o.name)) this.left.push(o);
-        if (!o.isMesh) return; o.frustumCulled = false; const n = o.material.name;
+        if (!o.isMesh) return; o.frustumCulled = false;
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+          // The animation pack's own optic glows with a red ring that sits nearer the eye than the
+          // EOTech reticle built below, so aiming showed two rings. Keep the pack's glass and body,
+          // drop its glow: the game's own reticle is the one that stays.
+          if (m.name === 'Scope' && (m as THREE.MeshStandardMaterial).emissiveMap) {
+            (m as THREE.MeshStandardMaterial).emissiveMap = null;
+            (m as THREE.MeshStandardMaterial).emissive.setHex(0x000000);
+            m.needsUpdate = true;
+          }
+        }
+        const n = o.material.name;
         if (n === 'Silencer') o.visible = false; else if (n !== 'arms') this.rifleParts.push(o);
         o.material.envMapIntensity = 0.9;
         // a few vertices in the source have no bone weights (or hang on the root) and would be drawn as long spikes: bind them to the mesh's main bone

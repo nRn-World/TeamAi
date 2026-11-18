@@ -147,11 +147,13 @@ export function operatorEnv(t: THREE.Texture | null) { ENV = t; }
 /** One officer in the game. `obj` faces -z like every other character in the game. */
 export class OperatorBody {
   obj = new THREE.Group(); private inner: THREE.Object3D; private B: Record<string, THREE.Bone>; private mixer: THREE.AnimationMixer; private gun: THREE.Object3D | null;
-  private deadK = 0; private aimK = 0; private q = Q(); private q2 = Q(); private v = V();
+  private deadK = 0; private aimK = 0; private q = Q(); private q2 = Q(); private v = V(); private v2 = V();
+  private boots: THREE.SkinnedMesh[] = [];
   constructor() {
     this.inner = skinnedClone(T!.wrap); this.inner.rotation.y = Math.PI; this.obj.add(this.inner); this.B = bonesOf(this.inner); this.gun = this.inner.getObjectByName('OperatorRifle') ?? null;
     this.inner.traverse((o: any) => {
       if (!o.isMesh) return; if (!o.isSkinnedMesh) o.castShadow = false;
+      if (o.isSkinnedMesh && o.material && o.material.name === 'boots') this.boots.push(o);
       let m = GAME_MATS.get(o.material); if (!m) { m = (o.material as THREE.MeshStandardMaterial).clone(); if (ENV) { (m as THREE.MeshStandardMaterial).envMap = ENV; (m as THREE.MeshStandardMaterial).envMapIntensity = P.env; } GAME_MATS.set(o.material, m); } o.material = m;
     });
     this.mixer = new THREE.AnimationMixer(this.inner); if (T!.clip) { const a = this.mixer.clipAction(T!.clip); a.play(); this.mixer.setTime(Math.random() * 7); }
@@ -163,7 +165,7 @@ export class OperatorBody {
     }
   }
   /** Call after the stand-in rig has been animated and placed. */
-  update(src: Rig, dt: number, o: { alive: boolean; aim: boolean; armed: boolean }) {
+  update(src: Rig, dt: number, o: { alive: boolean; aim: boolean; armed: boolean; plant: boolean }) {
     const t = T!, S = SRC!, B = this.B, C = (window as any).__op ?? P;
     this.obj.position.copy(src.obj.position); this.obj.rotation.copy(src.obj.rotation);
     this.deadK = Math.min(1, Math.max(0, this.deadK + (o.alive ? -1 : 1) * dt * 5)); this.aimK += ((o.aim && o.alive ? 1 : 0) - this.aimK) * Math.min(1, dt * 9);
@@ -184,6 +186,20 @@ export class OperatorBody {
     }
     if (this.gun) this.gun.visible = o.armed || !o.alive;
     if (this.aimK > 0.01 && this.gun) this.shoulder(this.aimK * (1 - this.deadK), C);
+    if (o.plant && this.deadK <= 0.001) this.plantFeet(src);
+  }
+  /** Lowers or raises the whole officer until the lower boot touches the floor he is standing on. */
+  private plantFeet(src: Rig) {
+    if (!this.boots.length) return;
+    const body = src.obj.parent; if (!body) return;
+    const v = this.v; let lowest = Infinity;
+    for (const m of this.boots) {
+      const pos = m.geometry.getAttribute('position'), step = Math.max(1, Math.floor(pos.count / 32));
+      for (let i = 0; i < pos.count; i += step) { m.getVertexPosition(i, v); m.localToWorld(v); if (v.y < lowest) lowest = v.y; }
+    }
+    const dy = body.getWorldPosition(this.v2).y - lowest;
+    if (!Number.isFinite(dy) || Math.abs(dy) > 0.2) return; // never react to a wildly different pose (stairs, fall, ladder)
+    this.obj.position.y += dy;
   }
   /** Bring the rifle up to the shoulder and put both hands back on it. */
   private shoulder(k: number, C: typeof P) {

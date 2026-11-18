@@ -1393,7 +1393,7 @@ export class Sim {
         this.checkPlayers();
         return;
       }
-      a.alive = false; a.downed = false; a.hp = 0; a.moving = false; a.path = null; this.events.push({ t: 'death', a });
+      a.alive = false; a.downed = false; a.hp = 0; a.moving = false; a.path = null; this.settleBody(a); this.events.push({ t: 'death', a });
       this.replayEvents.push({ t: this.time, kind: 'death', x: a.x, z: a.z });
       if (a.kind === 'suspect') {
         this.stats.suspectsKilled++;
@@ -1413,6 +1413,30 @@ export class Sim {
       if (this.rng() < 0.22) this.surrender(a);
     }
     if (a.kind === 'officer' && a.hp < 45 && this.rng() < 0.5) this.say(a, "I'm hit!");
+  }
+  /**
+   * A body falls flat, so it needs far more clearance than a standing actor. Without this the head
+   * of a suspect who died beside a shelf or a desk ends up inside the furniture.
+   */
+  private settleBody(a: Actor) {
+    const floor = this.floorY(a.x, a.z), fx = -Math.sin(a.yaw), fz = -Math.cos(a.yaw);
+    // A body lies along the officer's facing with the head and the legs at either end.
+    const lyingRoom = (x: number, z: number) => this.isActorPositionClear(x, z, 0.3)
+      && this.isActorPositionClear(x + fx * 0.75, z + fz * 0.75, 0.3)
+      && this.isActorPositionClear(x - fx * 0.75, z - fz * 0.75, 0.3)
+      && this.isActorPositionClear(x - fz * 0.55, z + fx * 0.55, 0.3)
+      && this.isActorPositionClear(x + fz * 0.55, z - fx * 0.55, 0.3);
+    if (lyingRoom(a.x, a.z)) return;
+    for (let radius = 0.2; radius <= 1.2; radius += 0.1) {
+      const count = Math.max(12, Math.ceil((Math.PI * 2 * radius) / 0.1));
+      for (let i = 0; i < count; i++) {
+        const angle = (i + a.id * 0.381966) * Math.PI * 2 / count;
+        const x = a.x + Math.cos(angle) * radius, z = a.z + Math.sin(angle) * radius;
+        if (Math.abs(this.floorY(x, z) - floor) > 0.2) continue;
+        if (!lyingRoom(x, z)) continue;
+        a.x = x; a.z = z; return;
+      }
+    }
   }
   private banter(text: string, actor?: Actor) {
     if (this.time - this.banterT < 12) return;

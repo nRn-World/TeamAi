@@ -1273,7 +1273,11 @@ export class ActorView {
     g.obj.position.x = this.leanK * 0.12;
     g.obj.position.y = -P_DROP() * this.kneelK - (a.kind === 'player' && a.crouch && a.alive ? 0.25 : 0) + this.proneK * 0.2 + (a.alive ? a.jumpY : 0); g.obj.position.z = this.proneK * 0.8;
     if (g.gun) g.gun.visible = armed && a.alive && !a.down && !a.downed;
-    if (this.op) { this.op.update(g, dt, { alive: a.alive, aim: !!a.target || a.ads || this.shootT > 0, armed }); this.gun.visible = false; }
+    if (this.op) {
+      // Feet are planted on the floor only while he is actually standing on it (not crouched, prone, downed or airborne).
+      const plant = a.alive && !a.crouch && !a.prone && !a.down && !a.downed && a.jumpY <= 0.01;
+      this.op.update(g, dt, { alive: a.alive, aim: !!a.target || a.ads || this.shootT > 0, armed, plant }); this.gun.visible = false;
+    }
     else if (this.rifle) { this.gun.visible = armed && a.alive; const G = (window as any).__gun; if (G) { this.gun.position.set(G.p[0], G.p[1], G.p[2]); this.gun.rotation.set(G.r[0], G.r[1], G.r[2]); this.gun.scale.setScalar(G.s); } }
     if (this.label) this.label.visible = a.alive;
     if (this.dropped) this.dropped.visible = !a.armed || !a.alive;
