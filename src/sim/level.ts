@@ -609,6 +609,9 @@ const SPECS: Spec[] = [
       // A 7.5m stair flight rises 3m and lands flush with the F2 floor edge (x=33), so the top
       // step is not buried under the command floor. It is a real walkable route both ways.
       b.staircase(25.5, 15.5, 33.0, 15.5, 2.3, 0, 3);
+      // Open the bottom landing into Operations Floor: without this the flight ends half a
+      // metre from the service-spine wall with no exit. Three cells match the 2.3m flight.
+      b.set(25, 14, FLOOR); b.set(25, 15, FLOOR); b.set(25, 16, FLOOR);
       // The F2 command spine starts at x = 33, so its west wall would cover the top tread.
       // Open the three cells the 2.3 m flight crosses, making the landing a real stair doorway.
       b.set(33, 14, FLOOR); b.set(33, 15, FLOOR); b.set(33, 16, FLOOR);

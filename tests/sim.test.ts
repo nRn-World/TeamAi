@@ -190,6 +190,9 @@ function play(mission: number, seed: number, verbose = false) {
       ok(level.cells[15 * level.w + 33] === FLOOR
         && walkLine(level, { x: 32.8, z: 15.5 }, { x: 33.6, z: 15.5 }),
       'the top of the flight opens through the F2 command-floor wall');
+      ok(level.cells[15 * level.w + 25] === FLOOR
+        && walkLine(level, { x: 24.6, z: 15.5 }, { x: 25.8, z: 15.5 }),
+      'the bottom landing opens into the F1 operations floor');
       ok(level.props.every(p => {
         const dx = p.cx + 0.5 - stair.x0, dz = p.cz + 0.5 - stair.z0;
         const t = (dx * (stair.x1 - stair.x0) + dz * (stair.z1 - stair.z0)) / Math.hypot(stair.x1 - stair.x0, stair.z1 - stair.z0) ** 2;
