@@ -404,7 +404,10 @@ ok(wins >= 4, 'bot should be able to win across missions');
   ok(sus.alive && sus.stun > 1.5, 'taser stuns suspect without killing');
   const t0 = sc.bomb!.time;
   sc.update(1.0);
-  ok(sc.bomb!.time < t0, 'bomb timer counts down');
+  ok(sc.bomb!.time === t0 && !sc.bomb!.started, 'bomb timer is held until the squad closes in or a firefight starts');
+  sc.bomb!.started = true;
+  sc.update(1.0);
+  ok(sc.bomb!.time < t0, 'bomb timer counts down once it is armed');
   sc.bomb!.defused = true;
   ok(sc.debriefNotes().length > 0, 'debriefNotes provides tactical feedback');
 

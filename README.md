@@ -8,6 +8,7 @@ Voice-commanded tactical first-person shooter for the browser (inspired by SWAT 
 npm install
 npm run dev      # http://localhost:5173 – use Chrome or Edge for voice control
 npm test         # headless simulation + tests of the voice-command parser
+npm run playtest # fast headless playthrough used as a CI gate (a few seconds)
 npm run build    # production build in dist/
 ```
 
@@ -39,6 +40,16 @@ Code dependencies: three.js (MIT), Vite (MIT), TypeScript (Apache-2.0), PeerJS (
   operation earns no XP — but the injuries still come home. The daily raid always runs under the same rule.
 - **Onboarding.** The first launch shows a *First deployment* card with the six controls that matter and
   the scoring rule (arrests pay, bodies do not).
+
+## Bomb operations and insertion points
+
+The bomb timer is held until the squad earns the pressure: it starts when a player gets within 14 m of the device or when a firefight begins. Until then the HUD reads `BOMB · TIMER HELD`; afterwards it counts down, and the bomb hint under it shows the distance and a relative bearing arrow. If the whole entry team goes down with less than 30 s left, the nearest officer takes over and moves to defuse the device on their own.
+
+Locked wooden doors are kicked open with `F` (metal vault doors still need a Breach Charge). This is what makes the Club Eclipse *Backstage Alley (Locked)* insertion usable: it starts six metres from the bomb, behind a door the team can kick in. `tools/playtest.mts` checks that route, the deployment grace and the bomb flow on every push.
+
+## Key bindings
+
+Movement, stance, use, reload, shout, grenade cycle and voice are rebindable under Settings → Key bindings; the bindings are stored with the rest of the settings and conflicts are swapped rather than silently dropped. The Controls screen still lists the default layout. Default keys are also shown in the HUD quick bar, which follows the shout binding.
 
 ## Furniture placement
 

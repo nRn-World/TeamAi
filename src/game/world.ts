@@ -15,6 +15,22 @@ const BOX = new THREE.BoxGeometry(1, 1, 1);
 const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...o });
 function box(w: number, h: number, d: number, m: THREE.Material, x = 0, y = 0, z = 0) { const b = new THREE.Mesh(BOX, m); b.scale.set(w, h, d); b.position.set(x, y, z); return b; }
 
+type SlabRect = { x: number; z: number; w: number; d: number };
+/** Splits a horizontal slab around a rectangular opening, so a stair can break through it. */
+function cutSlab(rects: SlabRect[], hole: SlabRect): SlabRect[] {
+  const out: SlabRect[] = [];
+  for (const r of rects) {
+    const x0 = Math.max(r.x, hole.x), x1 = Math.min(r.x + r.w, hole.x + hole.w);
+    const z0 = Math.max(r.z, hole.z), z1 = Math.min(r.z + r.d, hole.z + hole.d);
+    if (x1 - x0 <= 0.001 || z1 - z0 <= 0.001) { out.push(r); continue; }
+    if (z0 - r.z > 0.001) out.push({ x: r.x, z: r.z, w: r.w, d: z0 - r.z });
+    if (r.z + r.d - z1 > 0.001) out.push({ x: r.x, z: z1, w: r.w, d: r.z + r.d - z1 });
+    if (x0 - r.x > 0.001) out.push({ x: r.x, z: z0, w: x0 - r.x, d: z1 - z0 });
+    if (r.x + r.w - x1 > 0.001) out.push({ x: x1, z: z0, w: r.x + r.w - x1, d: z1 - z0 });
+  }
+  return out;
+}
+
 const CITY_CACHE = new Map<string, Promise<THREE.Group | null>>();
 function loadCityAsset(name: string): Promise<THREE.Group | null> {
   let p = CITY_CACHE.get(name);
@@ -261,16 +277,48 @@ export class LevelView {
       g.add(pl);
       this.lightPool.push(pl);
     }
+    // A stair flight has to break through the slab it arrives on. Without this opening the top
+    // steps are swallowed by the ceiling/floor plane and the player climbs into solid geometry.
+    // The opening is widened to the cell boundaries across the flight so the handrails never run
+    // through the shaft walls.
+    const stairBounds = (s: (typeof l.staircases)[number]) => {
+      const alongX = Math.abs(s.x1 - s.x0) >= Math.abs(s.z1 - s.z0);
+      const ax0 = Math.min(s.x0, s.x1), ax1 = Math.max(s.x0, s.x1);
+      const az0 = Math.min(s.z0, s.z1), az1 = Math.max(s.z0, s.z1);
+      return {
+        x0: alongX ? ax0 - s.width / 2 : Math.floor(ax0 - s.width / 2),
+        x1: alongX ? ax1 + s.width / 2 : Math.ceil(ax1 + s.width / 2),
+        z0: alongX ? Math.floor(az0 - s.width / 2) : az0 - s.width / 2,
+        z1: alongX ? Math.ceil(az1 + s.width / 2) : az1 + s.width / 2,
+      };
+    };
+    const slabHoles = l.staircases.map(s => {
+      const b = stairBounds(s);
+      return { x: b.x0, z: b.z0, w: b.x1 - b.x0, d: b.z1 - b.z0, y: Math.max(s.fromY, s.toY) };
+    });
     for (const r of l.rooms) {
       const floorY = r.floorY ?? 0;
-      const fl = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), std({ map: T.floorTex(r.floor), roughness: r.floor === 'tile' ? 0.35 : 0.95 }));
-      scaleUV(fl.geometry, r.w / 2, r.h / 2); fl.rotation.x = -Math.PI / 2; fl.position.set(r.x + r.w / 2, floorY + r.id * 0.0006, r.z + r.h / 2); g.add(fl);
-      const ce = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), ceilMat.clone()); (ce.material as THREE.MeshStandardMaterial).map = T.floorTex('ceiling');
-      scaleUV(ce.geometry, r.w / 2, r.h / 2); ce.rotation.x = Math.PI / 2; ce.position.set(r.x + r.w / 2, floorY + 3 - r.id * 0.0006, r.z + r.h / 2); g.add(ce);
+      const floorMat = std({ map: T.floorTex(r.floor), roughness: r.floor === 'tile' ? 0.35 : 0.95 });
+      const ceilRoomMat = ceilMat.clone(); (ceilRoomMat as THREE.MeshStandardMaterial).map = T.floorTex('ceiling');
+      const roomRect: SlabRect = { x: r.x, z: r.z, w: r.w, d: r.h };
+      let floorRects: SlabRect[] = [roomRect];
+      for (const h of slabHoles) if (Math.abs(h.y - floorY) < 0.06) floorRects = cutSlab(floorRects, h);
+      let ceilRects: SlabRect[] = [roomRect];
+      for (const h of slabHoles) if (Math.abs(h.y - (floorY + 3)) < 0.06) ceilRects = cutSlab(ceilRects, h);
+      for (const rc of floorRects) {
+        const fl = new THREE.Mesh(new THREE.PlaneGeometry(rc.w, rc.d), floorMat);
+        scaleUV(fl.geometry, rc.w / 2, rc.d / 2); fl.rotation.x = -Math.PI / 2; fl.position.set(rc.x + rc.w / 2, floorY + r.id * 0.0006, rc.z + rc.d / 2); g.add(fl);
+      }
+      for (const rc of ceilRects) {
+        const ce = new THREE.Mesh(new THREE.PlaneGeometry(rc.w, rc.d), ceilRoomMat);
+        scaleUV(ce.geometry, rc.w / 2, rc.d / 2); ce.rotation.x = Math.PI / 2; ce.position.set(rc.x + rc.w / 2, floorY + 3 - r.id * 0.0006, rc.z + rc.d / 2); g.add(ce);
+      }
       const dark = l.theme === 'club' ? (r.kind === 'club') : (r.kind !== 'corridor' && r.kind !== 'lobby' && ((r.id * 7 + sim.mission * 3 + Math.floor(l.suspects[0]?.x ?? 0)) % 4 === 0));
       const nx = Math.max(1, Math.round((r.w - 2) / 6)), nz = Math.max(1, Math.round((r.h - 2) / 6));
       for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
         const x = r.x + 1 + ((i + 0.5) * (r.w - 2)) / nx, z = r.z + 1 + ((j + 0.5) * (r.h - 2)) / nz;
+        // do not leave a light fitting floating in the stairwell opening
+        if (slabHoles.some(h => Math.abs(h.y - (floorY + 3)) < 0.06 && x > h.x && x < h.x + h.w && z > h.z && z < h.z + h.d)) continue;
         const lm = box(r.kind === 'warehouse' ? 0.4 : 1.1, 0.05, r.kind === 'corridor' ? 0.3 : 0.5, dark ? lampOff : lampOn, x, floorY + 2.97, z);
         g.add(lm);
         if (!dark) this.lampMeshes.push(lm);
@@ -344,6 +392,34 @@ export class LevelView {
     const curbMat = std({ color: 0x262a31, roughness: 0.72, metalness: 0.25 });
     const perimH = l.theme === 'club' ? 2.6 : 0.85;
     mk(inner, wallMat); mk(outer.filter(([x, z]) => !(x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1)), brickMat, 3.2); mk(outer.filter(([x, z]) => x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1), l.theme === 'club' ? brickMat : curbMat, perimH);
+    // Enclose the stairwell above the level it leaves: the flight breaks through the F1 ceiling,
+    // so it needs a real shaft (walls + ceiling) rather than a raw hole into the sky.
+    for (const s of l.staircases) {
+      const top = Math.max(s.fromY, s.toY), low = Math.min(s.fromY, s.toY);
+      if (top - low < 1) continue;
+      const dx = s.x1 - s.x0, dz = s.z1 - s.z0;
+      if (Math.abs(dx) > 0.01 && Math.abs(dz) > 0.01) continue; // only axis-aligned shafts; others keep the opening
+      const b = stairBounds(s);
+      const x0 = b.x0, x1 = b.x1, z0 = b.z0, z1 = b.z1;
+      const shaftH = 3, t = 0.12;
+      for (let x = x0; x < x1 - 0.01; x += 1) {
+        const w = Math.min(1, x1 - x);
+        g.add(box(w, shaftH, t, wallMat, x + w / 2, top + shaftH / 2, z0));
+        g.add(box(w, shaftH, t, wallMat, x + w / 2, top + shaftH / 2, z1));
+      }
+      for (let z = z0; z < z1 - 0.01; z += 1) {
+        const d = Math.min(1, z1 - z);
+        g.add(box(t, shaftH, d, wallMat, x0, top + shaftH / 2, z + d / 2));
+      }
+      const sc = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), ceilMat.clone());
+      (sc.material as THREE.MeshStandardMaterial).map = T.floorTex('ceiling');
+      scaleUV(sc.geometry, (x1 - x0) / 2, (z1 - z0) / 2);
+      sc.rotation.x = Math.PI / 2; sc.position.set((x0 + x1) / 2, top + shaftH, (z0 + z1) / 2); g.add(sc);
+      if (quality > 0) {
+        const light = new THREE.PointLight(0xffe9c8, 8, 10, 1.7);
+        light.position.set((x0 + x1) / 2, top + shaftH - 0.3, (z0 + z1) / 2); g.add(light);
+      }
+    }
     // Perimeter cells are drawn with the dark exterior brick/curb material, but many of them also
     // face a playable room. Skin those faces in the interior plaster so the level does not end in
     // a matte-black wall like the corridor corner did.
@@ -486,6 +562,11 @@ export class LevelView {
     // props
     const crate = std({ map: T.crateTex() }), wood = std({ map: T.woodTex(), roughness: 0.6 }), shelf = std({ map: T.shelfTex() }), dark = std({ color: 0x1a1c20, roughness: 0.5 });
     const locker = std({ map: T.metalTex('locker', '#5d6b78'), metalness: 0.4, roughness: 0.55 }), white = std({ map: T.fabricTex('w', '#d8d6d0') }), pot = std({ color: 0x8a5a3c }), leaf = std({ color: 0x2f6b35 });
+    // Shared geometry for the procedural plant, used until the scanned plant models arrive.
+    const potGeo = new THREE.CylinderGeometry(0.25, 0.18, 0.46, 14), rimGeo = new THREE.CylinderGeometry(0.266, 0.256, 0.06, 14), soilGeo = new THREE.CylinderGeometry(0.225, 0.225, 0.03, 14);
+    const stemGeo = new THREE.CylinderGeometry(0.022, 0.036, 0.95, 6), leafGeo = new THREE.SphereGeometry(1, 6, 4);
+    const soilMat = std({ color: 0x2a1d14, roughness: 1 }), stemMat = std({ color: 0x3d6b3a, roughness: 0.85 });
+    const leafMats = [leaf, std({ color: 0x3f7f45, roughness: 0.8 }), std({ color: 0x255a2d, roughness: 0.8 })];
     const sofaCols = ['#7a2f2f', '#2f4a6a', '#4a4a4a', '#6a5a2f'];
     for (const p of l.props) {
       const o = new THREE.Group();
@@ -525,7 +606,24 @@ export class LevelView {
             case 'bed': o.add(box(1.24, 0.34, 1.92, wood, 0, 0.17, 0), box(1.18, 0.24, 1.84, white, 0, 0.44, 0), box(0.8, 0.12, 0.36, white, 0, 0.6, -0.68)); break;
             case 'chair': { const fm = std({ map: T.fabricTex('s' + (p.rot % 4), sofaCols[p.rot % 4]) }); o.add(box(0.76, 0.44, 0.74, fm, 0, 0.22, 0), box(0.76, 0.56, 0.18, fm, 0, 0.72, -0.28)); break; }
             case 'sofa': { const fm = std({ map: T.fabricTex('s' + (p.rot % 4), sofaCols[p.rot % 4]) }); o.add(box(1.82, 0.44, 0.84, fm, 0, 0.22, 0), box(1.82, 0.4, 0.2, fm, 0, 0.64, -0.32), box(0.16, 0.26, 0.84, fm, -0.83, 0.56, 0), box(0.16, 0.26, 0.84, fm, 0.83, 0.56, 0)); break; }
-            case 'plant': { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.18, 0.48, 10), pot); c.position.y = 0.24; o.add(c); for (let i = 0; i < 3; i++) { const s = new THREE.Mesh(new THREE.IcosahedronGeometry(0.32 - i * 0.05, 0), leaf); s.position.set((i - 1) * 0.09, 0.72 + i * 0.24, (rj - 0.5) * 0.1); s.rotation.set(i, rj * 6, i * 2); o.add(s); } break; }
+            case 'plant': {
+              // Real potted plant: tapered terracotta pot, soil, a stem and nine broad leaves
+              // fanned out at different heights. The 3D scans replace it when they finish loading.
+              const c = new THREE.Mesh(potGeo, pot); c.position.y = 0.23; o.add(c);
+              const rim = new THREE.Mesh(rimGeo, pot); rim.position.y = 0.44; o.add(rim);
+              const soil = new THREE.Mesh(soilGeo, soilMat); soil.position.y = 0.455; o.add(soil);
+              const stem = new THREE.Mesh(stemGeo, stemMat); stem.position.y = 0.9; o.add(stem);
+              for (let i = 0; i < 9; i++) {
+                const a = (i / 9) * Math.PI * 2 + rj * 1.7, y = 0.55 + ((i * 7) % 5) * 0.125;
+                const lf = new THREE.Mesh(leafGeo, leafMats[i % 3]);
+                lf.scale.set(0.17, 0.4 + (i % 3) * 0.06, 0.055);
+                lf.position.set(Math.cos(a) * 0.19, y + 0.2, Math.sin(a) * 0.19);
+                lf.rotation.set(0, -a + Math.PI / 2, 0);
+                lf.rotateX(-0.62 - (i % 3) * 0.16);
+                o.add(lf);
+              }
+              break;
+            }
           }
         };
         const fill = () => {

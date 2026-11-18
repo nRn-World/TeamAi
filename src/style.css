@@ -707,3 +707,19 @@ body.stream-mode #log { bottom:105px; }
 .frgrid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px 18px; margin:12px 0 16px; }
 .frgrid div { display:flex; justify-content:space-between; gap:10px; font-size:12px; border-bottom:1px solid rgba(255,255,255,.07); padding-bottom:5px; }
 .frgrid b { color:#fff; font-weight:600; }
+
+/* ---- live compliance + bomb guidance ---- */
+#compliance { position:absolute; top:68px; left:50%; transform:translateX(-50%); background:rgba(8,12,17,.58); border:1px solid rgba(255,255,255,.07); border-radius:4px; padding:2px 12px; font:600 10px/1.7 ui-monospace, Consolas, monospace; letter-spacing:.1em; color:#9eb8cc; white-space:nowrap; }
+#compliance b { color:#fff; }
+#compliance i { font-style:normal; color:#ff8a80; }
+#bombtimer { top:88px; }
+#bombtimer.held { background:rgba(58,48,18,.92); border-color:#f2c14e; color:#ffe9a8; box-shadow:none; }
+#bombHint { position:absolute; top:124px; left:50%; transform:translateX(-50%); padding:3px 12px; background:rgba(8,12,17,.62); border:1px solid rgba(255,255,255,.08); border-radius:4px; font:600 10px/1.7 ui-monospace, Consolas, monospace; letter-spacing:.1em; color:#d7e6f2; white-space:nowrap; }
+#bombHint i { display:inline-block; font-style:normal; color:#ff6a6a; margin-right:6px; transition:transform .12s linear; }
+
+/* ---- key binding rows ---- */
+.keybinds { display:grid; grid-template-columns:repeat(2,1fr); gap:4px 10px; margin:6px 0 8px; }
+.kbrow { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 8px; background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.08); color:#b9cfe0; font:500 11px/1 var(--hd); letter-spacing:.04em; cursor:pointer; text-align:left; }
+.kbrow:hover { border-color:rgba(255,255,255,.25); color:#fff; }
+.kbrow.listening { border-color:var(--acc); color:#fff; background:rgba(255,255,255,.08); }
+.kbrow kbd { font:700 10px/1 ui-monospace, Consolas, monospace; background:#1a232c; border:1px solid #2f3d4a; border-radius:3px; padding:3px 6px; color:var(--acc); }

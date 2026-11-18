@@ -34,8 +34,10 @@
   <div id="hitmark"></div>
   <div id="dmg"></div><div id="suppress"></div><div id="flash"></div>
   <div id="objective"></div>
+  <div id="compliance"></div>
   <div id="compass">N · 000°</div>
   <div id="bombtimer" class="hidden"></div>
+  <div id="bombHint" class="hidden"></div>
   <div id="vc" class="hidden"></div>
   <div id="coopHud" class="hidden"></div>
   <canvas id="minimap"></canvas>
@@ -309,7 +311,7 @@
 <div id="firstrun" class="screen hidden"><div class="panel wide scroll">
   <div class="ckicker">// FIRST DEPLOYMENT</div>
   <h2>WELCOME TO THE ENTRY TEAM</h2>
-  <p class="thanks">Six operations, one career. You earn XP for clean work — arrests, secured civilians, a quiet entry — and ranks unlock new kit in the Armory. Your officers can be hurt; hurt officers sit out while a rookie stands in.</p>
+  <p class="thanks">Seven operations, one career. You earn XP for clean work — arrests, secured civilians, a quiet entry — and ranks unlock new kit in the Armory. Your officers can be hurt; hurt officers sit out while a rookie stands in.</p>
   <div class="frgrid">
     <div><b>Move / sprint / crouch</b><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <kbd>Shift</kbd> <kbd>C</kbd></span></div>
     <div><b>Look, aim, fire</b><span>Mouse · <kbd>RMB</kbd> · <kbd>LMB</kbd></span></div>
@@ -317,7 +319,7 @@
     <div><b>Crack a door</b><span><kbd>Shift</kbd>+<kbd>F</kbd></span></div>
     <div><b>FiberCam under the door</b><span><kbd>O</kbd></span></div>
     <div><b>Flashbang / reload</b><span><kbd>G</kbd> · <kbd>R</kbd></span></div>
-    <div><b>Talk to the squad</b><span><kbd>V</kbd> hold</span></div>
+    <div><b>Talk to the squad</b><span>Hold <kbd>V</kbd> · «Team A, follow me»</span></div>
     <div><b>Lean / peek around cover</b><span>Hold <kbd>Q</kbd> / <kbd>E</kbd></span></div>
   </div>
   <p class="note">Arrests score far higher than bodies. Announce yourself, give them a chance to surrender, and watch the corners.</p>
@@ -366,6 +368,7 @@
   <p>You can also reassign officers between teams (e.g. <i>«Maya join Team B»</i>, <i>«Ken switch to Team A»</i>) and combine orders in one sentence (e.g. <i>«Ken follow me, Maya join Team B, Team B cover me»</i>). In <b>Settings</b>, you can enable the optional in-browser <b>AI Brain (WebGPU)</b> for Solo mode so the squad understands free-form English, tactical questions, and relaying orders between SWAT units without any external API.</p>
   <h2>How to win</h2>
   <p>Every suspect must be arrested or neutralised and every civilian secured with handcuffs. Arrests score more than kills. Shooting someone who has given up, or without warning, costs points. Civilians without handcuffs run off when nobody is watching them.</p>
+  <p class="note">Keys can be rebound under Settings → Key bindings. That list shows the default layout.</p>
   <div class="row"><button class="close primary">Close</button></div>
 </div></div>
 
@@ -381,6 +384,8 @@
     <label>Microphone mode <select id="sPtt"><option value="1">Hold V to talk</option><option value="0">Always on</option></select></label>
     <label>Speech recognition engine <select id="sAsr"><option value="local">On this computer (every browser, private)</option><option value="web">Browser service (Chrome and Edge)</option></select></label>
     <div id="asrInfo" class="note"></div>
+    <label>Speech model <span><button id="btnAsrLoad" type="button">Download speech model now</button></span></label>
+    <div class="note">The Whisper model is a one-time download (a few hundred MB) and is kept in the browser cache. It starts when you deploy, press V, or use the button above – never silently from the menu.</div>
     <label>Accent (browser service only) <select id="sLang"><option value="en-US">English (US)</option><option value="en-GB">English (UK)</option><option value="en-AU">English (Australia)</option><option value="en-IN">English (India)</option></select></label>
     <label>Spoken voices <select id="sTts"><option value="1">On</option><option value="0">Off</option></select></label>
     <label>Team voice <span><button id="btnTts" type="button">Test the team voice</button></span></label>
@@ -396,6 +401,10 @@
     <label>Bodycam face censor <select id="sCensor"><option value="1">On (blur/redact faces in Bodycam)</option><option value="0">Off</option></select></label>
     <label>Auto Helmet Cam PiP <select id="sPip"><option value="1">On (auto on breach/peek)</option><option value="0">Manual only (P key)</option></select></label>
   </div>
+  <div class="clabel" style="margin-top:16px">KEY BINDINGS</div>
+  <div id="keybinds" class="keybinds"></div>
+  <div id="keysNote" class="note">Click a key to change it. The Controls screen shows the default layout.</div>
+  <button id="btnKeysReset" type="button">Reset to default keys</button>
   </div>
   <div id="sPaneCred" class="hidden">
     <p class="thanks">TeamAi is built on the work of people who share what they make. Thank you to everyone listed here.</p>

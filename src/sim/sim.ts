@@ -46,6 +46,8 @@ export interface PrePlan {
 
 export interface BombState {
   x: number; z: number; time: number; defused: boolean; defuseT: number;
+  /** The countdown only runs once the squad has found the device or a firefight has started. */
+  started?: boolean;
   warned60?: boolean; warned20?: boolean;
 }
 
@@ -213,6 +215,10 @@ export class Sim {
   breachSyncT = 0;
   private breachSyncStep = -1;
   mods: CoopMods = {};
+  /** Seconds at the start of an operation where suspects have not acquired the entry team yet. */
+  graceT = 3;
+  /** Latched when the squad takes over the bomb after the last player goes down. */
+  private bombAutoCalled = false;
   /** True once the entry team has turned on the player after repeated friendly fire. */
   squadHostile = false;
   /** Hits the player has landed on squadmates this mission (the first one only earns a warning). */
@@ -227,7 +233,7 @@ export class Sim {
     this.level = buildLevel(mission, seed); this.rng = mulberry32(seed + 99);
     if (mods.blackout) this.powerOn = false;
     if (this.level.bomb) {
-      this.bomb = { x: this.level.bomb.x, z: this.level.bomb.z, time: this.level.bomb.time, defused: false, defuseT: 0 };
+      this.bomb = { x: this.level.bomb.x, z: this.level.bomb.z, time: this.level.bomb.time, defused: false, defuseT: 0, started: false };
     }
     const l = this.level;
     const ep = preplan.entry && preplan.entry > 0 && l.entries[preplan.entry] ? l.entries[preplan.entry] : l.playerSpawn;
@@ -1087,6 +1093,19 @@ export class Sim {
     door.target = t; this.events.push({ t: 'door', door, open, kick });
     return true;
   }
+  /** Kick a locked wooden door open. Heavy metal doors (vaults, warehouse shutters) need a Breach Charge. */
+  kickDoor(door: Door, by: Actor): boolean {
+    if (this.isMetalDoor(door)) {
+      this.events.push({ t: 'info', text: 'Heavy metal door — use a Breach Charge (U).' });
+      return false;
+    }
+    const opened = this.setDoor(door, true, true, false, false, by);
+    if (opened) {
+      this.noise(door.cx + 0.5, door.cz + 0.5, 14);
+      this.events.push({ t: 'info', text: 'You kicked the door open.' });
+    }
+    return opened;
+  }
   /** Carefully crack a closed door slightly ajar (target=0.28) to peek or spot tripwires without tripping them. */
   crackDoor(door: Door, by: Actor = this.player): boolean {
     if (door.wedged) {
@@ -1094,7 +1113,7 @@ export class Sim {
       return false;
     }
     if (door.locked) {
-      this.events.push({ t: 'info', text: 'Door is locked — pick lock (F) or FiberCam (O) first.' });
+      this.events.push({ t: 'info', text: 'Door is locked — kick it (F), blow it with a Breach Charge (U), or peek with FiberCam (O).' });
       return false;
     }
     if (door.target > 0.35) {
@@ -2045,6 +2064,8 @@ export class Sim {
   }
 
   private nearestPolice(s: Actor, range: number, fov: number): Actor | null {
+    // Deployment grace: nobody is acquired while the team is still stepping out of the truck.
+    if (this.graceT > 0) return null;
     let best: Actor | null = null, bd = 1e9;
     for (const o of this.actors) {
       if ((o.kind !== 'player' && o.kind !== 'officer') || !o.alive) continue;
@@ -2212,6 +2233,7 @@ export class Sim {
     }
     else if (t.door) {
       if (opts.crack) this.crackDoor(t.door, p);
+      else if (t.door.locked) this.kickDoor(t.door, p);
       else this.setDoor(t.door, t.door.target === 0, false, false, false, p);
     }
     else if (t.actor) { if (t.actor.claimedBy) { t.actor.claimedBy.cuff = null; t.actor.claimedBy = null; } p.cuff = t.actor; p.cuffT = 0; }
@@ -2284,7 +2306,7 @@ export class Sim {
     return {
       suspects: this.suspects.filter(s => s.alive && !s.restrained).length,
       civs: this.civs.filter(c => c.alive && !c.restrained).length,
-      bomb: this.bomb && !this.bomb.defused ? Math.ceil(this.bomb.time) : 0,
+      bomb: this.bomb && !this.bomb.defused && this.bomb.started ? Math.ceil(this.bomb.time) : 0,
     };
   }
   score() {
@@ -2509,7 +2531,16 @@ export class Sim {
       }
     }
     this.stepDoors(dt);
-    if (this.bomb && !this.bomb.defused) {
+    if (this.graceT > 0) this.graceT = Math.max(0, this.graceT - dt);
+    if (this.bomb && !this.bomb.defused && !this.bomb.started) {
+      const near = this.players.some(p => p.alive && !p.downed && Math.hypot(p.x - this.bomb!.x, p.z - this.bomb!.z) < 14);
+      const alarm = this.suspects.some(s => s.alive && (s.hostile || s.hasFired));
+      if (near || alarm) {
+        this.bomb.started = true;
+        this.events.push({ t: 'info', text: `BOMB TIMER STARTED — ${Math.ceil(this.bomb.time)} seconds to defuse it!` });
+      }
+    }
+    if (this.bomb && !this.bomb.defused && this.bomb.started) {
       this.bomb.time -= dt;
       if (this.bomb.time <= 60 && !this.bomb.warned60) {
         this.bomb.warned60 = true;
@@ -2525,6 +2556,18 @@ export class Sim {
         this.events.push({ t: 'bomb', kind: 'detonate', x: this.bomb.x, z: this.bomb.z });
         this.finish(false, 'The bomb detonated!');
         return;
+      }
+    }
+    // If the whole entry team is down in a bomb operation, the squad takes over the device
+    // instead of standing over the bodies while the clock runs out.
+    if (this.bomb && !this.bomb.defused && this.bomb.started && !this.bombAutoCalled && this.bomb.time <= 30
+      && !this.players.some(p => p.alive && !p.downed)) {
+      const rescuer = this.officers.filter(o => o.alive)
+        .sort((a, b) => Math.hypot(a.x - this.bomb!.x, a.z - this.bomb!.z) - Math.hypot(b.x - this.bomb!.x, b.z - this.bomb!.z))[0];
+      if (rescuer) {
+        this.bombAutoCalled = true;
+        this.command({ team: rescuer.team, action: 'defuse' }, null, rescuer);
+        this.events.push({ t: 'info', text: `${rescuer.name} is moving to defuse the bomb!` });
       }
     }
     for (const p of this.players) {

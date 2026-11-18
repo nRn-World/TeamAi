@@ -9,7 +9,7 @@ export interface Snap {
   g: number[][]; cl?: [number, number, number, number, number][]; p: number[][];
   ev?: [number, number, number, number, number, number][];
   sp?: [number, number, number][]; ln?: number[];
-  pw?: number; bm?: [number, number] | null; bw?: number[]; bp?: number[]; bd?: number[];
+  pw?: number; bm?: [number, number, number?] | null; bw?: number[]; bp?: number[]; bd?: number[];
   bs?: number;
   over: number; time: number; st?: unknown;
   mvp?: { name: string; arrests: number; kills: number; shots: number; hits: number; dmgTaken: number }[];
@@ -39,7 +39,7 @@ export function encodeSnap(sim: Sim): Snap {
     sp: sim.sensorPings.length ? sim.sensorPings.map(pg => [r2(pg.x), r2(pg.z), pg.kind === 'suspect' ? 1 : 0]) : undefined,
     ln: sim.actors.map(a => r2(a.lean)),
     pw: sim.powerOn ? 1 : 0,
-    bm: sim.bomb ? [r2(sim.bomb.time), sim.bomb.defused ? 1 : 0] : null,
+    bm: sim.bomb ? [r2(sim.bomb.time), sim.bomb.defused ? 1 : 0, sim.bomb.started ? 1 : 0] : null,
     bw: sim.brokenWindows.size ? [...sim.brokenWindows] : undefined,
     bp: sim.brokenProps.size ? [...sim.brokenProps] : undefined,
     bd: sim.brokenDoorGlass.size ? [...sim.brokenDoorGlass] : undefined,
@@ -110,7 +110,7 @@ export function applySnap(sim: Sim, s: Snap, me: Actor, targets?: Map<Actor, Net
     if (v.length > 11) p.sensors = v[11];
   });
   if (s.pw !== undefined) sim.powerOn = !!s.pw;
-  if (s.bm && sim.bomb) { sim.bomb.time = s.bm[0]; sim.bomb.defused = !!s.bm[1]; }
+  if (s.bm && sim.bomb) { sim.bomb.time = s.bm[0]; sim.bomb.defused = !!s.bm[1]; sim.bomb.started = s.bm.length > 2 ? !!s.bm[2] : true; }
   if (s.bw) for (const k of s.bw) sim.brokenWindows.add(k);
   if (s.bp) for (const k of s.bp) sim.brokenProps.add(k);
   if (s.bd) for (const k of s.bd) sim.brokenDoorGlass.add(k);

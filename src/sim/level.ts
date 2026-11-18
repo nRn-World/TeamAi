@@ -576,7 +576,7 @@ const SPECS: Spec[] = [
     },
   },
   {
-    name: 'Kista Tech Center', theme: 'tower', objective: 'hostage', w: 58, h: 40, suspects: 8, civs: 7,
+    name: 'Kista Tech Center', theme: 'tower', objective: 'hostage', w: 58, h: 40, suspects: 7, civs: 6,
     brief: 'A coordinated crew has seized the Kista Tech Center. Clear a dense ground-floor office, then push up the full stairwell or use the service elevator to reach the command floor and rescue the VIP.',
     build(b) {
       // Ground floor: six linked rooms around a service spine.
@@ -592,11 +592,13 @@ const SPECS: Spec[] = [
       b.room(33, 3, 11, 11, 'Control Room · F2', 'office', 'carpet', true, 3);
       b.room(43, 3, 13, 11, 'Executive Suite · F2', 'office', 'wood', true, 3);
       b.room(33, 13, 23, 5, 'Command Spine · F2', 'corridor', 'tile', false, 3);
-      b.room(33, 17, 11, 16, 'Server Farm · F2', 'storage', 'concrete', true, 3);
+      // Optional side wing: no objectives spawn here, so the sweep can end when the VIP wing is clear.
+      b.room(33, 17, 11, 16, 'Server Farm · F2', 'storage', 'concrete', false, 3);
       b.room(43, 17, 13, 16, 'Hostage Wing · F2', 'bedroom', 'wood', true, 3);
 
-      // An 8m stair flight rises 3m; it is a real walkable route in both directions.
-      b.staircase(25.5, 15.5, 33.5, 15.5, 2.3, 0, 3);
+      // A 7.5m stair flight rises 3m and lands flush with the F2 floor edge (x=33), so the top
+      // step is not buried under the command floor. It is a real walkable route both ways.
+      b.staircase(25.5, 15.5, 33.0, 15.5, 2.3, 0, 3);
 
       // Door graph: several loops and side rooms on both storeys.
       b.door(8, 12); b.door(13, 7); b.door(13, 17); b.door(8, 21); b.door(13, 27);
@@ -609,7 +611,9 @@ const SPECS: Spec[] = [
       // Paired stops share a visible, interactive service lift; stairs remain available as a second route.
       b.elevator('Service elevator',
         { x: 28.5, z: 7.5, floorY: 0, label: 'FLOOR 1', yaw: 0 },
-        { x: 35.5, z: 15.5, floorY: 3, label: 'FLOOR 2', yaw: 0 },
+        // Put the F2 landing in the Control Room. The command spine is only three metres wide,
+        // and the old stop stood right in front of the stair opening, sealing the stair route.
+        { x: 37.5, z: 4.95, floorY: 3, label: 'FLOOR 2', yaw: Math.PI },
       );
       b.placeBreaker(5, 25);
       b.entries.push(

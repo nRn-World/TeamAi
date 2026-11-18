@@ -1,6 +1,6 @@
 import { loadModels, modelsReady } from './game/models';
 import * as THREE from 'three';
-import { Sim, Actor, Command, Team, Ev, fwd, PrimaryLoadout, SecondaryLoadout, CoopMods, PrePlan } from './sim/sim';
+import { Sim, Actor, Command, Team, Ev, fwd, yawTo, PrimaryLoadout, SecondaryLoadout, CoopMods, PrePlan } from './sim/sim';
 import { MISSIONS, WALL, DOOR, LOW, HIGH, WINDOW, buildLevel, groundHeightAt, Level, Door, Room, roomAt } from './sim/level';
 import { MenuScene } from './game/menuscene';
 import { operatorEnv } from './game/operator';
@@ -33,17 +33,47 @@ const params = new URLSearchParams(location.search);
 const AUTO = params.has('auto');
 
 // ---------------- settings & career ----------------
-const defaults = { sens: 1, adsSens: 0.65, vol: 0.8, music: 1, mic: 1, ptt: 1, lang: 'en-US', asr: 'local', tts: 1, head: 0, qual: 1, diff: 1, name: '', ai: 0, aiModel: AI_MODELS[0].id as string, primary: 'carbine' as PrimaryLoadout, secondary: 'pistol' as SecondaryLoadout, stream: 0, censor: 1, pip: 1 };
+const defaults = { sens: 1, adsSens: 0.65, vol: 0.8, music: 1, mic: 1, ptt: 1, lang: 'en-US', asr: 'local', tts: 1, head: 0, qual: 1, diff: 1, name: '', ai: 0, aiModel: AI_MODELS[0].id as string, primary: 'carbine' as PrimaryLoadout, secondary: 'pistol' as SecondaryLoadout, stream: 0, censor: 1, pip: 1, binds: {} as Record<string, string> };
 type Settings = typeof defaults;
-const S: Settings = { ...defaults, ...JSON.parse(localStorage.getItem('teamai.settings') || '{}') };
+/** Read a JSON value without letting a corrupt save take the whole game down before the menu paints. */
+function readStore<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const v = JSON.parse(raw);
+    return v && typeof v === 'object' ? v as T : fallback;
+  } catch { return fallback; }
+}
+// Rebindable actions: logical code is what the rest of the game checks, physical is what is pressed.
+const BIND_ACTIONS = [
+  ['forward', 'Move forward', 'KeyW'], ['back', 'Move back', 'KeyS'], ['left', 'Strafe left', 'KeyA'], ['right', 'Strafe right', 'KeyD'],
+  ['sprint', 'Sprint', 'ShiftLeft'], ['crouch', 'Crouch', 'KeyC'], ['prone', 'Crawl', 'KeyZ'], ['slow', 'Sneak', 'KeyX'],
+  ['jump', 'Jump / stand up', 'Space'], ['use', 'Open / use / kick', 'KeyF'], ['reload', 'Reload', 'KeyR'], ['shout', 'Shout compliance', 'CapsLock'],
+  ['grenade', 'Cycle grenade', 'Period'], ['voice', 'Talk to the squad (hold)', 'KeyV'],
+] as const;
+type BindAction = typeof BIND_ACTIONS[number][0];
+const DEFAULT_BINDS = Object.fromEntries(BIND_ACTIONS.map(([a, , k]) => [a, k])) as Record<BindAction, string>;
+const RESERVED_KEYS = new Set(['Escape', 'Enter', 'Tab', 'F2', 'F8', 'KeyQ', 'KeyE', 'KeyG', 'KeyU', 'KeyY', 'KeyO', 'KeyN', 'KeyK', 'KeyP', 'KeyJ', 'KeyH', 'KeyB', 'KeyM', 'KeyI', 'KeyT', 'KeyL', 'Backquote', 'Comma', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9']);
+function normaliseBinds(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw && typeof raw === 'object') for (const [a] of BIND_ACTIONS) {
+    const v = (raw as Record<string, unknown>)[a];
+    if (typeof v === 'string' && v) out[a] = v;
+  }
+  return out;
+}
+const KEY_LABELS: Record<string, string> = { ShiftLeft: 'SHIFT', ShiftRight: 'RSHIFT', CapsLock: 'CAPS', Space: 'SPACE', Period: '.', Comma: ',', Backquote: '`', ControlLeft: 'CTRL', AltLeft: 'ALT', Enter: 'ENTER', Tab: 'TAB' };
+const keyLabel = (code: string) => KEY_LABELS[code] ?? code.replace(/^Key/, '').replace(/^Digit/, '');
+const S: Settings = { ...defaults, ...readStore<Partial<Settings>>('teamai.settings', {}) };
+S.binds = normaliseBinds(S.binds);
 if (!String(S.lang).startsWith('en')) S.lang = 'en-US'; // English only
 if (!AI_MODELS.some(m => m.id === S.aiModel)) S.aiModel = AI_MODELS[0].id;
-const best: Record<string, number> = JSON.parse(localStorage.getItem('teamai.best') || '{}');
-const dailyBest: Record<string, number> = JSON.parse(localStorage.getItem('teamai.daily') || '{}');
+const best: Record<string, number> = readStore('teamai.best', {});
+const dailyBest: Record<string, number> = readStore('teamai.daily', {});
 const career = loadCareer();
 const getRank = (xp: number) => rankOf(xp).name;
 if (params.has('q')) S.qual = +params.get('q')!;
-const saveSettings = () => localStorage.setItem('teamai.settings', JSON.stringify(S));
+const saveSettings = () => { try { localStorage.setItem('teamai.settings', JSON.stringify(S)); } catch { /* private mode */ } };
 const dailyInfo = () => {
   const d = new Date();
   const key = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
@@ -202,7 +232,9 @@ class Game {
     const local = LocalVoice.supported && ((S.asr === 'local' && !this.localVoice.failed) || !Voice.supported), nv = local ? this.localVoice : this.webVoice;
     if (nv !== this.voice) { this.voice.stop(); this.voice = nv; }
     this.webVoice.setLang(S.lang); this.localVoice.setLang('en'); this.voice.ptt = !!S.ptt; this.micState(this.voice.state);
-    if (local && S.mic && !AUTO) this.localVoice.preload();
+    // The speech model is several hundred MB. Never start that download from the menu: it begins
+    // when the player deploys, presses V, or asks for it in Settings.
+    if (local && S.mic && !AUTO && this.state === 'play') this.localVoice.preload();
     this.asrInfo();
     ($('sSens') as HTMLInputElement).value = String(S.sens); ($('sAdsSens') as HTMLInputElement).value = String(S.adsSens); ($('sVol') as HTMLInputElement).value = String(S.vol);
     for (const [id, k] of [['sMusic', 'music'], ['sMic', 'mic'], ['sPtt', 'ptt'], ['sLang', 'lang'], ['sAsr', 'asr'], ['sTts', 'tts'], ['sHead', 'head'], ['sQual', 'qual'], ['sDiff', 'diff'], ['sAi', 'ai'], ['sAiModel', 'aiModel'], ['sStream', 'stream'], ['sCensor', 'censor'], ['sPip', 'pip']] as const) ($(id) as HTMLSelectElement).value = String(S[k]);
@@ -906,6 +938,12 @@ class Game {
     ($('sAiModel') as HTMLSelectElement).innerHTML = AI_MODELS.map(m => `<option value="${m.id}">${m.label}</option>`).join('');
     bind('sSens', 'sens'); bind('sAdsSens', 'adsSens'); bind('sVol', 'vol'); bind('sMusic', 'music'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sAsr', 'asr', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff'); bind('sAi', 'ai'); bind('sAiModel', 'aiModel', false); bind('sStream', 'stream'); bind('sCensor', 'censor'); bind('sPip', 'pip');
     click('btnMenuMusic', () => { S.music = S.music ? 0 : 1; saveSettings(); this.applySettings(); });
+    click('btnAsrLoad', () => { this.audio.init(); this.audio.ui(); this.localVoice.preload(); this.asrInfo(); });
+    $('btnKeysReset').onclick = () => {
+      S.binds = {}; this.binding = null; saveSettings(); this.buildKeyBinds();
+      const n = $('keysNote'); n.textContent = 'Default keys restored.'; n.className = 'note';
+    };
+    this.buildKeyBinds();
     $('btnAiLoad').onclick = () => {
       this.audio.init(); this.audio.ui();
       if (!S.ai) { S.ai = 1; saveSettings(); ($('sAi') as HTMLSelectElement).value = '1'; }
@@ -1260,7 +1298,43 @@ class Game {
   }
 
   // ---------------- input ----------------
+  /** The key currently bound to an action, falling back to the default layout. */
+  bindKey(a: BindAction): string { return S.binds[a] || DEFAULT_BINDS[a]; }
+  /** Translate a physical key press into the logical code the game checks. */
+  logicalCode(code: string): string {
+    for (const [a, , logical] of BIND_ACTIONS) if (this.bindKey(a) === code) return logical;
+    // A default key that has been moved to another key must stop firing its old action.
+    for (const [, , logical] of BIND_ACTIONS) if (logical === code) return 'Unbound';
+    return code;
+  }
+  binding: BindAction | null = null;
+  buildKeyBinds() {
+    const box = $('keybinds'); if (!box) return;
+    box.innerHTML = BIND_ACTIONS.map(([a, label]) => `<button type="button" class="kbrow${this.binding === a ? ' listening' : ''}" data-bind="${a}"><span>${label}</span><kbd>${this.binding === a ? 'PRESS A KEY…' : keyLabel(this.bindKey(a))}</kbd></button>`).join('');
+    box.querySelectorAll<HTMLButtonElement>('[data-bind]').forEach(b => {
+      b.onclick = () => { this.binding = b.dataset.bind as BindAction; this.buildKeyBinds(); };
+    });
+  }
   bindInput() {
+    // Key-binding capture runs before the game handler and swallows the press.
+    window.addEventListener('keydown', e => {
+      if (!this.binding) return;
+      e.preventDefault(); e.stopPropagation();
+      const action = this.binding; this.binding = null;
+      const note = $('keysNote');
+      if (e.code === 'Escape') { this.buildKeyBinds(); return; }
+      if (RESERVED_KEYS.has(e.code)) {
+        note.textContent = `${keyLabel(e.code)} is used by a fixed action (grenades, gear, team keys). Pick another key.`;
+        note.className = 'note warn';
+        this.buildKeyBinds();
+        return;
+      }
+      const old = this.bindKey(action);
+      for (const [a] of BIND_ACTIONS) if (a !== action && this.bindKey(a) === e.code) S.binds[a] = old;
+      S.binds[action] = e.code; saveSettings();
+      note.textContent = ''; note.className = 'note';
+      this.buildKeyBinds();
+    }, true);
     const c = $('c');
     c.addEventListener('click', () => { if (this.state === 'play' && !document.pointerLockElement) this.lock(); });
     document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement && this.state === 'play' && !AUTO && !this.typing && !this.wheelOn && !this.dispatchOn) this.pause(); });
@@ -1290,8 +1364,9 @@ class Game {
       if (this.typing) { if (e.code === 'Enter') { const inp = $<HTMLInputElement>('cmdinput'); const v = inp.value.trim(); inp.value = ''; this.setTyping(false); if (v) this.heard(v, false); e.preventDefault(); } else if (e.code === 'Escape') this.setTyping(false); return; }
       if (e.code === 'Escape') { if (this.dispatchOn) { this.toggleDispatch(false); this.lock(); return; } if (this.wheelOn) { this.toggleWheel(false); this.lock(); return; } if (!$('help').classList.contains('hidden') || !$('settings').classList.contains('hidden')) { show('help', false); show('settings', false); } else if (this.state === 'pause') this.resume(); else if (this.state === 'play' && AUTO) this.pause(); return; }
       if (this.state !== 'play') return;
-      if (e.code === 'Tab' || e.code === 'Space' || e.code === 'CapsLock') e.preventDefault();
-      if (e.repeat) return; this.keys.add(e.code); this.onKey(e.code, e.shiftKey);
+      const code = this.logicalCode(e.code);
+      if (code === 'Tab' || code === 'Space' || code === 'CapsLock') e.preventDefault();
+      if (e.repeat) return; this.keys.add(code); this.onKey(code, e.shiftKey);
     });
     document.addEventListener('wheel', e => {
       if (this.state !== 'play' || !this.ads || !document.pointerLockElement) return;
@@ -1301,7 +1376,7 @@ class Game {
         this.updateHud(true);
       }
     }, { passive: true });
-    document.addEventListener('keyup', e => { this.keys.delete(e.code); if (e.code === 'KeyV') this.voice.release(); });
+    document.addEventListener('keyup', e => { const code = this.logicalCode(e.code); this.keys.delete(code); if (code === 'KeyV') this.voice.release(); });
     window.addEventListener('blur', () => { this.voice.release(); this.keys.clear(); this.mouseDown = false; });
   }
   setTyping(on: boolean) { this.typing = on; show('cmdbox', on); const inp = $<HTMLInputElement>('cmdinput'); if (on) { this.keys.clear(); inp.focus(); } else inp.blur(); }
@@ -2033,10 +2108,10 @@ class Game {
     if (win) career.arrests += sim.stats.suspectsArrested;
     saveCareer(career);
     if (win) {
-      if ((best[this.mission] ?? -1) < sc.total) { best[this.mission] = sc.total; localStorage.setItem('teamai.best', JSON.stringify(best)); }
+      if ((best[this.mission] ?? -1) < sc.total) { best[this.mission] = sc.total; try { localStorage.setItem('teamai.best', JSON.stringify(best)); } catch { /* private mode */ } }
       if (this.isDaily) {
         const di = dailyInfo();
-        if ((dailyBest[di.key] ?? -1) < sc.total) { dailyBest[di.key] = sc.total; localStorage.setItem('teamai.daily', JSON.stringify(dailyBest)); }
+        if ((dailyBest[di.key] ?? -1) < sc.total) { dailyBest[di.key] = sc.total; try { localStorage.setItem('teamai.daily', JSON.stringify(dailyBest)); } catch { /* private mode */ } }
       }
     }
     this.updateRankDock();
@@ -2170,7 +2245,7 @@ class Game {
   asrInfo() {
     const lv = this.localVoice, a = $('asrInfo'), pct = (v: number) => Math.round(v * 100) + ' %';
     if (this.voice !== lv) a.textContent = lv.failed ? `The local model could not be loaded (${lv.lastError || 'unknown error'}) – the browser speech service is used instead.` : 'Browser speech service: only in Chrome and Edge, and what you say is sent to the browser maker for recognition.';
-    else a.textContent = lv.modelReady ? `Ready – Whisper runs on ${lv.device === 'webgpu' ? 'your graphics card' : 'your processor'}${lv.lastMs ? `, last answer took ${lv.lastMs} ms` : ''}. Nothing you say leaves this computer.` : lv.failed ? `Could not be loaded: ${lv.lastError}` : !S.mic ? 'Speech recognition is off.' : `Downloading the speech model${lv.sizeMb ? ` (about ${lv.sizeMb} MB, once)` : ''}: ${pct(lv.progress)}`;
+    else a.textContent = lv.modelReady ? `Ready – Whisper runs on ${lv.device === 'webgpu' ? 'your graphics card' : 'your processor'}${lv.lastMs ? `, last answer took ${lv.lastMs} ms` : ''}. Nothing you say leaves this computer.` : lv.failed ? `Could not be loaded: ${lv.lastError}` : !S.mic ? 'Speech recognition is off.' : lv.progress > 0 ? `Downloading the speech model${lv.sizeMb ? ` (about ${lv.sizeMb} MB, once)` : ''}: ${pct(lv.progress)}` : 'The speech model is not downloaded yet. It starts when you deploy, hold V, or press «Download speech model now». One-time download, kept in the browser cache.';
     a.className = 'note' + (lv.failed ? ' warn' : '');
   }
   micState(s: string, detail?: string) {
@@ -2266,12 +2341,19 @@ class Game {
       ? (groundHeightAt(sim.level, p.x, p.z) < 0.55 ? 'F1' : groundHeightAt(sim.level, p.x, p.z) > 2.45 ? 'F2' : 'STAIRS') + ' · '
       : '';
     $('objective').innerHTML = `${floorTag}SUSPECTS <b>${r.suspects}</b> · CIVILIANS <b>${r.civs}</b>${sim.level.breaker ? ` · POWER <b>${sim.powerOn ? 'ON' : 'OFF'}</b>` : ''}`;
-    const bt = $('bombtimer');
+    const bt = $('bombtimer'), bh = $('bombHint');
     if (sim.bomb && !sim.bomb.defused) {
       bt.classList.remove('hidden');
       const sec = Math.max(0, Math.ceil(sim.bomb.time)), mm = Math.floor(sec / 60), ss = String(sec % 60).padStart(2, '0');
-      bt.textContent = `BOMB ACTIVE · ${mm}:${ss}`;
-    } else bt.classList.add('hidden');
+      bt.textContent = sim.bomb.started ? `BOMB ACTIVE · ${mm}:${ss}` : 'BOMB · TIMER HELD';
+      bt.classList.toggle('held', !sim.bomb.started);
+      bh.classList.remove('hidden');
+      const dx = sim.bomb.x - p.x, dz = sim.bomb.z - p.z, bd = Math.hypot(dx, dz);
+      const bearing = (y: number) => ((((-y * 180) / Math.PI) % 360) + 360) % 360;
+      const delta = ((bearing(yawTo(dx, dz)) - bearing(p.yaw) + 540) % 360) - 180;
+      bh.innerHTML = `<i style="transform:rotate(${Math.round(delta)}deg)">▲</i> BOMB ${Math.round(bd)} m${sim.bomb.started ? '' : ' · timer starts when you close in or a firefight begins'}`;
+    } else { bt.classList.add('hidden'); bh.classList.add('hidden'); }
+    $('compliance').innerHTML = `ARRESTS <b>${sim.stats.suspectsArrested}</b> · KILLS <b>${sim.stats.suspectsKilled}</b> · SECURED <b>${sim.stats.civsSecured}/${sim.civs.length}</b>${sim.stats.unauthorized ? ` · <i>UNAUTHORIZED ${sim.stats.unauthorized}</i>` : ''}`;
     if (this.bodycamOn) {
       $('bcTime').textContent = new Date().toISOString().replace('T', ' ').slice(0, 19) + 'Z';
       const baseBpm = p.hp < 40 ? 132 : p.hp < 70 ? 96 : 74;
@@ -2299,7 +2381,7 @@ class Game {
       html += '</div>';
     }
     $('team').innerHTML = html;
-    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · Hold <kbd>Q/E</kbd> Lean/peek · <kbd>.</kbd> Grenade · <kbd>,</kbd> Sensor · <kbd>Caps</kbd> Shout · <kbd>F2</kbd> Sök &amp; Säkra · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>P</kbd> Cam${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
+    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · Hold <kbd>Q/E</kbd> Lean/peek · <kbd>.</kbd> Grenade · <kbd>,</kbd> Sensor · <kbd>${keyLabel(this.bindKey('shout'))}</kbd> Shout · <kbd>F2</kbd> Sök &amp; Säkra · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>P</kbd> Cam${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
     const it = sim.interactTarget(), pr = $('prompt');
     if (p.downed && p.alive) {
       pr.style.opacity = '1'; pr.textContent = `DOWNED — BLEEDOUT IN ${Math.max(0, Math.ceil(p.bleedT))}s (WAIT FOR TEAMMATE)`;
@@ -2307,21 +2389,28 @@ class Game {
     }
     else if (p.reviving) { pr.style.opacity = '1'; pr.textContent = `Reviving ${p.reviving.name}…`; $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = (p.reviveT / 2.8) * 100 + '%'; }
     else if (p.cuff) { pr.style.opacity = '1'; pr.textContent = 'Cuffing…'; $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = (p.cuffT / 1.6) * 100 + '%'; }
-    else if (sim.bomb && !sim.bomb.defused && sim.bomb.defuseT > 0) { pr.style.opacity = '1'; pr.textContent = 'Defusing bomb…'; $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = (sim.bomb.defuseT / 2.2) * 100 + '%'; }
+    else if (sim.bomb && !sim.bomb.defused && (p.defusing || sim.bomb.defuseT > 0)) {
+      const byPlayer = p.defusing, frac = byPlayer ? p.defuseT / 3.2 : sim.bomb.defuseT / 3.5;
+      pr.style.opacity = '1'; pr.textContent = byPlayer ? 'Defusing bomb… hold position' : 'Squad defusing bomb…';
+      $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = Math.min(100, frac * 100) + '%';
+    }
     else {
       $('progress').style.opacity = '0';
       if (it?.revive) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Revive ${it.revive.name} (${Math.ceil(it.revive.bleedT)}s)`; }
       else if (it?.actor) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Handcuff'; }
       else if (it?.evidence) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Bag Evidence (+25)'; }
       else if (it?.elevator && it.elevatorTo) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Ride ${it.elevator.name} → ${it.elevatorTo.label}`; }
-      else if (it?.bomb) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Defuse Bomb'; }
+      else if (it?.bomb) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Defuse Bomb <small>(3.2 s · hold position)</small>'; }
       else if (it?.breaker) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> ${sim.powerOn ? 'Cut Building Power' : 'Restore Power'}`; }
       else if (it?.door) {
         pr.style.opacity = '1';
         if (it.door.trapped && it.door.trapKnown) {
           pr.innerHTML = '<kbd>F</kbd> Disarm Tripwire · <kbd>U</kbd> Breach Charge';
         } else {
-          pr.innerHTML = it.door.locked ? '<kbd>F</kbd> Pick Lock · <kbd>U</kbd> Breach Charge · <kbd>O</kbd> FiberCam'
+          pr.innerHTML = it.door.locked
+            ? (sim.isMetalDoor(it.door)
+              ? '<kbd>U</kbd> Breach Charge <small>(metal door)</small> · <kbd>O</kbd> FiberCam'
+              : `<kbd>F</kbd> Kick door · <kbd>U</kbd> Breach Charge · <kbd>O</kbd> FiberCam`)
             : `<kbd>F</kbd> ${it.door.target ? 'Close' : 'Open'} · <kbd>Shift+F</kbd> Crack · <kbd>O</kbd> FiberCam · <kbd>Y</kbd> ${it.door.wedged ? 'Unwedge' : 'Wedge'}${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync' : ''}`;
         }
       } else if (this.ammo[this.weapon] <= 0 && this.reserve[this.weapon] > 0 && this.reloadT <= 0) {
