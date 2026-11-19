@@ -72,6 +72,12 @@ const best: Record<string, number> = readStore('teamai.best', {});
 const dailyBest: Record<string, number> = readStore('teamai.daily', {});
 const career = loadCareer();
 const getRank = (xp: number) => rankOf(xp).name;
+/**
+ * TEMPORARY: every operation is open so all maps can be tested. Flip to false to restore
+ * the campaign order (an operation opens once the one before it has been cleared).
+ */
+const UNLOCK_ALL_MISSIONS = true;
+const missionOpen = (i: number) => UNLOCK_ALL_MISSIONS || missionUnlocked(best, i);
 if (params.has('q')) S.qual = +params.get('q')!;
 const saveSettings = () => { try { localStorage.setItem('teamai.settings', JSON.stringify(S)); } catch { /* private mode */ } };
 const dailyInfo = () => {
@@ -260,7 +266,7 @@ class Game {
   // ---------------- menus ----------------
   showPlan = false;
   selectMission(i: number) {
-    if (!missionUnlocked(best, i)) i = nextUncleared(best, MISSIONS.length) ?? 0;
+    if (!missionOpen(i)) i = nextUncleared(best, MISSIONS.length) ?? 0;
     this.mission = i;
     const m = MISSIONS[i];
     const LOCS = ['KISTA, STOCKHOLM', 'DOCKLANDS, HARBOR', 'CITY CENTER', 'FINANCIAL DISTRICT', 'DOWNTOWN UNDERGROUND', 'OUTSKIRTS COMPOUND', 'KISTA SCIENCE TOWER · STOCKHOLM'];
@@ -347,7 +353,7 @@ class Game {
     }
     // locked operations on the mission strip
     document.querySelectorAll<HTMLElement>('#mPills .mpill').forEach((el, i) => {
-      const locked = !missionUnlocked(best, i);
+      const locked = !missionOpen(i);
       el.classList.toggle('locked', locked);
       el.title = locked ? `Locked — complete operation ${i} first` : MISSIONS[i].name;
     });
@@ -370,7 +376,7 @@ class Game {
       b.textContent = `0${i + 1}`;
       b.onclick = () => {
         this.audio.init(); this.audio.ui();
-        if (!missionUnlocked(best, i)) {
+        if (!missionOpen(i)) {
           const bb = $('mBestBadge'); bb.textContent = `LOCKED · CLEAR OPERATION 0${i} FIRST`; bb.className = 'none';
           this.audio.fail();
           return;
@@ -399,7 +405,7 @@ class Game {
     });
     $('btnStartMission').onclick = () => {
       this.audio.init(); this.audio.ui(); this.isDaily = false;
-      if (!missionUnlocked(best, this.mission)) { this.audio.fail(); return; }
+      if (!missionOpen(this.mission)) { this.audio.fail(); return; }
       this.openBrief(this.mission);
     };
     const di = dailyInfo();
@@ -913,7 +919,7 @@ class Game {
     click('btnAgain', () => { show('debrief', false); if (this.isDaily) { const di = dailyInfo(); this.start(di.mission, di.seed, 1, 0, Math.max(1, S.diff)); this.lock(); } else this.newRound(this.mission); });
     click('btnNext', () => {
       const next = this.mission + 1;
-      if (next >= MISSIONS.length || !missionUnlocked(best, next)) return;
+      if (next >= MISSIONS.length || !missionOpen(next)) return;
       show('debrief', false); this.isDaily = false; this.newRound(next);
     });
     click('btnTrainingEnd', () => this.endTraining());
@@ -2205,7 +2211,7 @@ class Game {
       $('debCareer').innerHTML = lines.join('');
     }
     const nextIdx = this.mission + 1;
-    const nextOk = nextIdx < MISSIONS.length && missionUnlocked(best, nextIdx);
+    const nextOk = nextIdx < MISSIONS.length && missionOpen(nextIdx);
     const showNext = nextOk && this.net.role !== 'client' && !this.isDaily;
     $('btnNext').classList.toggle('hidden', !showNext);
     if (showNext) $('btnNext').textContent = `Next mission · ${MISSIONS[nextIdx].name}`;
