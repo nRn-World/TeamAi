@@ -624,12 +624,11 @@ const SPECS: Spec[] = [
       b.door(38, 17); b.door(49, 17); b.door(43, 24, true); b.door(55, 27);
       b.win(7, 32); b.win(10, 32); b.win(36, 32); b.win(48, 32); b.win(51, 32);
 
-      // Paired stops share a visible, interactive service lift; stairs remain available as a second route.
+      // Paired stops are steel doors set into a wall, not a cabin standing on the floor: both face
+      // south out of the north wall, clear of the stair landing at z = 15.5 on both storeys.
       b.elevator('Service elevator',
-        { x: 28.5, z: 7.5, floorY: 0, label: 'FLOOR 1', yaw: 0 },
-        // Put the F2 landing in the Control Room. The command spine is only three metres wide,
-        // and the old stop stood right in front of the stair opening, sealing the stair route.
-        { x: 37.5, z: 4.95, floorY: 3, label: 'FLOOR 2', yaw: Math.PI },
+        { x: 30.5, z: 4.6, floorY: 0, label: 'FLOOR 1', yaw: Math.PI },
+        { x: 37.5, z: 4.6, floorY: 3, label: 'FLOOR 2', yaw: Math.PI },
       );
       b.placeBreaker(5, 25);
       b.entries.push(

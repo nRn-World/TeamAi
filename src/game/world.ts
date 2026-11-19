@@ -280,19 +280,22 @@ export class LevelView {
     // A stair flight has to break through the slab it arrives on. Without this opening the top
     // steps are swallowed by the ceiling/floor plane and the player climbs into solid geometry.
     // The opening is widened to the cell boundaries across the flight so the handrails never run
-    // through the shaft walls.
+    // through the shaft walls, and it reaches STAIR_LANDING metres past the bottom tread: a
+    // stairwell you can only see into from the first step reads as a slot in a low ceiling, so the
+    // foot of the flight stands in the open shaft and you look up into the stairwell from the floor.
+    const STAIR_LANDING = 1.6;
     const stairBounds = (s: (typeof l.staircases)[number]) => {
       const alongX = Math.abs(s.x1 - s.x0) >= Math.abs(s.z1 - s.z0);
       const ax0 = Math.min(s.x0, s.x1), ax1 = Math.max(s.x0, s.x1);
       const az0 = Math.min(s.z0, s.z1), az1 = Math.max(s.z0, s.z1);
+      const up = s.toY >= s.fromY;
       return {
-        // The opening ends exactly at the first/last tread along the flight, so the top step
-        // meets the upper floor instead of leaving a walkable gap. Only the cross-flight span
-        // is widened to the cell boundaries to keep the handrails clear of the shaft walls.
-        x0: alongX ? ax0 : Math.floor(ax0 - s.width / 2),
-        x1: alongX ? ax1 : Math.ceil(ax1 + s.width / 2),
-        z0: alongX ? Math.floor(az0 - s.width / 2) : az0,
-        z1: alongX ? Math.ceil(az1 + s.width / 2) : az1,
+        // The opening ends exactly at the top tread, so the last step meets the upper floor
+        // instead of leaving a walkable gap, and it runs past the bottom tread over the landing.
+        x0: alongX ? (up ? ax0 - STAIR_LANDING : ax0) : Math.floor(ax0 - s.width / 2),
+        x1: alongX ? (up ? ax1 : ax1 + STAIR_LANDING) : Math.ceil(ax1 + s.width / 2),
+        z0: alongX ? Math.floor(az0 - s.width / 2) : (up ? az0 - STAIR_LANDING : az0),
+        z1: alongX ? Math.ceil(az1 + s.width / 2) : (up ? az1 : az1 + STAIR_LANDING),
       };
     };
     const slabHoles = l.staircases.map(s => {
@@ -510,31 +513,38 @@ export class LevelView {
       if (quality >= 2) pivot.traverse((o: any) => { if (o.isMesh && o !== glass) { o.castShadow = true; o.receiveShadow = true; } });
       const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base, wedge, lock, tripwire, glass });
     }
-    // Functional lifts: each stop is rendered as a compact, open service-elevator landing. F activates
-    // the matching stop in Sim and transfers the operator to its paired floor.
+    // Functional lifts: both stops are a pair of brushed-steel doors set flush into the wall, with
+    // the shaft behind the wall. The landing itself stays open floor, so nothing stands in a corridor
+    // that can be walked through. F rides to the paired stop in Sim.
     if (l.elevators.length) {
       const liftFrame = std({ color: 0x26323d, roughness: 0.38, metalness: 0.74 });
-      const liftBack = std({ color: 0x3b4651, roughness: 0.58, metalness: 0.45 });
-      const liftFloor = std({ color: 0x56616b, roughness: 0.64, metalness: 0.34 });
-      const liftGlass = new THREE.MeshPhysicalMaterial({ color: 0x4cc9f0, transparent: true, opacity: 0.25, roughness: 0.18, metalness: 0.18 });
+      // Brushed, matte leaves: a polished finish mirrors the corridor lamp into a white bloom.
+      const liftLeaf = std({ color: 0x8a949d, roughness: 0.6, metalness: 0.3, envMapIntensity: 0.5 });
+      const liftBrushed = std({ color: 0x5d6771, roughness: 0.55, metalness: 0.45 });
       for (const elevator of l.elevators) for (const stop of elevator.stops) {
-        const cab = new THREE.Group(); cab.position.set(stop.x, stop.floorY, stop.z); cab.rotation.y = stop.yaw;
-        cab.add(box(1.92, 0.08, 1.92, liftFloor, 0, 0.04, 0));
-        cab.add(
-          box(0.09, 2.8, 1.95, liftFrame, -0.94, 1.4, 0),
-          box(0.09, 2.8, 1.95, liftFrame, 0.94, 1.4, 0),
-          box(1.95, 2.8, 0.11, liftBack, 0, 1.4, 0.92),
-          box(0.12, 2.8, 0.12, liftFrame, -0.87, 1.4, -0.94),
-          box(0.12, 2.8, 0.12, liftFrame, 0.87, 1.4, -0.94),
-          box(1.82, 0.13, 0.12, liftFrame, 0, 2.74, -0.94),
+        // The doors sit in the wall the stop faces away from; local -z is out into the room.
+        const fx = -Math.sin(stop.yaw), fz = -Math.cos(stop.yaw);
+        const doors = new THREE.Group();
+        doors.position.set(stop.x - fx * 0.58, stop.floorY, stop.z - fz * 0.58);
+        doors.rotation.y = stop.yaw;
+        doors.add(
+          box(2.2, 0.04, 0.36, liftFrame, 0, 0.02, -0.1),
+          box(0.13, 2.36, 0.2, liftFrame, -1.105, 1.18, -0.03),
+          box(0.13, 2.36, 0.2, liftFrame, 1.105, 1.18, -0.03),
+          box(2.34, 0.2, 0.2, liftFrame, 0, 2.46, -0.03),
+          box(0.985, 2.28, 0.06, liftLeaf, -0.5, 1.15, -0.055),
+          box(0.985, 2.28, 0.06, liftLeaf, 0.5, 1.15, -0.055),
+          box(0.035, 2.28, 0.03, liftBrushed, 0, 1.15, -0.075),
+          box(0.14, 0.44, 0.05, liftBrushed, 1.28, 1.34, -0.02),
+          box(0.06, 0.06, 0.028, new THREE.MeshBasicMaterial({ color: 0xffd166 }), 1.28, 1.24, -0.05),
         );
-        // A split glazed gate sits open at the landing; the center stays visually clear and walkable.
-        cab.add(box(0.34, 2.34, 0.035, liftGlass, -0.68, 1.19, -0.90), box(0.34, 2.34, 0.035, liftGlass, 0.68, 1.19, -0.90));
-        cab.add(box(0.14, 0.42, 0.08, std({ color: 0x111820, metalness: 0.5 }), 0.73, 1.48, -0.87));
-        cab.add(box(0.045, 0.08, 0.085, new THREE.MeshBasicMaterial({ color: 0x4ade80 }), 0.73, 1.7, -0.87));
-        const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.32, 0.25), new THREE.MeshBasicMaterial({ map: T.signTex(`${elevator.name.toUpperCase()} · ${stop.label}`, '#0b1620', '#dbeafe', '#38bdf8') }));
-        sign.position.set(0, 2.91, -1.015); sign.rotation.y = Math.PI; cab.add(sign);
-        g.add(cab);
+        // Illuminated floor indicator above the doors, plus the landing sign on the frame.
+        const lamp = new THREE.MeshBasicMaterial({ color: stop.floorY > 1.5 ? 0x8fe3ff : 0xffd88a });
+        doors.add(box(0.52, 0.17, 0.03, lamp, 0, 2.17, -0.045));
+        const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.26), new THREE.MeshBasicMaterial({ map: T.signTex(`${elevator.name.toUpperCase()} · ${stop.label}`, '#0b1620', '#dbeafe', '#38bdf8') }));
+        sign.position.set(0, 2.72, -0.045); sign.rotation.y = Math.PI; doors.add(sign);
+        if (quality >= 2) doors.traverse((o: any) => { if (o.isMesh) o.receiveShadow = true; });
+        g.add(doors);
       }
     }
     g.add(this.sensorGroup);
