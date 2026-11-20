@@ -32,6 +32,21 @@ function cutSlab(rects: SlabRect[], hole: SlabRect): SlabRect[] {
 }
 
 const CITY_CACHE = new Map<string, Promise<THREE.Group | null>>();
+// Traffic-cone template is shared by every exterior: one GLB fetch/decode no matter how many
+// cordons a level builds. Cones stay purely decorative (no shadow casting) so the extra
+// dressing cannot stall software GPUs in the High smoke test.
+let coneTplPromise: Promise<THREE.Group | null> | null = null;
+function loadConeTemplate(): Promise<THREE.Group | null> {
+  if (!coneTplPromise) {
+    coneTplPromise = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
+      .loadAsync('./models/props/traffic_cone.glb')
+      .then(tpl => { tpl.scene.updateMatrixWorld(true); return tpl.scene as THREE.Group; })
+      .catch(() => null);
+  }
+  return coneTplPromise;
+}
+let coneOrangeMat: THREE.MeshStandardMaterial | null = null;
+let coneWhiteMat: THREE.MeshStandardMaterial | null = null;
 function loadCityAsset(name: string): Promise<THREE.Group | null> {
   let p = CITY_CACHE.get(name);
   if (!p) {
@@ -985,35 +1000,36 @@ export class LevelView {
     // Kenney CC0 traffic cones (public/models/props/LICENSE.txt) dressing up docks, alleys
     // and cordons. Purely visual: no colliders, so they can never block the squad or a route.
     const addTrafficCones = (spots: [number, number][]) => {
-      const coneOrange = std({ color: 0xd8541e, roughness: 0.6 });
-      const coneWhite = std({ color: 0xe8e4da, roughness: 0.55 });
+      if (!coneOrangeMat) coneOrangeMat = std({ color: 0xd8541e, roughness: 0.6 });
+      if (!coneWhiteMat) coneWhiteMat = std({ color: 0xe8e4da, roughness: 0.55 });
+      const coneOrange = coneOrangeMat, coneWhite = coneWhiteMat;
       const buildProcedural = (parent: THREE.Group) => {
-        parent.add(box(0.3, 0.04, 0.3, coneOrange, 0, 0.02, 0));
+        const base = box(0.3, 0.04, 0.3, coneOrange, 0, 0.02, 0);
+        base.castShadow = false; base.receiveShadow = true; parent.add(base);
         const c = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.52, 12), coneOrange);
-        c.position.y = 0.3; parent.add(c);
+        c.position.y = 0.3; c.castShadow = false; c.receiveShadow = true; parent.add(c);
         const band = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.105, 0.1, 12), coneWhite);
-        band.position.y = 0.32; parent.add(band);
+        band.position.y = 0.32; band.castShadow = false; band.receiveShadow = true; parent.add(band);
       };
-      extPromises.push(new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
-        .loadAsync('./models/props/traffic_cone.glb').then(tpl => {
-          if (this.disposed) return;
-          tpl.scene.updateMatrixWorld(true);
-          for (const [x, z] of spots) {
-            const cone = tpl.scene.clone(true);
-            cone.position.set(x, 0, z);
-            cone.rotation.y = (x * 3.1 + z * 1.7) % (Math.PI * 2);
-            cone.traverse((o: any) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-            g.add(cone);
-          }
-        }).catch(() => {
-          if (this.disposed) return;
+      extPromises.push(loadConeTemplate().then(tpl => {
+        if (this.disposed) return;
+        if (!tpl) {
           for (const [x, z] of spots) {
             const grp = new THREE.Group();
             grp.position.set(x, 0, z);
             buildProcedural(grp);
             g.add(grp);
           }
-        }));
+          return;
+        }
+        for (const [x, z] of spots) {
+          const cone = tpl.clone(true);
+          cone.position.set(x, 0, z);
+          cone.rotation.y = (x * 3.1 + z * 1.7) % (Math.PI * 2);
+          cone.traverse((o: any) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; } });
+          g.add(cone);
+        }
+      }));
     };
 
     if (l.theme === 'office') {
