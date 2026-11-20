@@ -316,12 +316,83 @@ function play(mission: number, seed: number, verbose = false) {
       lp.x = from.x; lp.z = from.z; lp.yaw = from.yaw;
       ok(!!liftSim.interactTarget(lp)?.elevatorTo, 'service elevator stop offers an interaction');
       liftSim.playerUse(lp);
-      ok(Math.hypot(lp.x - to.x, lp.z - to.z) < 0.01 && Math.abs(groundHeightAt(liftSim.level, lp.x, lp.z) - to.floorY) < 0.1
+      const car = liftSim.elevators[0];
+      ok(car.phase === 'opening' && car.door < 0.1 && Math.hypot(lp.x - to.x, lp.z - to.z) > 1,
+        'pressing the landing button starts an animated door cycle instead of teleporting');
+      let sawOpen = false, sawClosed = false, sawMove = false;
+      for (let i = 0; i < 25 * 30; i++) {
+        liftSim.over = null; // the whole squad is dead: keep only the elevator running for this check
+        liftSim.update(1 / 30);
+        if (car.phase === 'open') sawOpen = true;
+        if (car.phase === 'closing') sawClosed = true;
+        if (car.phase === 'moving') sawMove = true;
+        if (Math.hypot(lp.x - to.x, lp.z - to.z) < 0.02) break;
+      }
+      ok(sawOpen && sawClosed && sawMove, 'the landing doors open, hold, close, and the car travels before arriving');
+      ok(Math.hypot(lp.x - to.x, lp.z - to.z) < 0.02 && Math.abs(groundHeightAt(liftSim.level, lp.x, lp.z) - to.floorY) < 0.1
         && lp.nx === lp.x && lp.nz === lp.z && lp.nd === 0 && lp.nt === 0,
-        'using the service elevator transfers the player and resets the local footstep-distance accumulator');
-      ok(!!liftSim.interactTarget(lp)?.elevatorTo, 'upper elevator stop offers a return trip');
+        'the car carries the player to the other landing and resets the footstep accumulator');
+      ok((car.phase === 'opening' || car.phase === 'open') && car.at === 1,
+        'the lift opens its doors again on arrival at the upper floor');
+      for (let i = 0; i < 10 * 30 && car.phase !== 'idle'; i++) { liftSim.over = null; liftSim.update(1 / 30); }
+      ok(!!liftSim.interactTarget(lp)?.elevatorTo, 'upper elevator stop offers a return trip once the car is idle');
       liftSim.playerUse(lp);
-      ok(Math.hypot(lp.x - from.x, lp.z - from.z) < 0.01, 'service elevator works in both directions');
+      for (let i = 0; i < 25 * 30; i++) {
+        liftSim.over = null;
+        liftSim.update(1 / 30);
+        if (Math.hypot(lp.x - from.x, lp.z - from.z) < 0.02) break;
+      }
+      ok(Math.hypot(lp.x - from.x, lp.z - from.z) < 0.02, 'service elevator works in both directions');
+
+      for (let i = 0; i < 10 * 30 && car.phase !== 'idle'; i++) { liftSim.over = null; liftSim.update(1 / 30); }
+      liftSim.over = null;
+      lp.x = to.x; lp.z = to.z; lp.path = null; lp.goal = null;
+      ok(!!liftSim.interactTarget(lp)?.elevatorTo, 'the upper landing can call a car parked downstairs');
+      liftSim.playerUse(lp);
+      ok(car.phase === 'moving' && car.pending === lp && car.at === 0,
+        'a call from the far floor sends the empty car over instead of teleporting it');
+      ok(!!encodeSnap(liftSim).el?.[0]?.[5], 'the empty-car call is replicated to co-op clients');
+      for (let i = 0; i < 25 * 30; i++) {
+        liftSim.over = null;
+        liftSim.update(1 / 30);
+        if (car.phase === 'open' && car.at === 1) break;
+      }
+      ok(car.at === 1 && car.rider === lp && car.target === 0,
+        'the arriving car opens and takes the waiting officer aboard');
+      ok(!encodeSnap(liftSim).el?.[0]?.[5], 'the replicated call flag clears once the officer is aboard');
+      for (let i = 0; i < 25 * 30; i++) {
+        liftSim.over = null;
+        liftSim.update(1 / 30);
+        if (Math.hypot(lp.x - from.x, lp.z - from.z) < 0.02) break;
+      }
+      ok(Math.hypot(lp.x - from.x, lp.z - from.z) < 0.02, 'the called car carries the officer back down');
+
+      // Walking out of the open doors cancels the ride instead of dragging the player along.
+      const away = new Sim(mission, 23), ap = away.player;
+      for (const a of away.actors) if (a !== ap) { a.alive = false; }
+      ap.x = from.x; ap.z = from.z; ap.yaw = from.yaw;
+      away.over = null;
+      away.playerUse(ap);
+      const awayCar = away.elevators[0];
+      for (let i = 0; i < 10 * 30 && awayCar.phase !== 'open'; i++) { away.over = null; away.update(1 / 30); }
+      ap.x = from.x; ap.z = from.z + 4.2;
+      for (let i = 0; i < 10 * 30 && awayCar.phase !== 'idle'; i++) { away.over = null; away.update(1 / 30); }
+      ok(awayCar.phase === 'idle' && awayCar.at === 0 && Math.hypot(ap.x - to.x, ap.z - to.z) > 4,
+        'walking away before the doors shut cancels the ride');
+
+      // A call whose caller walks off must not drag them into the car when it reaches the landing.
+      const wander = new Sim(mission, 29), wp = wander.player;
+      for (const a of wander.actors) if (a !== wp) a.alive = false;
+      const wcar = wander.elevators[0];
+      wcar.at = 1; wcar.phase = 'idle'; wcar.door = 0;
+      wp.x = from.x; wp.z = from.z; wp.yaw = from.yaw;
+      wander.over = null;
+      wander.playerUse(wp);
+      ok(wcar.pending === wp, 'the empty car answers the call');
+      wp.x = from.x; wp.z = from.z + 4.2;
+      for (let i = 0; i < 30 * 30 && wcar.phase !== 'idle'; i++) { wander.over = null; wander.update(1 / 30); }
+      ok(wcar.phase === 'idle' && wcar.at === 0 && Math.hypot(wp.x - to.x, wp.z - to.z) > 4,
+        'a caller who walks away is not taken along when the empty car arrives');
 
       const grenades = new Sim(mission, 13), gx = vip.x, gz = vip.z, gy = groundHeightAt(grenades.level, gx, gz);
       for (const a of grenades.actors) if (a !== grenades.player) a.alive = false;
@@ -336,6 +407,7 @@ function play(mission: number, seed: number, verbose = false) {
       for (const a of host.actors) if (a !== remote) a.alive = false;
       remote.x = from.x; remote.z = from.z; remote.yaw = from.yaw;
       host.playerUse(remote);
+      for (let i = 0; i < 25 * 30; i++) { host.over = null; host.update(1 / 30); if (Math.hypot(remote.x - to.x, remote.z - to.z) < 0.02) break; }
       applySnap(mirror, JSON.parse(JSON.stringify(encodeSnap(host))), local);
       ok(Math.hypot(local.x - to.x, local.z - to.z) < 0.02 && groundHeightAt(mirror.level, local.x, local.z) > 2.9
         && local.nx === local.x && local.nz === local.z && local.nd === 0 && local.nt === 0,

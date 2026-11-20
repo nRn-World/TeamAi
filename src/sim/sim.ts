@@ -51,6 +51,41 @@ export interface BombState {
   warned60?: boolean; warned20?: boolean;
 }
 
+/** A service-elevator car: it opens its landing doors, holds, closes, travels and opens again. */
+export type ElevatorPhase = 'idle' | 'opening' | 'open' | 'closing' | 'moving';
+export interface ElevatorCar {
+  /** Index into level.elevators. */
+  id: number;
+  /** Landing the car is docked at (0 = lower stop, 1 = upper stop). */
+  at: number;
+  /** Landing the current trip ends at. */
+  target: number;
+  phase: ElevatorPhase;
+  /** 0 = landing doors shut, 1 = fully open. */
+  door: number;
+  /** Seconds left in the current opening/closing/moving phase or the open hold. */
+  timer: number;
+  /** 0..1 progress of the current travel, used for the floor indicator. */
+  travel: number;
+  /** The officer riding this trip, moved to `target` when the doors open there. */
+  rider: Actor | null;
+  /** An officer waiting at a landing while the car is coming over to fetch them. */
+  pending: Actor | null;
+  /** Replicated flag: the empty car is on its way to answer a call. */
+  calling: boolean;
+  /** Landing the trip started from. */
+  from: number;
+}
+
+export interface ElevatorInfo {
+  car: ElevatorCar;
+  elevator: ElevatorLink;
+  stop: ElevatorStop;
+  stopIndex: number;
+  /** The landing this trip is heading for. */
+  to: ElevatorStop;
+}
+
 export type Ev =
   | { t: 'shot'; by: Actor; x: number; y: number; z: number; x2: number; y2: number; z2: number; hit: 'wall' | 'actor' | 'none'; head?: boolean; kill?: boolean; nx?: number; ny?: number; nz?: number; mat?: HitMaterial }
   | { t: 'pen'; x: number; y: number; z: number; nx: number; ny: number; nz: number }
@@ -76,6 +111,7 @@ export type Ev =
   | { t: 'breachSync'; step: number }
   | { t: 'share'; from: Actor; to: Actor; kind: 'bang' | 'ammo' }
   | { t: 'bark'; a: Actor; kind: 'spot' | 'surrender' | 'pain' | 'die' | 'panic' | 'unrest' }
+  | { t: 'elevator'; id: number; kind: 'ding' | 'open' | 'close' | 'move' | 'arrive'; stop?: number }
   | { t: 'info'; text: string } | { t: 'mutiny'; by: Actor; a: Actor } | { t: 'end'; win: boolean };
 
 export interface EvidenceItem { id: number; x: number; z: number; yaw: number; secured: boolean; ownerId: number; kind?: 'rifle' | 'shotgun' | 'pistol'; }
@@ -202,6 +238,8 @@ export class Sim {
   bomb: BombState | null = null;
   stats: Stats = { shotsFired: 0, suspectsKilled: 0, suspectsArrested: 0, civsSecured: 0, civsKilled: 0, civsKilledByPolice: 0, officersDown: 0, unauthorized: 0, c2Used: 0, nonLethalHits: 0, bangsUsed: 0, evidenceSecured: 0, negotiatedSurrenders: 0 };
   players: Actor[] = []; private checkT = 0;
+  /** Landing-door / car state for every elevator in the level. */
+  elevators: ElevatorCar[] = [];
   replayFrames: ReplayFrame[] = [];
   replayEvents: ReplayEvent[] = [];
   private replayT = 0;
@@ -238,6 +276,9 @@ export class Sim {
       this.bomb = { x: this.level.bomb.x, z: this.level.bomb.z, time: this.level.bomb.time, defused: false, defuseT: 0, started: false };
     }
     const l = this.level;
+    this.elevators = l.elevators.map((e, i) => ({
+      id: i, at: 0, target: 0, phase: 'idle' as ElevatorPhase, door: 0, timer: 0, travel: 0, rider: null, pending: null, calling: false, from: 0,
+    }));
     const ep = preplan.entry && preplan.entry > 0 && l.entries[preplan.entry] ? l.entries[preplan.entry] : l.playerSpawn;
     const sp = { x: ep.x, z: ep.z, yaw: ep.yaw };
     let id = 0;
@@ -2185,7 +2226,7 @@ export class Sim {
   }
 
   // ---------- player interaction ----------
-  interactTarget(p: Actor = this.player): { revive?: Actor; actor?: Actor; door?: Door; breaker?: Pt; bomb?: BombState; trapDoor?: Door; evidence?: EvidenceItem; elevator?: ElevatorLink; elevatorFrom?: ElevatorStop; elevatorTo?: ElevatorStop } | null {
+  interactTarget(p: Actor = this.player): { revive?: Actor; actor?: Actor; door?: Door; breaker?: Pt; bomb?: BombState; trapDoor?: Door; evidence?: EvidenceItem; elevator?: ElevatorLink; elevatorFrom?: ElevatorStop; elevatorTo?: ElevatorStop; elevatorCar?: ElevatorCar } | null {
     if (!p.alive || p.downed) return null;
     const f = fwd(p.yaw);
     // Revive downed co-op teammate has top priority
@@ -2196,11 +2237,16 @@ export class Sim {
       if (d < rd && (d < 0.9 || (dx * f.x + dz * f.z) / d > 0.35)) { rd = d; revBest = pl; }
     }
     if (revBest) return { revive: revBest };
-    for (const elevator of this.level.elevators) for (let i = 0; i < elevator.stops.length; i++) {
-      const from = elevator.stops[i], to = elevator.stops[1 - i];
-      if (Math.abs(this.floorY(p.x, p.z) - from.floorY) > 0.75) continue;
-      const dx = from.x - p.x, dz = from.z - p.z, d = Math.hypot(dx, dz);
-      if (d < 2.1 && (d < 0.85 || (dx * f.x + dz * f.z) / d > 0.35)) return { elevator, elevatorFrom: from, elevatorTo: to };
+    for (const elevator of this.level.elevators) {
+      const car = this.elevators[elevator.id];
+      // A moving or already-open car cannot be called again from the landing.
+      if (!car || car.phase !== 'idle') continue;
+      for (let i = 0; i < elevator.stops.length; i++) {
+        const from = elevator.stops[i], to = elevator.stops[1 - i];
+        if (Math.abs(this.floorY(p.x, p.z) - from.floorY) > 0.75) continue;
+        const dx = from.x - p.x, dz = from.z - p.z, d = Math.hypot(dx, dz);
+        if (d < 2.1 && (d < 0.85 || (dx * f.x + dz * f.z) / d > 0.35)) return { elevator, elevatorFrom: from, elevatorTo: to, elevatorCar: car };
+      }
     }
     if (this.bomb && !this.bomb.defused && this.sameFloor(p, this.bomb)) {
       const dx = this.bomb.x - p.x, dz = this.bomb.z - p.z, d = Math.hypot(dx, dz);
@@ -2243,14 +2289,7 @@ export class Sim {
     if (!p.alive || p.downed || this.over) return;
     const t = this.interactTarget(p); if (!t) return;
     if (t.revive) { p.reviving = t.revive; p.reviveT = 0; }
-    else if (t.elevator && t.elevatorTo) {
-      p.x = t.elevatorTo.x; p.z = t.elevatorTo.z; p.jumpY = 0;
-      p.path = null; p.goal = null; p.moving = false; p.lastX = NaN; p.lastZ = NaN;
-      this.resolve(p);
-      p.nx = p.x; p.nz = p.z; p.nd = 0; p.nt = 0;
-      p.trail.length = 0; p.trail.push({ x: p.x, z: p.z });
-      this.events.push({ t: 'info', text: `${t.elevator.name}: ${t.elevatorTo.label}` });
-    }
+    else if (t.elevator && t.elevatorFrom) this.useElevator(p, t.elevator, t.elevatorFrom);
     else if (t.bomb) { p.defusing = true; p.defuseT = 0; }
     else if (t.breaker) this.togglePower(p);
     else if (t.trapDoor) this.disarmTrap(t.trapDoor, p);
@@ -2267,6 +2306,139 @@ export class Sim {
     }
     else if (t.actor) { if (t.actor.claimedBy) { t.actor.claimedBy.cuff = null; t.actor.claimedBy = null; } p.cuff = t.actor; p.cuffT = 0; }
   }
+  /** Press the landing button: doors open, hold, close, travel, then open on the other floor. */
+  useElevator(p: Actor, elevator: ElevatorLink, stop: ElevatorStop): boolean {
+    const car = this.elevators[elevator.id];
+    if (!car || car.phase !== 'idle' || !p.alive || p.downed || this.over) return false;
+    const from = elevator.stops.indexOf(stop);
+    if (from < 0) return false;
+    car.from = from;
+    car.travel = 0;
+    if (car.at !== from) {
+      // The car is parked on the other floor: send it over empty, then board when it opens here.
+      car.pending = p;
+      car.calling = true;
+      car.target = from;
+      car.rider = null;
+      car.phase = 'moving';
+      car.timer = 3.4;
+      this.events.push({ t: 'elevator', id: car.id, kind: 'move' });
+      this.events.push({ t: 'info', text: `${elevator.name}: car is coming — ${stop.label}` });
+      return true;
+    }
+    car.target = 1 - from;
+    car.rider = p;
+    car.pending = null;
+    car.calling = false;
+    car.at = from;
+    car.phase = 'opening';
+    car.timer = 0;
+    car.door = Math.max(0, Math.min(1, car.door));
+    this.events.push({ t: 'elevator', id: car.id, kind: 'ding', stop: from });
+    this.events.push({ t: 'elevator', id: car.id, kind: 'open', stop: from });
+    this.events.push({ t: 'info', text: `${elevator.name}: doors opening — ${elevator.stops[car.target].label}` });
+    return true;
+  }
+
+  /** Nearest landing (up to 3.4 m) and what its car is doing, for the HUD prompt and floor indicator. */
+  elevatorNear(p: Actor): ElevatorInfo | null {
+    let best: ElevatorInfo | null = null, bd = 3.4;
+    for (const elevator of this.level.elevators) {
+      const car = this.elevators[elevator.id];
+      if (!car) continue;
+      for (let i = 0; i < elevator.stops.length; i++) {
+        const stop = elevator.stops[i];
+        if (Math.abs(this.floorY(p.x, p.z) - stop.floorY) > 1.1) continue;
+        const d = Math.hypot(stop.x - p.x, stop.z - p.z);
+        if (d < bd) {
+          bd = d;
+          best = { car, elevator, stop, stopIndex: i, to: elevator.stops[1 - i] };
+        }
+      }
+    }
+    return best;
+  }
+
+  private placeAtStop(p: Actor, stop: ElevatorStop) {
+    p.x = stop.x; p.z = stop.z; p.jumpY = 0;
+    p.path = null; p.goal = null; p.moving = false; p.lastX = NaN; p.lastZ = NaN;
+    this.resolve(p);
+    p.nx = p.x; p.nz = p.z; p.nd = 0; p.nt = 0;
+    p.trail.length = 0; p.trail.push({ x: p.x, z: p.z });
+  }
+
+  /** Landing doors and car travel. Runs even after the operation ends so the doors finish closing. */
+  updateElevators(dt: number) {
+    const OPEN_TIME = 0.95, HOLD_TIME = 2.2, CLOSE_TIME = 1.05, TRAVEL_TIME = 3.4;
+    for (const car of this.elevators) {
+      const elevator = this.level.elevators[car.id];
+      if (!elevator) continue;
+      if (car.rider && (!car.rider.alive || car.rider.downed)) car.rider = null;
+      if (car.pending && (!car.pending.alive || car.pending.downed)) { car.pending = null; car.calling = false; }
+      switch (car.phase) {
+        case 'idle':
+          if (car.door > 0) car.door = Math.max(0, car.door - dt / CLOSE_TIME);
+          break;
+        case 'opening':
+          car.door = Math.min(1, car.door + dt / OPEN_TIME);
+          if (car.door >= 1) { car.door = 1; car.phase = 'open'; car.timer = HOLD_TIME; }
+          break;
+        case 'open':
+          car.timer -= dt;
+          if (car.timer <= 0) {
+            // Someone who walked away before the doors shut is not taken along.
+            if (car.rider) {
+              const s = elevator.stops[car.from];
+              if (!car.rider.alive || car.rider.downed || Math.hypot(car.rider.x - s.x, car.rider.z - s.z) > 3.2) car.rider = null;
+            }
+            car.phase = 'closing';
+            car.timer = CLOSE_TIME;
+            this.events.push({ t: 'elevator', id: car.id, kind: 'close', stop: car.at });
+          }
+          break;
+        case 'closing':
+          car.door = Math.max(0, car.door - dt / CLOSE_TIME);
+          if (car.door <= 0) {
+            car.door = 0;
+            if (car.rider) {
+              car.phase = 'moving';
+              car.timer = TRAVEL_TIME;
+              car.travel = 0;
+              this.events.push({ t: 'elevator', id: car.id, kind: 'move' });
+            } else { car.phase = 'idle'; car.timer = 0; }
+          }
+          break;
+        case 'moving':
+          car.timer -= dt;
+          car.travel = Math.max(0, Math.min(1, 1 - car.timer / TRAVEL_TIME));
+          if (car.timer <= 0) {
+            car.travel = 0;
+            car.at = car.target;
+            car.phase = 'opening';
+            car.door = 0;
+            car.timer = 0;
+            const rider = car.rider;
+            car.rider = null;
+            car.calling = false;
+            this.events.push({ t: 'elevator', id: car.id, kind: 'arrive', stop: car.at });
+            this.events.push({ t: 'elevator', id: car.id, kind: 'ding', stop: car.at });
+            if (rider) {
+              this.placeAtStop(rider, elevator.stops[car.at]);
+              this.events.push({ t: 'info', text: `${elevator.name}: arrived — ${elevator.stops[car.at].label}` });
+            }
+            if (car.pending) {
+              // The waiting officer boards here; the trip continues to the other floor once the doors shut.
+              car.rider = car.pending;
+              car.pending = null;
+              car.from = car.at;
+              car.target = 1 - car.at;
+            }
+          }
+          break;
+      }
+    }
+  }
+
   playerPing(p: Actor, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number) {
     if (!p.alive || this.over) return null;
     const h = this.ray(ox, oy, oz, dx, dy, dz, 55, p, false);
@@ -2540,7 +2712,7 @@ export class Sim {
   }
 
   update(dt: number) {
-    if (this.over) { this.stepDoors(dt); return; }
+    if (this.over) { this.stepDoors(dt); this.updateElevators(dt); return; }
     this.time += dt;
     this.replayT -= dt;
     if (this.replayT <= 0) { this.replayT = 0.5; this.recordReplay(); }
@@ -2716,6 +2888,8 @@ export class Sim {
     this.updateClouds(dt);
     this.updateSensors(dt);
     this.updateDynamicEvents();
+    // Last, so a rider moved between landings leaves the frame with a clean movement history.
+    this.updateElevators(dt);
     this.checkT -= dt;
     if (this.checkT <= 0) {
       this.checkT = 0.5;

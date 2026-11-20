@@ -75,6 +75,10 @@ Locked wooden doors are kicked open with `F` (metal vault doors still need a Bre
 
 Movement, stance, use, reload, shout, grenade cycle and voice are rebindable under Settings → Key bindings; the bindings are stored with the rest of the settings and conflicts are swapped rather than silently dropped. The Controls screen still lists the default layout. Default keys are also shown in the HUD quick bar, which follows the shout binding.
 
+## Service elevator
+
+Kista's two storeys are joined by a real lift, not a teleport. Stand at either landing and press `F`: if the car is parked on the other floor it travels over empty first (`CAR ARRIVING`), then boards you when it opens here. The landing chime sounds, the two brushed-steel leaves slide into their wall pockets, the cab light comes up for a moment, the doors close and the car travels for about three and a half seconds. The HUD tracks the trip (`DOORS OPENING`, `TRAVELLING ▲`, `DOORS OPEN`) with a progress bar; the floor indicator's amber pip rides between the two floor lamps, the landing call button blinks while the car is coming, the cab shows a mirror and a lit car-button plate, and the doors open again on the other floor before the player is placed on the new landing. Walking away before the doors shut cancels the ride. Co-op hosts replicate the door phase, the car position and the empty-car call flag in the snapshot, so every client sees the same doors and the same `CAR ARRIVING` status.
+
 ## Furniture placement
 
 `furnish()` in `src/sim/level.ts` no longer drops furniture on random floor cells. Each room is
@@ -84,9 +88,15 @@ a wall cell, with its back to that wall and its front into the room. The pieces 
 stand free (chairs, poufs, crates) turn towards the middle of their room instead of staring at a
 wall, and a desk gets a chair pulled up in front of it, facing the desk.
 
-The budget per room and the front-clearance rule are unchanged, so walkways, doors and the
-reachability check behave exactly as before; `tests/sim.test.ts` still passes and 100 % of the
-wall furniture in every mission/seed now has a wall behind it (it used to be about 50 %).
+The budget per room was raised (offices, bedrooms and stores about twice as dense, corridors now
+carry benches, lockers and greenery instead of one lonely plant), and the rooms are finished with
+non-colliding skirting boards, framed prints, clocks, whiteboards, notice boards, fire
+extinguishers, exit signs, area rugs and ceiling grilles. All of that trim is merged per material,
+so a whole floor of it costs a handful of draw calls. The three-metre halo around each stair
+landing is kept free of furniture so the squad can queue for the flight, the lift lobby stays open
+in front of the doors, and the player spawn plus every co-op entry cell is reserved so nobody starts
+inside a prop. `tests/sim.test.ts` still passes and 100 % of the wall furniture in every
+mission/seed has a wall behind it.
 
 ## Lighting and finish
 

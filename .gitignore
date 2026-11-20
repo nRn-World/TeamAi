@@ -26,3 +26,6 @@ dist
 
 # visual review contact sheets (not for repo)
 review/
+
+# local verification screenshots (not for repo)
+artifacts/

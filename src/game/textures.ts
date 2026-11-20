@@ -64,6 +64,15 @@ export const metalTex = (key: string, col: string) => make('metal' + key, 128, 2
   g.fillStyle = 'rgba(0,0,0,0.5)'; for (let i = 0; i < 5; i++) { g.fillRect(14, 22 + i * 7, 34, 3); g.fillRect(w / 2 + 12, 22 + i * 7, 34, 3); } g.fillStyle = '#ccc'; g.fillRect(w / 2 - 12, h / 2, 5, 14); g.fillRect(w - 14, h / 2, 5, 14);
   grain(g, w, h, 14, 6);
 });
+/** Clean brushed-steel panel for lift doors, without the locker vents. */
+export const brushedTex = (col = '#8a949d') => make('brushed' + col, 128, 256, (g, w, h) => {
+  g.fillStyle = col; g.fillRect(0, 0, w, h);
+  const r = rnd(col.length * 31 + 7);
+  for (let x = 0; x < w; x += 2) { g.fillStyle = `rgba(255,255,255,${0.02 + r() * 0.035})`; g.fillRect(x, 0, 1, h); }
+  for (let y = 0; y < h; y += 3) { g.fillStyle = `rgba(0,0,0,${0.015 + r() * 0.02})`; g.fillRect(0, y, w, 1); }
+  g.strokeStyle = 'rgba(0,0,0,0.32)'; g.lineWidth = 3; g.strokeRect(3, 3, w - 6, h - 6);
+  g.fillStyle = 'rgba(0,0,0,0.22)'; g.fillRect(w / 2 - 1, 0, 2, h);
+});
 export const shelfTex = () => make('shelf', 128, 256, (g, w, h) => {
   g.fillStyle = '#4a3a2a'; g.fillRect(0, 0, w, h); const r = rnd(21);
   for (let y = 8; y < h - 10; y += 50) { g.fillStyle = '#1e1812'; g.fillRect(6, y, w - 12, 42); let x = 9; while (x < w - 16) { const bw = 5 + r() * 9, bh = 26 + r() * 14; g.fillStyle = `hsl(${r() * 360},${25 + r() * 35}%,${28 + r() * 30}%)`; g.fillRect(x, y + 42 - bh, bw, bh); x += bw + 1; if (r() < 0.12) x += 12; } }

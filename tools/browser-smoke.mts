@@ -12,7 +12,10 @@ declare global {
 }
 
 const PORT = Number(process.env.SMOKE_PORT || 4173);
-const URL = `http://127.0.0.1:${PORT}/?auto=6&seed=1&q=2&perf=1&noperfguard=1`;
+// High quality is forced (q=2) but the perf guard stays ON: on a SwiftShader/llvmpipe software
+// GPU the renderer would otherwise stall at full scale and never reach 11 frames. The guard
+// only lowers renderScale, never quality/shadows/post, so the High assertions below still hold.
+const URL = `http://127.0.0.1:${PORT}/?auto=6&seed=1&q=2&perf=1`;
 let failures = 0;
 const ok = (cond: boolean, msg: string) => {
   if (cond) console.log(`  ok   ${msg}`);
@@ -72,11 +75,33 @@ try {
   });
   const page = await browser.newPage({ viewport: { width: 1024, height: 600 }, deviceScaleFactor: 1 });
   const pageErrors: string[] = [];
+  const consoleLog: string[] = [];
   page.on('pageerror', e => pageErrors.push(String(e).slice(0, 500)));
+  page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') consoleLog.push(`${m.type()}: ${m.text().slice(0, 300)}`); });
+  const dumpState = async () => {
+    try {
+      const s = await page.evaluate(() => ({
+        hasSim: !!(window as any).__ta?.sim, state: (window as any).__ta?.state,
+        perf: (window as any).__taPerf ?? null, perfLog: ((window as any).__ta as any)?.perfLog?.length ?? -1,
+        webgl: (() => { try { const c = document.createElement('canvas'); const gl = c.getContext('webgl2') || c.getContext('webgl'); return gl ? (gl as any).getParameter((gl as any).RENDERER) ?? 'webgl-ok' : 'no-context'; } catch { return 'webgl-throw'; } })(),
+      }));
+      console.log(`  diag ${JSON.stringify(s).slice(0, 800)}`);
+    } catch (e) { console.log(`  diag evaluate failed: ${String(e).slice(0, 200)}`); }
+    if (pageErrors.length) console.log(`  diag pageerrors: ${pageErrors.join(' | ').slice(0, 800)}`);
+    if (consoleLog.length) console.log(`  diag console: ${consoleLog.slice(-5).join(' | ').slice(0, 800)}`);
+  };
+  const waitStage = async (fn: () => boolean, timeout: number, label: string) => {
+    try { await page.waitForFunction(fn, null, { timeout }); }
+    catch (e) {
+      console.log(`  FAIL stage "${label}" timed out after ${timeout}ms`);
+      await dumpState();
+      throw e;
+    }
+  };
   await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForFunction(() => window.__ta?.sim, null, { timeout: 180000 });
-  await page.waitForFunction(() => window.__ta?.state === 'play', null, { timeout: 180000 });
-  await page.waitForFunction(() => (window.__taPerf?.frames ?? 0) > 10, null, { timeout: 90000 });
+  await waitStage(() => window.__ta?.sim, 180000, 'boot: window.__ta.sim appears');
+  await waitStage(() => window.__ta?.state === 'play', 180000, 'boot: state reaches play');
+  await waitStage(() => (window.__taPerf?.frames ?? 0) > 10, 180000, 'render: 11 frames drawn (software GPU may be slow)');
   await sleep(1200);
 
   const perf = await page.evaluate(() => window.__taPerf);

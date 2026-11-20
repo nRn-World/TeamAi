@@ -144,6 +144,21 @@ class Builder {
   nearElevator(x: number, z: number) {
     return this.elevators.some(e => e.stops.some(s => Math.abs(x + 0.5 - s.x) < 1.3 && Math.abs(z + 0.5 - s.z) < 1.3));
   }
+  /** True in the open floor in front of an elevator landing, which must stay clear for the doors. */
+  nearElevatorLanding(x: number, z: number, deep = 2.8, wide = 1.4) {
+    return this.elevators.some(e => e.stops.some(s => {
+      const fx = -Math.sin(s.yaw), fz = -Math.cos(s.yaw);
+      const dx = x + 0.5 - s.x, dz = z + 0.5 - s.z;
+      const along = dx * fx + dz * fz;
+      const across = Math.abs(dx * fz - dz * fx);
+      return along > -1.4 && along < deep && across < wide;
+    }));
+  }
+  /** True around a stair landing, where furniture would crowd the squad queuing for the flight. */
+  nearStairLanding(x: number, z: number, r = 3.4) {
+    return this.staircases.some(s =>
+      Math.hypot(x + 0.5 - s.x0, z + 0.5 - s.z0) < r || Math.hypot(x + 0.5 - s.x1, z + 0.5 - s.z1) < r);
+  }
   /** True inside a stair flight plus a little shoulder room, where furniture would clip the treads or rails. */
   nearStair(x: number, z: number, clear = 1.1) {
     return this.staircases.some(s => {
@@ -203,8 +218,12 @@ class Builder {
       else if (kind === 'pc' || kind === 'bed' || kind === 'chair' || kind === 'plant' || kind === 'shelf' || kind === 'server') rot = wallSide;
     }
     const blockWin = high || kind === 'sofa' || kind === 'desk' || kind === 'bed' || kind === 'bar' || kind === 'pc';
+    const reserved = (ix: number, iz: number) => (Math.abs(ix - sx) <= 1 && Math.abs(iz - sz) <= 1)
+      || this.entries.some(e => Math.abs(ix - Math.floor(e.x)) <= 1 && Math.abs(iz - Math.floor(e.z)) <= 1);
     for (let iz = cz; iz < cz + d; iz++) for (let ix = cx; ix < cx + w; ix++) {
-      if (this.get(ix, iz) !== FLOOR || this.nearDoor(ix, iz) || this.nearBreaker(ix, iz) || this.nearElevator(ix, iz) || this.nearStair(ix, iz)) return false;
+      // Never furnish the player spawn or a co-op entry: actors start standing there.
+      if (reserved(ix, iz)) return false;
+      if (this.get(ix, iz) !== FLOOR || this.nearDoor(ix, iz) || this.nearBreaker(ix, iz) || this.nearElevator(ix, iz) || this.nearStair(ix, iz) || this.nearStairLanding(ix, iz) || this.nearElevatorLanding(ix, iz)) return false;
       if (blockWin && this.nearWindow(ix, iz)) return false;
       if (this.bomb && Math.abs(ix + 0.5 - this.bomb.x) < 1.5 && Math.abs(iz + 0.5 - this.bomb.z) < 1.5) return false;
     }
@@ -272,34 +291,35 @@ class Builder {
     const sx = Math.floor(spawn.x), sz = Math.floor(spawn.z);
     /** What belongs against a wall, in the order we would like to see it. */
     const wallKit: Record<RoomKind, [PropKind, boolean][]> = {
-      office: [['pc', true], ['desk', false], ['shelf', true], ['server', true], ['plant', false], ['chair', false]],
-      lobby: [['sofa', false], ['plant', false], ['shelf', true], ['chair', false]],
-      club: [['bar', false], ['sofa', false], ['plant', false], ['chair', false]],
-      bedroom: [['bed', false], ['locker', true], ['shelf', true], ['sofa', false], ['plant', false]],
-      storage: [['shelf', true], ['shelf', true], ['crate', false]],
-      vault: [['locker', true], ['locker', true], ['crate', false]],
-      warehouse: [['crate', false], ['crate', false], ['shelf', true]],
-      corridor: [['plant', false]],
+      office: [['pc', true], ['desk', false], ['shelf', true], ['server', true], ['plant', false], ['chair', false], ['locker', true]],
+      lobby: [['sofa', false], ['plant', false], ['shelf', true], ['chair', false], ['desk', false], ['locker', true]],
+      club: [['bar', false], ['sofa', false], ['plant', false], ['chair', false], ['shelf', true]],
+      bedroom: [['bed', false], ['locker', true], ['shelf', true], ['sofa', false], ['plant', false], ['desk', false], ['chair', false]],
+      storage: [['shelf', true], ['shelf', true], ['crate', false], ['locker', true], ['plant', false]],
+      vault: [['locker', true], ['locker', true], ['crate', false], ['shelf', true]],
+      warehouse: [['crate', false], ['crate', false], ['shelf', true], ['locker', true]],
+      // Corridors used to get one lonely plant; they now hold benches, lockers and greenery.
+      corridor: [['plant', false], ['shelf', true], ['locker', true], ['chair', false], ['sofa', false], ['crate', false]],
     };
     /** Free-standing pieces that are happy in the middle of a room. */
     const floorKit: Record<RoomKind, [PropKind, boolean][]> = {
-      office: [['chair', false], ['plant', false]],
-      lobby: [['chair', false], ['plant', false]],
-      club: [['chair', false]],
-      bedroom: [['chair', false]],
-      storage: [['crate', false]],
-      vault: [['crate', false]],
-      warehouse: [['crate', false], ['crate', true]],
-      corridor: [],
+      office: [['chair', false], ['plant', false], ['crate', false]],
+      lobby: [['chair', false], ['plant', false], ['sofa', false]],
+      club: [['chair', false], ['plant', false]],
+      bedroom: [['chair', false], ['plant', false]],
+      storage: [['crate', false], ['crate', true], ['chair', false]],
+      vault: [['crate', false], ['crate', true]],
+      warehouse: [['crate', false], ['crate', true], ['chair', false]],
+      corridor: [['plant', false], ['crate', false]],
     };
     for (const r of this.rooms) {
       const area = (r.w - 2) * (r.h - 2);
-      let budget = r.kind === 'corridor' ? Math.floor(area / 40)
-        : r.kind === 'warehouse' ? Math.floor(area / 9)
-        : r.kind === 'club' ? Math.floor(area / 12)
-        : r.kind === 'vault' ? Math.floor(area / 9)
-        : r.kind === 'lobby' ? Math.floor(area / 12)
-        : Math.floor(area / 8);
+      let budget = r.kind === 'corridor' ? Math.floor(area / 12)
+        : r.kind === 'warehouse' ? Math.floor(area / 7)
+        : r.kind === 'club' ? Math.floor(area / 7)
+        : r.kind === 'vault' ? Math.floor(area / 7)
+        : r.kind === 'lobby' ? Math.floor(area / 6)
+        : Math.floor(area / 4);
       if (budget <= 0) continue;
       const { wall, open } = this.freeCells(r, rng);
 
