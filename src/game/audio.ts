@@ -358,6 +358,32 @@ export class GameAudio {
     else if (open) { this.sample('door-latch', o, 0.55, rate, 0, lp); this.sample('door-open-' + pick(2), o, 1, rate, 0.07, lp); if (Math.random() < 0.4) this.sample('door-creak-' + pick(2), o, 0.4, 0.72 + Math.random() * 0.15, 0.3, lp); }
     else { if (Math.random() < 0.3) this.sample('door-creak-' + pick(2), o, 0.3, 0.8, 0, lp); this.sample('door-close-' + pick(3), o, 1, rate, 0.22, lp); }
   }
+  /** Service-elevator landing chime, sliding doors and the motor between floors. */
+  elevator(kind: 'ding' | 'open' | 'close' | 'move' | 'arrive', dist = 2, pan = 0) {
+    if (!this.ctx) return;
+    const near = 1 / (1 + dist * 0.12), o = this.out(pan, 1.15 * near, false);
+    if (kind === 'ding') {
+      this.tone(o, 'sine', 1318, 1318, 0.55, 0.3);
+      this.tone(o, 'sine', 1046, 1046, 0.7, 0.26, 0.18);
+      this.burst(o, 0.05, 'highpass', 5200, 3600, 2, 0.12);
+    } else if (kind === 'arrive') {
+      // Mechanical stop under the chime: the car settles, then the landing bell rings.
+      this.burst(o, 0.3, 'lowpass', 320, 90, 1.2, 0.3);
+      this.tone(o, 'sine', 76, 46, 0.3, 0.18);
+      this.burst(o, 0.04, 'bandpass', 2600, 1800, 1.6, 0.16, 0.04);
+    } else if (kind === 'open') {
+      this.burst(o, 0.55, 'lowpass', 1400, 260, 0.8, 0.32);
+      this.tone(o, 'triangle', 118, 96, 0.4, 0.08);
+    } else if (kind === 'close') {
+      this.burst(o, 0.48, 'lowpass', 1100, 180, 0.8, 0.3);
+      this.tone(o, 'sine', 82, 58, 0.22, 0.16, 0.32);
+      this.burst(o, 0.06, 'bandpass', 2200, 1400, 1.5, 0.16, 0.34);
+    } else {
+      this.tone(o, 'sawtooth', 54, 47, 3.3, 0.045, 0.05);
+      this.tone(o, 'sine', 108, 96, 3.0, 0.03, 0.1);
+      this.burst(o, 1.4, 'lowpass', 220, 110, 1.4, 0.05);
+    }
+  }
   cuff() { if (!this.ctx) return; const o = this.out(0, 2.5, false); for (let i = 0; i < 6; i++) this.burst(o, 0.02, 'bandpass', 3500 + i * 250, 3000, 8, 0.6, i * 0.04); }
   bang(dist: number, pan: number, deaf: number) {
     if (!this.ctx) return; const o = this.out(pan, 1.0 / (1 + dist * 0.06));

@@ -9,6 +9,8 @@ export interface Snap {
   g: number[][]; cl?: [number, number, number, number, number][]; p: number[][];
   ev?: [number, number, number, number, number, number][];
   sp?: [number, number, number][]; ln?: number[];
+  /** Landing doors and car position per elevator: phase, door%, at, target, travel%, calling%. */
+  el?: [number, number, number, number, number, number?][];
   pw?: number; bm?: [number, number, number?] | null; bw?: number[]; bp?: number[]; bd?: number[];
   bs?: number;
   over: number; time: number; st?: unknown;
@@ -38,6 +40,9 @@ export function encodeSnap(sim: Sim): Snap {
     ev: sim.evidence.length ? sim.evidence.map(e => [e.id, r2(e.x), r2(e.z), r2(e.yaw), e.kind === 'shotgun' ? 2 : e.kind === 'rifle' ? 1 : 0, e.secured ? 1 : 0]) : undefined,
     sp: sim.sensorPings.length ? sim.sensorPings.map(pg => [r2(pg.x), r2(pg.z), pg.kind === 'suspect' ? 1 : 0]) : undefined,
     ln: sim.actors.map(a => r2(a.lean)),
+    el: sim.elevators.length ? sim.elevators.map(c => [
+      ({ idle: 0, opening: 1, open: 2, closing: 3, moving: 4 } as const)[c.phase], r2(c.door), c.at, c.target, r2(c.travel), c.calling ? 1 : 0,
+    ]) : undefined,
     pw: sim.powerOn ? 1 : 0,
     bm: sim.bomb ? [r2(sim.bomb.time), sim.bomb.defused ? 1 : 0, sim.bomb.started ? 1 : 0] : null,
     bw: sim.brokenWindows.size ? [...sim.brokenWindows] : undefined,
@@ -108,6 +113,14 @@ export function applySnap(sim: Sim, s: Snap, me: Actor, targets?: Map<Actor, Net
     if (v.length > 6) { p.bleedT = v[6]; p.reviving = v[7] >= 0 ? sim.actors[v[7]] : null; p.reviveT = v[8]; }
     if (v.length > 9) { p.smokes = v[9]; p.gases = v[10]; }
     if (v.length > 11) p.sensors = v[11];
+  });
+  if (s.el) s.el.forEach((v, i) => {
+    const car = sim.elevators[i]; if (!car) return;
+    car.phase = (['idle', 'opening', 'open', 'closing', 'moving'] as const)[v[0]] ?? 'idle';
+    car.door = v[1]; car.at = v[2]; car.target = v[3]; car.travel = v[4];
+    car.calling = !!v[5];
+    // Remote riders are moved by the authoritative actor positions, never by the mirror's own trip.
+    car.rider = null;
   });
   if (s.pw !== undefined) sim.powerOn = !!s.pw;
   if (s.bm && sim.bomb) { sim.bomb.time = s.bm[0]; sim.bomb.defused = !!s.bm[1]; sim.bomb.started = s.bm.length > 2 ? !!s.bm[2] : true; }

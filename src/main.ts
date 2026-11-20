@@ -724,7 +724,7 @@ class Game {
     const ring = document.querySelector('#wheel .wring')!;
     const items: { label: string; cmd: Command }[] = [
       { label: 'Follow', cmd: { team: 'ALL', action: 'follow' } },
-      { label: 'Sök & Säkra', cmd: { team: 'ALL', action: 'secure' } },
+      { label: 'Search & Secure', cmd: { team: 'ALL', action: 'secure' } },
       { label: 'Hold / Cover', cmd: { team: 'ALL', action: 'cover' } },
       { label: 'Stack Up', cmd: { team: 'ALL', action: 'stack' } },
       { label: 'Breach', cmd: { team: 'ALL', action: 'breach' } },
@@ -1957,6 +1957,13 @@ class Game {
       case 'hurt': this.views.get(e.a)?.wound(); if (e.a === p) { this.dmgFx = 1; this.stress = Math.min(1, this.stress + 0.42); this.audio.hurt(); this.recoil += 0.03; } else if (e.a.kind !== 'officer') { /* hit marker only for own shots handled below */ } break;
       case 'death': if (e.a !== p) { const y = groundHeightAt(sim.level, e.a.x, e.a.z); fx.burst(e.a.x, y + 1.1, e.a.z, 26, 0x8a0f0f, 2.6, 8, 0.7); fx.burst(e.a.x, y + 0.5, e.a.z, 14, 0x6a0808, 1.4, 6, 0.9); } if (e.a.kind === 'officer') this.log(`${e.a.name} has been killed.`, 'warn'); break;
       case 'door': { const q = this.pan(e.door.cx + 0.5, e.door.cz + 0.5); this.audio.door(q.d, q.pan, e.open, !!e.kick); break; }
+      case 'elevator': {
+        const stop = sim.level.elevators[e.id]?.stops[e.stop ?? 0];
+        const q = stop ? this.pan(stop.x, stop.z) : { d: 0, pan: 0 };
+        this.audio.elevator(e.kind, q.d, q.pan);
+        if (e.kind === 'move') this.camShake = Math.max(this.camShake, 0.004);
+        break;
+      }
       case 'say': {
         const o = e.a;
         const key = e.text.replace(/^Team [AB]: /, ''), now = performance.now();
@@ -2480,7 +2487,7 @@ class Game {
       html += '</div>';
     }
     $('team').innerHTML = html;
-    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · Hold <kbd>Q/E</kbd> Lean/peek · <kbd>.</kbd> Grenade · <kbd>,</kbd> Sensor · <kbd>${keyLabel(this.bindKey('shout'))}</kbd> Shout · <kbd>F2</kbd> Sök &amp; Säkra · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>P</kbd> Cam${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
+    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · Hold <kbd>Q/E</kbd> Lean/peek · <kbd>.</kbd> Grenade · <kbd>,</kbd> Sensor · <kbd>${keyLabel(this.bindKey('shout'))}</kbd> Shout · <kbd>F2</kbd> Search &amp; Secure · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>P</kbd> Cam${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
     const it = sim.interactTarget(), pr = $('prompt');
     if (p.downed && p.alive) {
       pr.style.opacity = '1'; pr.textContent = `DOWNED — BLEEDOUT IN ${Math.max(0, Math.ceil(p.bleedT))}s (WAIT FOR TEAMMATE)`;
@@ -2495,10 +2502,26 @@ class Game {
     }
     else {
       $('progress').style.opacity = '0';
-      if (it?.revive) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Revive ${it.revive.name} (${Math.ceil(it.revive.bleedT)}s)`; }
+      const lift = sim.elevatorNear(p);
+      if (lift && lift.car.phase !== 'idle') {
+        const car = lift.car, to = lift.elevator.stops[car.target];
+        const coming = !!car.pending || car.calling;
+        const up = coming ? car.at < lift.stopIndex : to.floorY > lift.stop.floorY;
+        const state = car.phase === 'opening' ? 'DOORS OPENING'
+          : car.phase === 'open' ? `DOORS OPEN · ${lift.stop.label}`
+            : car.phase === 'closing' ? 'DOORS CLOSING'
+              : coming ? `CAR ARRIVING ${up ? '▲' : '▼'} · ${lift.stop.label}`
+                : `TRAVELLING ${up ? '▲' : '▼'} · ${to.label}`;
+        pr.style.opacity = '1';
+        pr.innerHTML = `<b>${lift.elevator.name.toUpperCase()}</b> · ${state}`;
+        const frac = car.phase === 'moving' ? car.travel : car.phase === 'closing' ? 1 - car.door : car.door;
+        $('progress').style.opacity = '1';
+        ($('progress').firstElementChild as HTMLElement).style.width = `${Math.round(frac * 100)}%`;
+      }
+      else if (it?.revive) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Revive ${it.revive.name} (${Math.ceil(it.revive.bleedT)}s)`; }
       else if (it?.actor) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Handcuff'; }
       else if (it?.evidence) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Bag Evidence (+25)'; }
-      else if (it?.elevator && it.elevatorTo) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Ride ${it.elevator.name} → ${it.elevatorTo.label}`; }
+      else if (it?.elevator && it.elevatorTo) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Call ${it.elevator.name} · ${it.elevatorTo.label}`; }
       else if (it?.bomb) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Defuse Bomb <small>(3.2 s · hold position)</small>'; }
       else if (it?.breaker) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> ${sim.powerOn ? 'Cut Building Power' : 'Restore Power'}`; }
       else if (it?.door) {
