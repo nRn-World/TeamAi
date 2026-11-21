@@ -472,28 +472,20 @@ export class LevelView {
       });
       g.add(im);
     }
-    // breakable glass windows (floor-to-ceiling curtain-wall glass on office/hotel/club ground exterior)
+    // Breakable glass windows. Only interior glass partitions are left in the level — every
+    // exterior window is sealed to solid wall in the level data — so these always get a sill below
+    // and a header above, exactly the 0.9–2.3 m band the bullet code lets glass pass through.
     const glassMat = quality > 0
       ? new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.2, roughness: 0.24, metalness: 0.05, specularIntensity: 0.45 })
       : std({ color: 0xaad8ee, transparent: true, opacity: 0.34, roughness: 0.15 });
     const frameAlum = std({ color: 0x161a20, roughness: 0.35, metalness: 0.65 });
-    const curtainWall = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'club' || l.theme === 'tower';
     for (const w of l.windows) {
       const cx = Math.floor(w.x), cz = Math.floor(w.z), floorY = w.floorY ?? groundHeightAt(l, w.x, w.z);
       const horiz = sim.cell(cx - 1, cz) === WALL || sim.cell(cx - 1, cz) === WINDOW || sim.cell(cx + 1, cz) === WALL || sim.cell(cx + 1, cz) === WINDOW;
-      const isFront = sim.cell(cx, cz + 1) === OUT || sim.cell(cx, cz - 1) === OUT || sim.cell(cx + 1, cz) === OUT || sim.cell(cx - 1, cz) === OUT;
-      if (curtainWall && isFront) {
-        g.add(box(1, 0.12, 1, frameAlum, w.x, floorY + 0.06, w.z), box(1, 0.25, 1, frameAlum, w.x, floorY + 2.875, w.z));
-        g.add(box(horiz ? 0.08 : 0.14, 2.7, horiz ? 0.14 : 0.08, frameAlum, w.x + (horiz ? 0.46 : 0), floorY + 1.45, w.z + (horiz ? 0 : 0.46)));
-        const pane = box(horiz ? 0.96 : 0.06, 2.65, horiz ? 0.06 : 0.96, glassMat, w.x, floorY + 1.44, w.z);
-        g.add(pane);
-        this.windows.set(cz * l.w + cx, pane);
-      } else {
-        g.add(box(1, 0.9, 1, wallMat, w.x, floorY + 0.45, w.z), box(1, 0.7, 1, wallMat, w.x, floorY + 2.65, w.z));
-        const pane = box(horiz ? 0.98 : 0.06, 1.4, horiz ? 0.06 : 0.98, glassMat, w.x, floorY + 1.6, w.z);
-        g.add(pane);
-        this.windows.set(cz * l.w + cx, pane);
-      }
+      g.add(box(1, 0.9, 1, wallMat, w.x, floorY + 0.45, w.z), box(1, 0.7, 1, wallMat, w.x, floorY + 2.65, w.z));
+      const pane = box(horiz ? 0.98 : 0.06, 1.4, horiz ? 0.06 : 0.98, glassMat, w.x, floorY + 1.6, w.z);
+      g.add(pane);
+      this.windows.set(cz * l.w + cx, pane);
     }
     // doors (+ lock & wedge indicators; glass entrance doors on office/hotel/bank)
     const doorMat = std({ map: T.doorTex(), roughness: 0.6 }), frameMat = std({ color: 0x202328, roughness: 0.4, metalness: 0.4 });
@@ -819,6 +811,18 @@ export class LevelView {
         if (l.cells[z * l.w + r.x] === WALL) faces.push({ x: r.x, z, dx: 1, dz: 0 });
         if (l.cells[z * l.w + r.x + r.w - 1] === WALL) faces.push({ x: r.x + r.w - 1, z, dx: -1, dz: 0 });
       }
+      // Prints, whiteboards and notice boards are 1–1.5 m wide, so they hang over their neighbours
+      // too. Both cells along the wall must be solid as well, otherwise a whiteboard centred on the
+      // last wall cell before a door would cover most of the doorway.
+      const solidRun = (f: Face) => {
+        const ax = f.dz !== 0 ? 1 : 0, az = f.dx !== 0 ? 1 : 0;
+        for (const s of [-1, 1]) {
+          const nx = f.x + ax * s, nz = f.z + az * s;
+          if (nx < 0 || nz < 0 || nx >= l.w || nz >= l.h) return false;
+          if (l.cells[nz * l.w + nx] !== WALL) return false;
+        }
+        return true;
+      };
       const usable = (f: Face) => {
         const k = f.z * l.w + f.x;
         if (doorCells.has(k) || liftCells.has(k)) return false;
@@ -826,7 +830,8 @@ export class LevelView {
         if (fz < 0 || fz >= l.h || fx < 0 || fx >= l.w) return false;
         if (l.cells[fz * l.w + fx] !== FLOOR) return false;
         if (Math.abs((l.groundY[fz * l.w + fx] ?? 0) - fy) > 0.4) return false;
-        return !tallProp(fx, fz);
+        if (tallProp(fx, fz)) return false;
+        return solidRun(f);
       };
       const hash = (f: Face) => ((f.x * 73856093) ^ (f.z * 19349663) ^ (r.id * 83492791)) >>> 0;
       const wallFace = faces.find(usable);
@@ -881,13 +886,16 @@ export class LevelView {
       }
     }
 
-    // Area rugs, laid under whatever furniture is already in the room.
+    // Area rugs, laid flat under whatever furniture is already in the room. A PlaneGeometry stands
+    // upright by default and add() only turns it around Y, so without this the rugs rose up as
+    // floating dark plates in the middle of rooms that you could walk straight through.
     for (const r of l.rooms) {
       if (r.w < 6 || r.h < 5) continue;
       if (r.kind !== 'office' && r.kind !== 'lobby' && r.kind !== 'bedroom' && r.kind !== 'club') continue;
       const fy = (r.floorY ?? 0) + 0.014;
-      add(rugs[(r.id + l.index) % rugs.length], new THREE.PlaneGeometry(Math.min(r.w - 3, 3.6), Math.min(r.h - 3, 2.6)),
-        r.x + r.w / 2, fy, r.z + r.h / 2, 0);
+      const rug = new THREE.PlaneGeometry(Math.min(r.w - 3, 3.6), Math.min(r.h - 3, 2.6));
+      rug.rotateX(-Math.PI / 2);
+      add(rugs[(r.id + l.index) % rugs.length], rug, r.x + r.w / 2, fy, r.z + r.h / 2, 0);
     }
 
     for (const [mat, geos] of buckets) {
@@ -1218,11 +1226,12 @@ export class LevelView {
     } else if (l.theme === 'tower') {
       // Kista-inspired glass-and-steel campus: the licensed office-tower asset is a skyline
       // silhouette beyond the playable perimeter, while the actual F1/F2 walls remain walkable.
-      const glass = new THREE.MeshPhysicalMaterial({ color: 0x5b829b, roughness: 0.22, metalness: 0.35, transparent: true, opacity: 0.56 });
+      // A steel canopy on two posts marks the entrance; there is deliberately no glass screen in
+      // front of the facade — one stood here with no collider, so the building read as a solid
+      // glass wall and you walked through it to get in. The facade's own entrance panes do the job.
       const steel = std({ color: 0x202a35, roughness: 0.32, metalness: 0.72 });
       g.add(box(12.4, 0.22, 3.0, steel, 8.5, 3.12, 34.2));
       for (const x of [3.2, 13.8]) g.add(box(0.22, 3.05, 0.22, steel, x, 1.52, 34.5));
-      for (const x of [4.0, 5.8, 7.6, 9.4, 11.2, 13.0]) g.add(box(1.55, 2.35, 0.045, glass, x, 1.55, 33.56));
       const entrySign = new THREE.Mesh(new THREE.PlaneGeometry(4.8, 0.62), new THREE.MeshBasicMaterial({ map: T.signTex('KISTA TECH CENTER', '#0c1624', '#dbeafe', '#3b82f6') }));
       entrySign.position.set(8.5, 3.5, 35.73); entrySign.rotation.y = Math.PI; g.add(entrySign);
       const exitSign = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 0.28), new THREE.MeshBasicMaterial({ map: T.signTex('NÖDUTGÅNG · EXIT', '#093818', '#52ff88', '#34e86a') }));
@@ -1747,7 +1756,7 @@ export class FX {
   private gasTex = softPuffTex('rgba(190,225,110,0.55)', 'rgba(140,185,70,0.24)');
   private gunSmokeTex = softPuffTex('rgba(215,220,226,0.34)', 'rgba(160,168,176,0.12)');
   private shells: { m: THREE.Mesh; vx: number; vy: number; vz: number; rx: number; rz: number; life: number }[] = []; private shi = 0;
-  private laserDot: THREE.Mesh;
+  private laserDot: THREE.Sprite;
   private irBeam: THREE.Line;
   light = new THREE.PointLight(0xffc070, 0, 12, 1.6); private lightT = 0; private markers: { m: THREE.Mesh; t: number }[] = [];
   private pings: { g: THREE.Group; ring: THREE.Mesh; sp: THREE.Sprite; t: number }[] = [];
@@ -1798,11 +1807,10 @@ export class FX {
       m.visible = false; this.group.add(m);
       this.shells.push({ m, vx: 0, vy: 0, vz: 0, rx: 0, rz: 0, life: 0 });
     }
-    this.laserDot = new THREE.Mesh(
-      new THREE.SphereGeometry(0.016, 8, 8),
-      new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.92 }),
-    );
-    this.laserDot.visible = false; this.group.add(this.laserDot);
+    // A flat sprite, not a sphere: its size is set from the distance every frame, so the dot keeps
+    // the same small size on screen instead of ballooning when the player stands close to a wall.
+    this.laserDot = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glowTex(), color: 0xff2a1e, transparent: true, opacity: 0.95, depthWrite: false }));
+    this.laserDot.visible = false; this.laserDot.renderOrder = 3; this.group.add(this.laserDot);
     const beamGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
     this.irBeam = new THREE.Line(beamGeo, new THREE.LineBasicMaterial({ color: 0x64ff88, transparent: true, opacity: 0.42 }));
     this.irBeam.visible = false; this.irBeam.frustumCulled = false; this.group.add(this.irBeam);
@@ -1878,19 +1886,23 @@ export class FX {
     s.rx = (Math.random() - 0.5) * 28; s.rz = (Math.random() - 0.5) * 28;
     s.life = 5.5;
   }
-  setLaser(on: boolean, x = 0, y = 0, z = 0, ox = 0, oy = 0, oz = 0, irBeam = false) {
+  /** The laser dot and its beam. `dotDist` is the distance from the eye to the dot, used to keep the dot a constant small size on screen. */
+  setLaser(on: boolean, x = 0, y = 0, z = 0, ox = 0, oy = 0, oz = 0, irBeam = false, dotDist = 6) {
     this.laserDot.visible = on;
-    if (on) {
-      this.laserDot.position.set(x, y, z);
-      (this.laserDot.material as THREE.MeshBasicMaterial).color.setHex(irBeam ? 0x80ff98 : 0xff2222);
-    }
-    this.irBeam.visible = on && irBeam;
-    if (this.irBeam.visible) {
-      const p = this.irBeam.geometry.attributes.position as THREE.BufferAttribute;
-      p.setXYZ(0, ox, oy, oz);
-      p.setXYZ(1, x, y, z);
-      p.needsUpdate = true;
-    }
+    this.irBeam.visible = on;
+    if (!on) return;
+    this.laserDot.position.set(x, y, z);
+    // ~6 px on screen at any distance: the world size grows with the distance
+    this.laserDot.scale.setScalar(Math.max(0.004, dotDist * 0.009));
+    const mat = this.laserDot.material as THREE.SpriteMaterial;
+    mat.color.setHex(irBeam ? 0x80ff98 : 0xff2a1e);
+    const beam = this.irBeam.material as THREE.LineBasicMaterial;
+    beam.color.setHex(irBeam ? 0x64ff88 : 0xff2a1e);
+    beam.opacity = irBeam ? 0.5 : 0.26;
+    const p = this.irBeam.geometry.attributes.position as THREE.BufferAttribute;
+    p.setXYZ(0, ox, oy, oz);
+    p.setXYZ(1, x, y, z);
+    p.needsUpdate = true;
   }
   shieldHit(x: number, y: number, z: number) {
     this.burst(x, y, z, 14, 0xffd27a, 4.2, 6, 0.28);

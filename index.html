@@ -359,7 +359,7 @@
   </div>
   <div class="note">Quick keys (selected team): <kbd>3</kbd> Follow <kbd>4</kbd> Hold <kbd>5</kbd> Move where I aim <kbd>6</kbd> Cover me <kbd>7</kbd> Stack up <kbd>8</kbd> Breach <kbd>9</kbd> Bang and clear <kbd>0</kbd> Handcuff people <kbd>F2</kbd> <b>Search &amp; secure this room</b></div>
   <p><b>Search &amp; secure the area</b> (<kbd>F2</kbd>, the wheel, or say <i>«Team A search this room»</i> / <i>«sök området»</i> / <i>«säkra rummet»</i>) sends the squad through the room you are standing in and then leaves them holding its entrances. They never cross into another room on that order — everything happens inside the room you gave it in.</p>
-  <p><b>Follow me</b> is an escort order, not a conga line: while you walk they stay on your trail, and as soon as you stop inside a room they spread out, cover the doors and keep watch until you move or give a new order.</p>
+  <p>The squad <b>holds its position</b> outside until you enter a room. As soon as you cross into a room (or open a door into one), both standby teams go in on their own and <b>search and secure that room</b> – that is their standing job, securing where you open doors. They do not trail you through the building; they hold the room you are in. <b>Follow me</b> is the exception: while it stands, they stay on your trail even between rooms. Any other order you give (cover, move, stack, breach, …) also stands until you replace it.</p>
   <h2>Voice commands</h2>
   <p>Hold <kbd>V</kbd> while you speak and release it when you are done (can be changed to «always on» in Settings). Start with the team you mean – <b>«Team A»</b> (also «Alpha», «red team»), <b>«Team B»</b> («Bravo», «blue team») or <b>«Everyone»</b> – then say what they should do. Without a team name the order goes to the team you last spoke to.</p>
   <p><b>Speech recognition can run directly in your browser</b> using local Whisper (works privately in any browser) or via the browser’s speech service. You can combine multiple orders in one sentence (e.g. <i>«Ken follow me, Maya join Team B, Team B cover me»</i>) and reassign officers between teams (e.g. <i>«Maya join Team B»</i>, <i>«Ken switch to Team A»</i>).</p>
@@ -405,7 +405,7 @@
     <label>Speech model <span><button id="btnAsrLoad" type="button">Download speech model now</button></span></label>
     <div class="note">The Whisper model is a one-time download (a few hundred MB) and is kept in the browser cache. It starts when you deploy, press V, or use the button above – never silently from the menu.</div>
     <label>Accent (browser service only) <select id="sLang"><option value="en-US">English (US)</option><option value="en-GB">English (UK)</option><option value="en-AU">English (Australia)</option><option value="en-IN">English (India)</option></select></label>
-    <label>Spoken voices <select id="sTts"><option value="1">On</option><option value="0">Off</option></select></label>
+    <label>Spoken voices (recorded clips) <select id="sTts"><option value="1">On</option><option value="0">Off</option></select></label>
     <label>Team voice <span><button id="btnTts" type="button">Test the team voice</button></span></label>
     <div id="ttsInfo" class="note"></div><div id="latInfo" class="note"></div>
     <label>AI Brain (Solo, WebGPU in browser) <select id="sAi"><option value="0">Off (instant built-in parser)</option><option value="1">On (optional free browser AI, no API)</option></select></label>

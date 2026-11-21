@@ -242,7 +242,7 @@ class Game {
     }
     this.menu.setQuality(S.qual);
     if (this.scene && S.qual > 0) this.scene.environmentIntensity = S.qual >= 3 ? 0.3 : S.qual === 2 ? 0.22 : 0.14;
-    this.audio.setVolume(S.vol); this.speech.enabled = !!S.tts; this.speech.lang = S.lang;
+    this.audio.setVolume(S.vol);
     const local = LocalVoice.supported && ((S.asr === 'local' && !this.localVoice.failed) || !Voice.supported), nv = local ? this.localVoice : this.webVoice;
     if (nv !== this.voice) { this.voice.stop(); this.voice = nv; }
     this.webVoice.setLang(S.lang); this.localVoice.setLang('en'); this.voice.ptt = !!S.ptt; this.micState(this.voice.state);
@@ -856,7 +856,7 @@ class Game {
         this.dispatchPlaying = true;
         btn.textContent = '■ STOP DISPATCH';
         btn.classList.add('playing');
-        this.audio.playDispatch(this.mission, this.speech, () => {
+        this.audio.playDispatch(this.mission, () => {
           this.dispatchPlaying = false;
           btn.textContent = '▶ PLAY 911 DISPATCH';
           btn.classList.remove('playing');
@@ -1095,7 +1095,7 @@ class Game {
     };
     this.net.onClosed = why => { if (!this.net.online) return; this.toMenu(); $('mpErr').textContent = why; };
     this.net.onMsg = (c, m) => { if (this.net.role === 'host') this.fromClient(c, m); else this.fromHost(m); };
-    $('btnTts').onclick = () => { this.audio.init(); setTimeout(() => { $('latInfo').textContent = this.audio.latencyMs ? `Audio latency reported by the browser: ${this.audio.latencyMs} ms.` : ''; }, 300); const n = this.speech.voiceCount; if (!this.speak('Copy, following you.', null, { voice: 'o1' })) this.speech.say('Team A, copy. Following you.', 1, 1.1, 1, true); $('ttsInfo').textContent = n === 0 ? 'The browser has no speech voices – lines without a recorded clip stay silent. Install a voice in the operating system’s speech settings or use Chrome/Edge.' : this.speech.hasLangVoice ? `${n} voices found. Hear nothing? Check the volume and that the tab is not muted.` : `${n} voices found, but none in the chosen language – the browser's default voice is used.`; };
+    $('btnTts').onclick = () => { this.audio.init(); setTimeout(() => { $('latInfo').textContent = this.audio.latencyMs ? `Audio latency reported by the browser: ${this.audio.latencyMs} ms.` : ''; }, 300); const played = this.speak('Copy, following you.', null, { voice: 'o1' }); $('ttsInfo').textContent = played ? 'All voices are recorded clips – the browser’s robotic speech synthesis is never used.' : 'The voice clips are still loading – press the button again in a second.'; };
   }
   lobbyMe = 0;
   private updateDebReadyUi() {
@@ -1562,7 +1562,7 @@ class Game {
       info.className = 'note'; info.textContent = 'Click «Load AI model now» or start a Solo mission to load the model.';
     }
   }
-  /** Speaks a line as a given character: recorded clip with a per-character voice, else the browser's speech synthesis. */
+  /** Speaks a line as a given character. Every line is a recorded human-like clip; a line without a clip stays silent (the browser's robotic speech synthesis is never used). */
   speak(text: string, a: Actor | null, o: { gain?: number; pan?: number; muffle?: boolean; pitch?: number; rate?: number; voice?: string } = {}) {
     if (!S.tts) return 0;
     let clean = text.replace(/^Team [AB]: /, ''); const kind = a?.kind ?? 'player';
@@ -1571,7 +1571,7 @@ class Game {
     const voice = o.voice ?? (kind === 'officer' ? 'o' + ((a!.slot % 4) + 1) : kind === 'suspect' ? ['s1', 's2', 's4', 's3', 's5'][a!.id % 5] : kind === 'civ' ? 'c' + ((a!.id % 5) + 1) : 'p1');
     const rate = kind === 'player' && a && a !== this.sim?.player ? 0.94 + (a.pi % 3) * 0.06 : 1, loud = this.audio.isShout(clean);
     const ms = this.audio.line(clean, { voice, rate, radio: kind === 'officer' && !loud, gruff: kind === 'suspect', shout: loud, gain: o.gain ?? 1, pan: o.pan, muffle: o.muffle });
-    if (ms) this.speech.busy(ms); else this.speech.say(text, o.pitch ?? 1, o.rate ?? 1.2, o.gain ?? 0.9);
+    if (ms) this.speech.busy(ms);
     return ms;
   }
   heard(text: string, fromMic: boolean) {
@@ -1987,16 +1987,13 @@ class Game {
         this.recentSay.set(SHOUTS[0], now); this.lastTeamShoutT = now;
         this.log(`${e.a.name}: Police! Drop the weapon!`, '');
         const q = this.pan(e.a.x, e.a.z);
-        if (!this.audio.hasLine(SHOUTS[0]) || !S.tts) this.audio.vocal('shout', 0.9, q.d, q.pan);
-        else this.speak(SHOUTS[0], e.a, { gain: 1 / (1 + q.d * 0.1), pan: q.pan });
+        this.speak(SHOUTS[0], e.a, { gain: 1 / (1 + q.d * 0.1), pan: q.pan });
       } break;
       case 'bark': {
         const a = e.a, q = this.pan(a.x, a.z); if (q.d > 22) break;
         const near = sim.los(p.x, p.z, a.x, a.z) ? 1 : 0.45, pitch = (a.kind === 'civ' ? 1.25 : 0.85) + (a.variant % 3) * 0.12;
-        const d2 = q.d / near; // muffled through walls
-        const clip = !!S.tts && this.audio.linesReady; // recorded lines replace the synthetic shout
-        if (e.kind === 'pain') { this.audio.vocal('pain', pitch, d2, q.pan); break; }
-        if (e.kind === 'die') { this.audio.vocal('die', pitch, d2, q.pan); break; }
+        // non-verbal grunts are gone: only the recorded human voices speak
+        if (e.kind === 'pain' || e.kind === 'die') break;
 
         const now = performance.now();
         const actorGap = e.kind === 'surrender' ? 2500 : 9000;
@@ -2012,14 +2009,13 @@ class Game {
         };
 
         let line = '';
-        if (e.kind === 'spot') { line = pickFresh(['Cops!', 'The cops are here!', "They're coming in!", 'Shoot them!', 'We got company!', 'Get them!']); if (line && !clip) this.audio.vocal('shout', pitch, d2, q.pan); }
-        else if (e.kind === 'unrest') { line = pickFresh(["I'm out of here!"]); if (line && !clip) this.audio.vocal('shout', pitch, d2, q.pan); }
-        else if (e.kind === 'panic') { line = pickFresh(['Help!', 'No, no!', "Don't shoot!", "What's going on?"]); if (line) this.audio.vocal('whimper', pitch, d2, q.pan); }
+        if (e.kind === 'spot') { line = pickFresh(['Cops!', 'The cops are here!', "They're coming in!", 'Shoot them!', 'We got company!', 'Get them!']); }
+        else if (e.kind === 'unrest') { line = pickFresh(["I'm out of here!"]); }
+        else if (e.kind === 'panic') { line = pickFresh(['Help!', 'No, no!', "Don't shoot!", "What's going on?"]); }
         else if (e.kind === 'surrender') {
           line = a.kind === 'civ'
             ? pickFresh(["Don't shoot, please!", "I'll do what you say!", 'Help me!', "Please don't hurt me!"], 10000)
             : pickFresh(["Don't shoot! I give up!", 'Okay, okay! I give up!', "I'm dropping the gun!"], 10000);
-          if (line && (!clip || a.kind === 'civ')) this.audio.vocal(a.kind === 'civ' ? 'whimper' : 'yes', pitch, d2, q.pan);
         }
         if (line && q.d < 16) {
           this.recentBarkActor.set(a.id, now);
@@ -2815,13 +2811,16 @@ class Game {
         show('ffWarn', true);
       } else show('ffWarn', false);
       const wsNow = this.weaponSpecs[this.weapon];
-      if (this.laserOn && !wsNow.taser && this.reloadT <= 0 && rh.d < 22) {
-        const hx = rh.x - ad.x * 0.03, hy = rh.y - ad.y * 0.03, hz = rh.z - ad.z * 0.03;
-        const fw = fwd(this.yaw);
-        const ox = p.x + lo.lx + fw.x * 0.35 - fw.z * (0.14 * (1 - this.aimK));
-        const oy = this.eye - (0.12 - 0.05 * this.aimK);
-        const oz = p.z + lo.lz + fw.z * 0.35 + fw.x * (0.14 * (1 - this.aimK));
-        this.fx.setLaser(true, hx, hy, hz, ox, oy, oz, this.nvgOn);
+      if (this.laserOn && !wsNow.taser && this.reloadT <= 0 && rh.kind !== 'none' && rh.d < 28) {
+        // Laser sight, CS/SWAT style: the dot sits exactly where the weapon is aimed – under the
+        // crosshair – and the beam starts at the muzzle. It never droops or rises on its own.
+        const mz = new THREE.Vector3(0.12, -0.24, 0.5); // fallback screen position of the muzzle
+        if (this.arms.ready) mz.copy(this.arms.muzzle.getWorldPosition(new THREE.Vector3())).project(this.viewCam);
+        const origin = new THREE.Vector3(mz.x, mz.y, 0.5).unproject(this.camera).sub(this.camera.position).normalize().multiplyScalar(0.45).add(this.camera.position);
+        // pull the dot a couple of centimetres off the surface so it cannot fight with it
+        const dx = rh.x - origin.x, dy = rh.y - origin.y, dz = rh.z - origin.z, len = Math.hypot(dx, dy, dz) || 1;
+        const hx = rh.x - dx / len * 0.02, hy = rh.y - dy / len * 0.02, hz = rh.z - dz / len * 0.02;
+        this.fx.setLaser(true, hx, hy, hz, origin.x, origin.y, origin.z, this.nvgOn, this.camera.position.distanceTo(new THREE.Vector3(hx, hy, hz)));
       } else {
         this.fx.setLaser(false);
       }

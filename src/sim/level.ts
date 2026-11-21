@@ -394,7 +394,8 @@ const SPECS: Spec[] = [
       b.door(24, 10, true); // Manager's Office locked
       b.door(7, 14, true);  // Archive locked
       b.door(23, 14); b.door(19, 17); b.door(27, 12);
-      // Interior office glass + front floor-to-ceiling curtain-wall glass facade
+      // Interior office glass partitions only — the street facade is sealed solid (see
+      // sealExteriorWindows), so nobody can look into the building from outside.
       b.win(11, 10); b.win(14, 10); b.win(22, 10);
       b.win(6, 20); b.win(8, 20); b.win(11, 20); b.win(12, 20); b.win(13, 20);
       b.win(16, 20); b.win(17, 20); b.win(18, 20); b.win(22, 20); b.win(24, 20);
@@ -651,6 +652,9 @@ const SPECS: Spec[] = [
         { x: 37.5, z: 4.6, floorY: 3, label: 'FLOOR 2', yaw: Math.PI },
       );
       b.placeBreaker(5, 25);
+      // The armoured truck is staged on the plaza east of the atrium entrance, clear of the entry
+      // point, the canopy posts, the bollards and the cones.
+      b.vehicle = { x: 21.5, z: 36.0, yaw: -0.22, hx: 3.0, hz: 1.2, h: 2.43 };
       b.entries.push(
         { name: 'South Atrium Entrance', x: 8.5, z: 36.2, yaw: 0 },
         { name: 'West Emergency Door', x: 1.9, z: 17.5, yaw: Math.PI / 2 },
@@ -659,6 +663,22 @@ const SPECS: Spec[] = [
     },
   },
 ];
+
+/**
+ * The occupants are hiding, so a building must not show its inside from the street: every window
+ * cell that sits in an exterior wall becomes solid wall. Interior glass partitions (meeting rooms,
+ * teller glass, corridor glazing) stay — they are only visible from inside the building.
+ */
+function sealExteriorWindows(b: Builder) {
+  const out = (x: number, z: number) => x >= 0 && z >= 0 && x < b.w && z < b.h && b.get(x, z) === OUT;
+  for (const w of [...b.windows]) {
+    const cx = Math.floor(w.x), cz = Math.floor(w.z);
+    if (!(out(cx, cz + 1) || out(cx, cz - 1) || out(cx + 1, cz) || out(cx - 1, cz))) continue;
+    b.set(cx, cz, WALL);
+    const i = b.windows.indexOf(w);
+    if (i >= 0) b.windows.splice(i, 1);
+  }
+}
 
 export const MISSIONS = SPECS.map(s => ({ name: s.name, brief: s.brief, suspects: s.suspects, civs: s.civs, objective: s.objective }));
 
@@ -669,6 +689,9 @@ export function buildLevel(index: number, seed: number): Level {
   const spawn = spec.build(b, rng);
   const entries = b.entries.length ? b.entries : [{ name: 'Main Entrance', x: spawn.x, z: spawn.z, yaw: spawn.yaw }];
   b.furnish(rng, spawn);
+  // Seal after furnishing and spawning: a window cell is solid either way, so movement is unchanged,
+  // and the furniture/actor layout stays exactly the one the level was tuned with.
+  sealExteriorWindows(b);
   const doorAt = new Map<number, Door>();
   for (const d of b.doors) doorAt.set(d.cz * b.w + d.cx, d);
   const propAt = new Map<number, Prop>();

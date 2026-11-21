@@ -134,15 +134,19 @@ export class GameAudio {
     spawn(this.menuBufs.rain, 0.12);
   }
   // ---- recorded voice lines (public/voice, generated with the Apache-2.0 Kokoro speech model; one set of voices per role) ----
-  private lines = new Map<string, AudioBuffer>(); private linesReq = false; linesReady = false;
-  private async loadLines() {
-    if (this.linesReq || !this.ctx) return; this.linesReq = true;
-    try {
-      const man = await (await fetch('./voice/manifest.json')).json();
-      const L = man.lines as { t: string; r: string; s?: number }[]; for (const l of L) { this.known.add(l.t); if (l.s) this.loud.add(l.t); }
-      await Promise.all((man.voices as string[]).flatMap(v => L.map(async (l, i) => { if (!l.r.includes(v[0])) return; try { const ab = await (await fetch(`./voice/${v}/${i}.mp3`)).arrayBuffer(); const buf = await this.ctx!.decodeAudioData(ab); this.lineGain.set(buf, level(buf, LINE_LEVEL)); this.lines.set(v + '|' + l.t, buf); } catch { /* falls back to browser speech */ } })));
-      this.linesReady = this.lines.size > 0;
-    } catch { /* no clips: browser speech is used */ }
+  private lines = new Map<string, AudioBuffer>(); private linesReq: Promise<void> | null = null; linesReady = false;
+  /** Loads the recorded voice clips. Every spoken line is a clip – there is no synthesised fallback voice. */
+  private loadLines(): Promise<void> {
+    if (!this.linesReq) this.linesReq = (async () => {
+      if (!this.ctx) return;
+      try {
+        const man = await (await fetch('./voice/manifest.json')).json();
+        const L = man.lines as { t: string; r: string; s?: number }[]; for (const l of L) { this.known.add(l.t); if (l.s) this.loud.add(l.t); }
+        await Promise.all((man.voices as string[]).flatMap(v => L.map(async (l, i) => { if (!l.r.includes(v[0])) return; try { const ab = await (await fetch(`./voice/${v}/${i}.mp3`)).arrayBuffer(); const buf = await this.ctx!.decodeAudioData(ab); this.lineGain.set(buf, level(buf, LINE_LEVEL)); this.lines.set(v + '|' + l.t, buf); } catch { /* no clip for this line: it stays silent */ } })));
+        this.linesReady = this.lines.size > 0;
+      } catch { /* no clips: nothing is spoken */ }
+    })();
+    return this.linesReq;
   }
   private lineGain = new WeakMap<AudioBuffer, number>();
   private known = new Set<string>(); private loud = new Set<string>();
@@ -153,9 +157,9 @@ export class GameAudio {
   get latencyMs() { const c = this.ctx as any; return c ? Math.round(((c.baseLatency || 0) + (c.outputLatency || 0)) * 1000) : 0; }
   /** Plays a recorded line as a particular character. Returns its duration in ms, or 0 if there is no clip for the text.
    *  rate shifts pitch and tempo together (different people), radio = team radio filter, gruff = rough close voice. */
-  line(text: string, o: { voice?: string; rate?: number; radio?: boolean; gruff?: boolean; shout?: boolean; gain?: number; pan?: number; muffle?: boolean } = {}) {
+  line(text: string, o: { voice?: string; rate?: number; radio?: boolean; gruff?: boolean; shout?: boolean; gain?: number; pan?: number; muffle?: boolean; onSrc?: (src: AudioBufferSourceNode) => void } = {}) {
     const v = o.voice ?? 'o1'; let buf = this.lines.get(v + '|' + text); if (!buf) for (let i = 1; i < 6 && !buf; i++) buf = this.lines.get(v[0] + i + '|' + text); if (!this.ctx || !buf) return 0;
-    const c = this.ctx, t = c.currentTime, rate = o.rate ?? 1, src = c.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
+    const c = this.ctx, t = c.currentTime, rate = o.rate ?? 1, src = c.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate; o.onSrc?.(src);
     let node: AudioNode = src; const chain = (n: AudioNode) => { node.connect(n); node = n; };
     { const lv = c.createGain(); lv.gain.value = this.lineGain.get(buf) ?? 1; chain(lv); } // every clip enters at the same loudness, shouted or not
     const shape = (k: number) => { const w = c.createWaveShaper(), cv = new Float32Array(257); for (let i = 0; i < 257; i++) { const x = i / 128 - 1; cv[i] = Math.tanh(x * k) / Math.tanh(k); } w.curve = cv; return w; };
@@ -305,11 +309,14 @@ export class GameAudio {
   }
   /** Playable 911 Dispatch radio briefing with radio squelch, distant siren bed & tactical callout. */
   private dispatchTimer = 0;
+  private dispatchSrc?: AudioBufferSourceNode;
   private dispatchOnEnd?: () => void;
-  playDispatch(mission: number, speech: Speech, onEnd?: () => void) {
+  private dispatchSeq = 0;
+  playDispatch(mission: number, onEnd?: () => void) {
     this.init();
     this.stopDispatch();
     this.dispatchOnEnd = onEnd;
+    const seq = ++this.dispatchSeq;
     const lines = [
       'Dispatch to Team 1: Multiple 911 calls from The Office Complex, Kista Sector. Three to five armed intruders barricaded on the main floor, civilians pinned in cubicles. Proceed with caution.',
       'Dispatch to Team 1: Harbor patrol reports an armed weapons exchange inside The Warehouse. Dock workers trapped near shipping crates. Expect crossfire and locked storage doors.',
@@ -327,22 +334,29 @@ export class GameAudio {
       this.tone(o, 'sine', 640, 880, 1.4, 0.05, 0.4);
       this.tone(o, 'sine', 880, 620, 1.4, 0.05, 1.8);
     }
-    speech.say(msg, 0.96, 1.06, 0.95, true);
-    const ms = Math.max(4800, msg.length * 64);
-    this.dispatchTimer = window.setTimeout(() => {
-      this.squelch(false);
-      this.dispatchTimer = 0;
-      const cb = this.dispatchOnEnd;
-      this.dispatchOnEnd = undefined;
-      cb?.();
-    }, ms);
+    // the dispatcher is a recorded voice like every other line (never the browser's robotic speech synthesis)
+    const play = () => {
+      if (seq !== this.dispatchSeq || !this.dispatchOnEnd) return;
+      const ms = this.line(msg, { voice: 'd1', radio: true, onSrc: s => { this.dispatchSrc = s; } });
+      this.dispatchTimer = window.setTimeout(() => {
+        this.squelch(false);
+        this.dispatchTimer = 0;
+        this.dispatchSrc = undefined;
+        const cb = this.dispatchOnEnd;
+        this.dispatchOnEnd = undefined;
+        cb?.();
+      }, ms || Math.max(4800, msg.length * 64));
+    };
+    if (this.linesReady) play(); else void this.loadLines().then(play);
   }
-  stopDispatch(speech?: Speech) {
+  stopDispatch() {
+    this.dispatchSeq++;
     if (this.dispatchTimer) {
       clearTimeout(this.dispatchTimer);
       this.dispatchTimer = 0;
     }
-    if (speech) speech.stop();
+    try { this.dispatchSrc?.stop(); } catch { /* already stopped */ }
+    this.dispatchSrc = undefined;
     const cb = this.dispatchOnEnd;
     this.dispatchOnEnd = undefined;
     cb?.();
@@ -428,17 +442,6 @@ export class GameAudio {
     this.tone(o, 'sine', 62, 36, 0.12, 0.8, 0);
     this.tone(o, 'sine', 56, 32, 0.14, 0.6, 0.18);
   }
-  /** Synthesised human-ish vocal (formant filtered saw). Works even when the browser has no speech voices. */
-  vocal(kind: 'shout' | 'pain' | 'die' | 'whimper' | 'yes', pitch: number, dist: number, pan: number) {
-    if (!this.ctx) return; const c = this.ctx, t = c.currentTime, g = this.out(pan, 1.8 / (1 + dist * 0.14));
-    const P = { shout: [1.25, 1.0, 0.38, 800, 1250], pain: [1.5, 0.8, 0.22, 650, 1700], die: [1.1, 0.5, 0.75, 600, 1000], whimper: [1.9, 1.5, 0.45, 400, 2100], yes: [1.0, 1.15, 0.16, 500, 1500] }[kind];
-    const f0 = 120 * pitch, o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(f0 * P[0], t); o.frequency.exponentialRampToValueAtTime(f0 * P[1], t + P[2]);
-    const vib = c.createOscillator(), vg = c.createGain(); vib.frequency.value = kind === 'whimper' ? 9 : 5.5; vg.gain.value = f0 * (kind === 'whimper' ? 0.06 : 0.02); vib.connect(vg); vg.connect(o.frequency);
-    const env = c.createGain(); env.gain.setValueAtTime(0.0001, t); env.gain.exponentialRampToValueAtTime(0.9, t + 0.03); env.gain.exponentialRampToValueAtTime(0.001, t + P[2]);
-    for (const [f, q, lvl] of [[P[3], 7, 1], [P[4], 9, 0.6], [2700, 10, 0.25]]) { const b = c.createBiquadFilter(); b.type = 'bandpass'; b.frequency.value = f; b.Q.value = q; const l = c.createGain(); l.gain.value = lvl * 2.2; o.connect(b); b.connect(l); l.connect(env); }
-    env.connect(g); o.start(t); vib.start(t); o.stop(t + P[2] + 0.05); vib.stop(t + P[2] + 0.05);
-    this.burst(g, P[2] * 0.6, 'bandpass', 2500, 1800, 1, 0.08);
-  }
   ui() { if (!this.ctx) return; const o = this.out(0, 0.25, false); this.tone(o, 'triangle', 700, 900, 0.05, 0.5); }
   ok() { if (!this.ctx) return; const o = this.out(0, 0.25, false); this.tone(o, 'triangle', 660, 660, 0.07, 0.5); this.tone(o, 'triangle', 990, 990, 0.1, 0.5, 0.08); }
   fail() { if (!this.ctx) return; const o = this.out(0, 0.25, false); this.tone(o, 'sawtooth', 220, 150, 0.2, 0.4); }
@@ -461,34 +464,12 @@ export class GameAudio {
   }
 }
 
-/** Radio chatter through the browser's built-in speech synthesis (free, offline on most systems). */
+/** Timing for the recorded radio voice lines. Every spoken line is a recorded human-like clip, so nothing here ever uses the browser's robotic speech synthesis. */
 export class Speech {
-  enabled = true; lang = 'en-US'; private voices: SpeechSynthesisVoice[] = []; private until = 0; private queue = 0;
-  constructor() { if ('speechSynthesis' in window) { const load = () => { this.voices = speechSynthesis.getVoices(); }; load(); speechSynthesis.onvoiceschanged = load; } }
-  /** True while the team is (estimated to be) talking. Uses our own timer – speechSynthesis.speaking can get stuck in some browsers. */
+  private until = 0;
+  /** True while the team is (estimated to be) talking. Uses our own timer, so a stuck browser voice cannot block voice commands. */
   get speaking() { return performance.now() < this.until; }
   /** A recorded clip is playing for ms milliseconds (keeps `speaking` correct). */
   busy(ms: number) { this.until = Math.max(this.until, performance.now() + ms); }
-  private keep = new Set<SpeechSynthesisUtterance>(); // Chrome drops utterances that get garbage collected
-  get voiceCount() { return this.voices.length; }
-  private pick(lang = this.lang) {
-    if (!this.voices.length && 'speechSynthesis' in window) this.voices = speechSynthesis.getVoices();
-    const pre = lang.slice(0, 2), V = this.voices;
-    return V.find(x => x.lang.replace('_', '-') === lang) ?? V.find(x => x.lang.toLowerCase().startsWith(pre)) ?? null;
-  }
-  get hasLangVoice() { return !!this.pick(); }
-  say(text: string, pitch = 1, rate = 1.15, vol = 0.9, force = false, lang?: string) {
-    if ((!this.enabled && !force) || !('speechSynthesis' in window)) return;
-    if (this.queue > 1 && !force) return;
-    const clean = text.replace(/^Team ([AB]): /, '');
-    const u = new SpeechSynthesisUtterance(clean), v = this.pick(lang);
-    if (v) { u.voice = v; u.lang = v.lang; } // no matching voice: let the browser use its default voice instead of staying silent
-    else if (lang) u.lang = lang;
-    u.pitch = pitch; u.rate = rate; u.volume = vol; this.queue++; this.keep.add(u);
-    const est = 500 + clean.length * 75; this.until = Math.max(this.until, performance.now()) + est;
-    let done = false; const end = () => { if (done) return; done = true; this.keep.delete(u); this.queue = Math.max(0, this.queue - 1); if (this.queue === 0) this.until = Math.min(this.until, performance.now() + 350); };
-    u.onend = u.onerror = end; setTimeout(end, est + 2500);
-    try { if (speechSynthesis.paused) speechSynthesis.resume(); speechSynthesis.speak(u); } catch { end(); }
-  }
-  stop() { if ('speechSynthesis' in window) speechSynthesis.cancel(); this.queue = 0; this.until = 0; }
+  stop() { this.until = 0; }
 }

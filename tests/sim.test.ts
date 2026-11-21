@@ -76,12 +76,22 @@ for (const [t, exp, last] of named) { const c = parseCommand(t, 'ALL', last ?? n
 { // one officer on an order of their own, then back into the team
   const sim = new Sim(0, 5), [ken, maya] = sim.officers, p = sim.player;
   ok(ken.name === 'Ken' && sim.officers[3].name === 'Zoe', 'officers have names');
+  ok(sim.teams.A.order.type === 'hold' && sim.teams.B.order.type === 'hold', 'the squad holds position until it is told to follow');
+  sim.command({ team: 'A', action: 'follow' });
   sim.command({ team: 'A', action: 'hold', who: 0 });
   ok(!!ken.solo && ken.solo.order.type === 'hold' && !maya.solo && sim.teams.A.order.type === 'follow', 'solo order leaves the team order alone');
   const k0 = { x: ken.x, z: ken.z }, m0 = { x: maya.x, z: maya.z };
-  for (let i = 0, a = p.yaw; i < 240; i++) { (sim as any).checkT = 9; p.x += Math.sin(a) * 0.03; p.z += Math.cos(a) * 0.03; if (sim.solidCell(Math.floor(p.x), Math.floor(p.z))) { p.x -= Math.sin(a) * 0.03; p.z -= Math.cos(a) * 0.03; a += 1.3; } sim.update(1 / 30); }
+  // Follow means she moves with the player; once he stops she takes a guarding post again, which can
+  // well be where she started, so the walk itself is what is measured.
+  let mayaFar = 0;
+  for (let i = 0, a = p.yaw; i < 240; i++) {
+    (sim as any).checkT = 9; p.x += Math.sin(a) * 0.03; p.z += Math.cos(a) * 0.03;
+    if (sim.solidCell(Math.floor(p.x), Math.floor(p.z))) { p.x -= Math.sin(a) * 0.03; p.z -= Math.cos(a) * 0.03; a += 1.3; }
+    sim.update(1 / 30);
+    mayaFar = Math.max(mayaFar, Math.hypot(maya.x - m0.x, maya.z - m0.z));
+  }
   ok(Math.hypot(ken.x - k0.x, ken.z - k0.z) < 1, 'Ken holds while the others follow');
-  ok(Math.hypot(maya.x - m0.x, maya.z - m0.z) > 0.5, 'Maya keeps following');
+  ok(mayaFar > 0.5, `Maya keeps following (${mayaFar.toFixed(2)} m from her start)`);
   sim.command({ team: 'A', action: 'cover', who: 1 }); ok(maya.solo?.order.type === 'cover', 'Maya covers alone');
   sim.command({ team: 'A', action: 'follow' }); ok(!ken.solo && !maya.solo, 'a team order brings them back');
   const g0 = sim.grenades.length; sim.command({ team: 'B', action: 'bang', who: 2 }, { x: sim.officers[2].x + 3, z: sim.officers[2].z });
@@ -142,7 +152,8 @@ function play(mission: number, seed: number, verbose = false) {
     for (const a of sim.actors) {
       ok(Number.isFinite(a.x) && Number.isFinite(a.z), 'NaN position');
       if (Math.floor(t * 4) !== Math.floor((t - dt) * 4) && a.alive) {
-        ok(sim.isActorPositionClear(a.x, a.z, a.r), `actor ${a.kind}#${a.id} intersects a wall, door, prop or exterior collider`);
+        ok(sim.isActorPositionClear(a.x, a.z, a.r),
+          `actor ${a.kind}#${a.id} intersects a wall, door, prop or exterior collider at ${a.x.toFixed(2)},${a.z.toFixed(2)}`);
       }
       if (a.alive && !a.down && sim.solidCell(Math.floor(a.x), Math.floor(a.z)) && sim.cell(Math.floor(a.x), Math.floor(a.z)) !== 3) { fails++; if (fails < 20) console.log('  FAIL actor inside solid', a.name, a.x.toFixed(2), a.z.toFixed(2), sim.cell(Math.floor(a.x), Math.floor(a.z))); }
       maxStuck = Math.max(maxStuck, a.stuckT);
@@ -670,13 +681,25 @@ ok(wins >= 4, 'bot should be able to win across missions');
   const aw = sDisp.awards();
   ok(Array.isArray(aw) && aw.length >= 1 && !!aw[0].title, 'awards() generates tactical badges on win');
 
-  // 11. Bullet ray precision & no invisible mid-air hits (curtain-wall windows, broken props, trees, perimeter sky)
+  // 11. Bullet ray precision & no invisible mid-air hits (sealed exteriors, interior glass, broken props, trees, perimeter sky)
   const sRay = new Sim(0, 1, 1);
-  // Curtain-wall window at x=13.5, z=20.5 on Office should pass through at low (y=0.5) and high (y=2.5)
-  const hLowWin = sRay.ray(13.5, 0.5, 22.0, 0, 0, -1, 10, sRay.player);
-  ok(hLowWin.d > 2.0, `curtain-wall window passes bullet at y=0.5 (d=${hLowWin.d.toFixed(2)})`);
-  const hHighWin = sRay.ray(13.5, 2.5, 22.0, 0, 0, -1, 10, sRay.player);
-  ok(hHighWin.d > 2.0, `curtain-wall window passes bullet at y=2.5 (d=${hHighWin.d.toFixed(2)})`);
+  // Nothing may be visible from the street: the office front at x=13.5, z=20.5 is solid wall, so a
+  // bullet stops there at every height instead of passing into the lobby.
+  for (const y of [0.5, 1.6, 2.5]) {
+    const h = sRay.ray(13.5, y, 22.0, 0, 0, -1, 10, sRay.player);
+    ok(h.kind === 'wall' && h.d < 2.0, `sealed front wall stops the bullet at y=${y} (${h.kind} at ${h.d.toFixed(2)})`);
+  }
+  // Interior glass partition (corridor ↔ meeting room): glass band 0.9–2.3 m passes, the sill blocks.
+  const hWin = sRay.ray(14.5, 1.6, 12.2, 0, 0, -1, 4, sRay.player);
+  ok(hWin.d > 1.8, `interior glass partition lets a bullet through at 1.6 m (d=${hWin.d.toFixed(2)}, ${hWin.kind})`);
+  const hSill = sRay.ray(14.5, 0.5, 12.2, 0, 0, -1, 4, sRay.player);
+  ok(hSill.kind === 'wall', `the sill below the partition stops a bullet at 0.5 m (got ${hSill.kind})`);
+  // Every remaining window is an interior partition; none sits in an exterior wall.
+  const outsideWin = sRay.level.windows.filter(w => {
+    const cx = Math.floor(w.x), cz = Math.floor(w.z);
+    return sRay.cell(cx, cz + 1) === OUT || sRay.cell(cx, cz - 1) === OUT || sRay.cell(cx + 1, cz) === OUT || sRay.cell(cx - 1, cz) === OUT;
+  });
+  ok(outsideWin.length === 0, `no window sits in an exterior wall (${outsideWin.length} found)`);
   // Shooting over exterior perimeter curb (z = h - 1) towards sky should not hit invisible wall/ceiling
   const hSky = sRay.ray(14.5, 1.6, 24.4, 0, 0.05, 1, 30, sRay.player);
   ok(hSky.kind === 'none', `shooting over perimeter curb goes to open sky (got ${hSky.kind} at d=${hSky.d.toFixed(2)})`);
@@ -970,14 +993,18 @@ function roomSquad(seed: number) {
   const before = list.map(o => ({ x: o.x, z: o.z }));
   const target = nearestWalkable(sim.level, room.x + 1.5, room.z + 1.5, 4) ?? { x: room.x + 1.5, z: room.z + 1.5 };
   const route = findPath(sim.level, p, target) ?? [];
+  // Each officer's furthest point during the walk: they come along and then settle back on post, so a
+  // net displacement measured after the player stops would say nothing about whether they followed.
+  const far = before.map(() => 0);
   let wi = 0;
   for (let i = 0; i < 60 * 8 && wi < route.length; i++) {
     const wp = route[wi], dx = wp.x - p.x, dz = wp.z - p.z, d = Math.hypot(dx, dz) || 1;
     if (d < 0.3) { wi++; continue; }
     sim.movePlayer((dx / d) * 2.4 / 60, (dz / d) * 2.4 / 60);
     sim.update(1 / 60);
+    list.forEach((o, k) => { far[k] = Math.max(far[k], Math.hypot(o.x - before[k].x, o.z - before[k].z)); });
   }
-  const moved = list.filter((o, i) => Math.hypot(o.x - before[i].x, o.z - before[i].z) > 0.5).length;
+  const moved = far.filter(d => d > 0.5).length;
   ok(moved >= list.length - 1, `the squad moves again once the player walks (${moved}/${list.length} followed)`);
 }
 

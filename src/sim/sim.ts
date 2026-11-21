@@ -249,6 +249,8 @@ export class Sim {
   private lowHpWarned = false;
   private arrestStreak = 0;
   private phoneT = 10;
+  /** Room the player stood in last frame: entering a new one sends standby teams in to secure it. */
+  private playerRoomId: number | null | undefined = undefined;
   private gasTickT = 0;
   private dynFlankDone = false;
   private dynHostageDone = false;
@@ -322,7 +324,9 @@ export class Sim {
       a.variant = Math.floor(this.rng() * 6); a.morale = this.rng(); a.vip = !!s.vip;
       this.civs.push(a); this.actors.push(a);
     }
-    this.teams = { A: { order: { type: 'follow', phase: 0, t: 0 }, fire: 'free' }, B: { order: { type: 'follow', phase: 0, t: 0 }, fire: 'free' } };
+    // Everyone holds where they stand until the player orders them along: following at deploy time made
+    // the squad trail the player's every step through buildings they had not been sent into.
+    this.teams = { A: { order: { type: 'hold', phase: 0, t: 0 }, fire: 'free' }, B: { order: { type: 'hold', phase: 0, t: 0 }, fire: 'free' } };
     // extra co-op players are appended last so ids/RNG of everything else stay identical
     for (let i = 1; i < nPlayers; i++) {
       const a = new Actor(id++, 'player', 'Player ' + (i + 1)); a.pi = i; a.armed = true; a.yaw = sp.yaw;
@@ -562,11 +566,6 @@ export class Sim {
     }
     return false;
   }
-  private isCurtainWindow(cx: number, cz: number) {
-    const t = this.level.theme;
-    if (t !== 'office' && t !== 'hotel' && t !== 'club' && t !== 'tower') return false;
-    return this.cell(cx, cz + 1) === OUT || this.cell(cx, cz - 1) === OUT || this.cell(cx + 1, cz) === OUT || this.cell(cx - 1, cz) === OUT;
-  }
   private rayPropHit(cx: number, cz: number, x: number, y: number, z: number, breakGlass: boolean, worldY = y): boolean {
     const pr = this.level.propAt.get(cz * this.level.w + cx);
     if (!pr) return y < 0.85;
@@ -607,9 +606,8 @@ export class Sim {
     if (perim) return localY < (l.theme === 'club' ? 2.6 : 0.85);
     if (localY >= 3) return c !== OUT;
     if (c === WINDOW) {
-      const cw = this.isCurtainWindow(cx, cz);
-      const minY = cw ? 0.12 : 0.9, maxY = cw ? 2.75 : 2.3;
-      if (localY >= minY && localY <= maxY) {
+      // Interior glass partition: glass from the sill at 0.9 m to the header at 2.3 m.
+      if (localY >= 0.9 && localY <= 2.3) {
         if (breakGlass) this.breakWindow(cx, cz);
         return false; // bullets pass through window glass!
       }
@@ -873,15 +871,29 @@ export class Sim {
     const last = p.trail[p.trail.length - 1];
     if (!last || dist(last, p) > 0.5) { p.trail.push({ x: p.x, z: p.z }); if (p.trail.length > 60) p.trail.shift(); }
   }
-  private trailPoint(back: number, p: Actor): Pt {
+  /**
+   * A point `back` metres along the leader's trail. The slot must fit the officer's whole body, not
+   * just its centre: a leader who stops a hand's width from a wall would otherwise leave his squad
+   * walking into that wall for the rest of the mission.
+   */
+  private trailPoint(back: number, p: Actor, radius = ACTOR_RADIUS): Pt {
     let prev: Pt = p, acc = 0;
     for (let i = p.trail.length - 1; i >= 0; i--) {
       const t = p.trail[i], d = dist(prev, t);
-      if (acc + d >= back) { const k = (back - acc) / (d || 1); return { x: prev.x + (t.x - prev.x) * k, z: prev.z + (t.z - prev.z) * k }; }
+      if (acc + d >= back) {
+        const k = (back - acc) / (d || 1), q = { x: prev.x + (t.x - prev.x) * k, z: prev.z + (t.z - prev.z) * k };
+        if (this.isActorPositionClear(q.x, q.z, radius)) return q;
+        break;
+      }
       acc += d; prev = t;
     }
     const f = fwd(p.yaw), q = { x: p.x - f.x * back, z: p.z - f.z * back };
-    return walkLine(this.level, p, q) ? q : prev;
+    if (this.isActorPositionClear(q.x, q.z, radius) && walkLine(this.level, p, q)) return q;
+    for (let i = p.trail.length - 1; i >= 0; i--) {
+      const t = p.trail[i];
+      if (this.isActorPositionClear(t.x, t.z, radius)) return t;
+    }
+    return prev;
   }
   // ---------- room work: posts a squad takes up while it searches or guards an area ----------
   /**
@@ -890,15 +902,30 @@ export class Sim {
    * wide as possible so the room actually gets searched. Nothing outside the room is ever offered,
    * which is what keeps a squad from wandering off into the next room.
    */
+  /**
+   * The room containing a point on a given floor. `roomAt` returns the first room in plan, so on
+   * stacked floors it hands back the room below — posts and searches then silently collapse to the
+   * wrong floor. Pick the containing room whose floor matches instead.
+   */
+  private roomAtFloor(x: number, z: number, y: number): Room | null {
+    let best: Room | null = null, bd = 1e9;
+    for (const r of this.level.rooms) {
+      if (x > r.x + 1 - 1e-6 && x < r.x + r.w - 1 && z > r.z + 1 - 1e-6 && z < r.z + r.h - 1) {
+        const d = Math.abs((r.floorY ?? 0) - y);
+        if (d < bd) { bd = d; best = r; }
+      }
+    }
+    return best && bd < 1.5 ? best : null;
+  }
   private areaPosts(anchor: Pt, n: number, guard: boolean, radius = 0): Pt[] {
-    const l = this.level, room = roomAt(l, anchor.x, anchor.z), cand: Pt[] = [], anchorY = this.floorY(anchor.x, anchor.z);
+    const l = this.level, anchorY = this.floorY(anchor.x, anchor.z), room = this.roomAtFloor(anchor.x, anchor.z, anchorY) ?? roomAt(l, anchor.x, anchor.z), cand: Pt[] = [];
     const x0 = room ? room.x + 1 : Math.floor(anchor.x) - 7, x1 = room ? room.x + room.w - 2 : Math.floor(anchor.x) + 7;
     const z0 = room ? room.z + 1 : Math.floor(anchor.z) - 7, z1 = room ? room.z + room.h - 2 : Math.floor(anchor.z) + 7;
     for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) {
       if (this.solidCell(cx, cz)) continue;                  // walls and the furniture blocks
       if (l.propAt.has(cz * l.w + cx)) continue;             // never post a man inside a desk
       const pt = { x: cx + 0.5, z: cz + 0.5 };
-      if (room && roomAt(l, pt.x, pt.z)?.id !== room.id) continue;
+      if (room && (this.roomAtFloor(pt.x, pt.z, this.floorY(pt.x, pt.z)) ?? roomAt(l, pt.x, pt.z))?.id !== room.id) continue;
       if (Math.abs(this.floorY(pt.x, pt.z) - anchorY) > 0.75) continue;
       if (radius && dist(pt, anchor) > radius) continue;
       cand.push(pt);
@@ -941,7 +968,7 @@ export class Sim {
       const ang = (i * 2.4) % (Math.PI * 2), r = 0.85 + 0.35 * Math.floor(i / 4);
       const q = { x: base.x + Math.cos(ang) * r, z: base.z + Math.sin(ang) * r };
       if (Math.abs(this.floorY(q.x, q.z) - anchorY) <= 0.75 && !this.solidCell(Math.floor(q.x), Math.floor(q.z)) && !l.propAt.has(Math.floor(q.z) * l.w + Math.floor(q.x))
-        && (!room || roomAt(l, q.x, q.z)?.id === room.id) && findPath(l, anchor, q)
+        && (!room || (this.roomAtFloor(q.x, q.z, this.floorY(q.x, q.z)) ?? roomAt(l, q.x, q.z))?.id === room.id) && findPath(l, anchor, q)
         && (!radius || dist(q, anchor) <= radius + 1)) chosen.push(q);
       else if (i > 24) chosen.push(base);   // give up gracefully instead of looping
     }
@@ -1827,7 +1854,7 @@ export class Sim {
         case 'secure': {
           // Search + secure the room the leader is standing in. The posts are generated inside that
           // room only, so the squad never wanders off into the rest of the building.
-          const anchor = by.alive ? by : lead, room = roomAt(this.level, anchor.x, anchor.z);
+          const anchor = by.alive ? by : lead, room = this.roomAtFloor(anchor.x, anchor.z, this.floorY(anchor.x, anchor.z)) ?? roomAt(this.level, anchor.x, anchor.z);
           const squad = Math.max(1, this.officers.filter(x => x.alive).length);
           // in a room the whole room is fair game; in a corridor keep the squad close by
           set({ type: 'secure', phase: 0, t: 0, pts: this.areaPosts(anchor, squad, false, room ? 0 : 6), room: room?.id ?? null, leader: by });
@@ -2089,14 +2116,14 @@ export class Sim {
       // Escort, not a conga line: on the move stay on the leader's trail, but the moment he stops
       // the squad takes guarding posts around him — inside his room — and watches the entrances.
       if (p.moving || dist(o, p) > 6.5) {
-        dest = this.trailPoint(1.5 + o.slot * 1.1, p);
+        dest = this.trailPoint(1.5 + o.slot * 1.1, p, o.r);
         if (dist(o, p) < 1.4 + o.slot * 0.5 && !o.path) dest = null;
       } else {
         const post = this.escortPost(ord, o, p);
         if (post) { dest = dist(o, post) < 0.4 && !o.path ? null : post; face = this.watchYaw(o, p); guard = true; }
       }
     }
-    else if (ord.type === 'cover') { const ang = [-0.9, 0.9, -1.5, 1.5][o.ti % 4] ?? 0; dest = this.trailPoint(1.1 + o.ti * 0.85, p); face = p.yaw + Math.PI + ang; guard = true; if (dist(o, p) < 1.4 + o.ti * 0.55 && !o.path) dest = null; }
+    else if (ord.type === 'cover') { const ang = [-0.9, 0.9, -1.5, 1.5][o.ti % 4] ?? 0; dest = this.trailPoint(1.1 + o.ti * 0.85, p, o.r); face = p.yaw + Math.PI + ang; guard = true; if (dist(o, p) < 1.4 + o.ti * 0.55 && !o.path) dest = null; }
     else if (ord.type === 'secure') {
       const post = this.postFor(o, ord);
       if (post) { dest = dist(o, post) < 0.4 && !o.path ? null : post; face = this.watchYaw(o, p); guard = true; }
@@ -2711,9 +2738,36 @@ export class Sim {
     }
   }
 
+  /**
+   * The squad's standing job is to clear and hold the room the player is in. Walking into a new
+   * room takes every standby team off its post and into that room's search — they work where the
+   * player opens doors instead of trailing a step behind him. An explicit order (follow, cover,
+   * move, breach, ...) always wins; only the standby states `hold` and `secure` yield.
+   */
+  private autoSecureRoom() {
+    const p = this.player;
+    const room = this.roomAtFloor(p.x, p.z, this.floorY(p.x, p.z));
+    const id = room ? room.id : null;
+    if (id === this.playerRoomId) return;
+    this.playerRoomId = id;
+    if (!room || !p.alive || p.downed) return;
+    const anchor = { x: p.x, z: p.z }, squad = Math.max(1, this.officers.filter(x => x.alive).length);
+    const pts = this.areaPosts(anchor, squad, false, 0);
+    if (!pts.length) return;
+    for (const t of ['A', 'B'] as const) {
+      const T = this.teams[t];
+      if (T.order.type !== 'hold' && T.order.type !== 'secure') continue;
+      // Already searching or holding this exact room: leave the posts where they are.
+      if (T.order.type === 'secure' && T.order.room === room.id) continue;
+      for (const m of this.members(t)) { m.path = null; m.goal = null; if (m.cuff) { m.cuff.claimedBy = null; m.cuff = null; } }
+      T.order = { type: 'secure', phase: 0, t: 0, pts, room: room.id, leader: p };
+    }
+  }
+
   update(dt: number) {
     if (this.over) { this.stepDoors(dt); this.updateElevators(dt); return; }
     this.time += dt;
+    this.autoSecureRoom();
     this.replayT -= dt;
     if (this.replayT <= 0) { this.replayT = 0.5; this.recordReplay(); }
     if (this.time - this.soloWarnT > 35 && this.officers.some(o => o.alive)) {
@@ -2883,6 +2937,12 @@ export class Sim {
         continue;
       }
       this.separatePair(a, b, dx / d, dz / d, push);
+    }
+    // A crowd shove can leave a standing body a centimetre inside a desk or a wall corner; push those
+    // out before the frame ends so every actor occupies free floor instead of clipping the furniture.
+    for (const a of this.actors) {
+      if (!a.alive || this.isActorPositionClear(a.x, a.z, a.r)) continue;
+      this.resolve(a);
     }
     this.updateGrenades(dt);
     this.updateClouds(dt);
