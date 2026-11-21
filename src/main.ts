@@ -2802,6 +2802,10 @@ class Game {
     if (p.alive && !p.downed && !sim.over) {
       const ad = this.aimDir();
       const rh = sim.ray(p.x + lo.lx, this.eye, p.z + lo.lz, ad.x, ad.y, ad.z, 26, p, false);
+      // The crosshair is the centre of the camera, so the laser follows the camera itself. Walking
+      // bob and recoil shake move the camera, and the dot has to move with it to stay on the crosshair.
+      const cd = this.camera.getWorldDirection(new THREE.Vector3());
+      const lh = sim.ray(this.camera.position.x, this.camera.position.y, this.camera.position.z, cd.x, cd.y, cd.z, 26, p, false);
       // A leaned ADS weapon also tucks back if the muzzle line is still blocked by nearby cover.
       nearWall = rh.kind === 'wall' && rh.d < 0.85 && (!this.ads || Math.abs(lo.actual) > 0.15);
       const friendly = !!(rh.actor && (rh.actor.kind === 'player' || (rh.actor.kind === 'officer' && !this.sim?.squadHostile) || (rh.actor.kind === 'civ' && !rh.actor.hostile)));
@@ -2811,15 +2815,15 @@ class Game {
         show('ffWarn', true);
       } else show('ffWarn', false);
       const wsNow = this.weaponSpecs[this.weapon];
-      if (this.laserOn && !wsNow.taser && this.reloadT <= 0 && rh.kind !== 'none' && rh.d < 28) {
+      if (this.laserOn && !wsNow.taser && this.reloadT <= 0 && lh.kind !== 'none' && lh.d < 28) {
         // Laser sight, CS/SWAT style: the dot sits exactly where the weapon is aimed – under the
         // crosshair – and the beam starts at the muzzle. It never droops or rises on its own.
         const mz = new THREE.Vector3(0.12, -0.24, 0.5); // fallback screen position of the muzzle
         if (this.arms.ready) mz.copy(this.arms.muzzle.getWorldPosition(new THREE.Vector3())).project(this.viewCam);
         const origin = new THREE.Vector3(mz.x, mz.y, 0.5).unproject(this.camera).sub(this.camera.position).normalize().multiplyScalar(0.45).add(this.camera.position);
         // pull the dot a couple of centimetres off the surface so it cannot fight with it
-        const dx = rh.x - origin.x, dy = rh.y - origin.y, dz = rh.z - origin.z, len = Math.hypot(dx, dy, dz) || 1;
-        const hx = rh.x - dx / len * 0.02, hy = rh.y - dy / len * 0.02, hz = rh.z - dz / len * 0.02;
+        const dx = lh.x - origin.x, dy = lh.y - origin.y, dz = lh.z - origin.z, len = Math.hypot(dx, dy, dz) || 1;
+        const hx = lh.x - dx / len * 0.02, hy = lh.y - dy / len * 0.02, hz = lh.z - dz / len * 0.02;
         this.fx.setLaser(true, hx, hy, hz, origin.x, origin.y, origin.z, this.nvgOn, this.camera.position.distanceTo(new THREE.Vector3(hx, hy, hz)));
       } else {
         this.fx.setLaser(false);
