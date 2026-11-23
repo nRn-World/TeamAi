@@ -38,8 +38,9 @@ interface NormEntry {
 
 const TPL: Partial<Record<PropAssetKey, NormEntry>> = {};
 const WAITERS: (() => void)[] = [];
+const ASSET_LOADS = new Map<PropAssetKey, Promise<void>>();
 export let propsReady = false;
-let loadingPromise: Promise<void> | null = null;
+let activeBatches = 0;
 
 function normalizeAsset(src: THREE.Object3D, spec: (typeof PROP_FILES)[PropAssetKey]): NormEntry {
   const hide = (spec as { hide?: RegExp }).hide;
@@ -94,35 +95,77 @@ function normalizeAsset(src: THREE.Object3D, spec: (typeof PROP_FILES)[PropAsset
   return { scene: wrap, size: finalSize };
 }
 
-export function loadProps(base = './models/props/'): Promise<void> {
-  if (loadingPromise) return loadingPromise;
-  const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
-  loadingPromise = (async () => {
-    for (const key of Object.keys(PROP_FILES) as PropAssetKey[]) {
-      const spec = PROP_FILES[key];
-      try {
-        const gltf = await loader.loadAsync(base + spec.file);
-        TPL[key] = normalizeAsset(gltf.scene, spec);
-      } catch (e) { console.warn('prop model', spec.file, e); }
-      // Loading all twenty scans at once blocks the main thread long enough that the loading
-      // screen never gets a frame. Yield between models so the game can start and fill in props.
-      await new Promise<void>(r => setTimeout(r, 0));
+/** Resolve exactly the model variants used by this level, rather than downloading every prop on boot. */
+export function propAssetKeysFor(props: readonly Prop[], theme: string): PropAssetKey[] {
+  const keys = new Set<PropAssetKey>();
+  for (const p of props) {
+    const seed = p.cx * 31 + p.cz * 17 + p.rot;
+    switch (p.kind) {
+      case 'crate': keys.add('crate'); break;
+      case 'pc': keys.add('desk_pc'); break;
+      case 'desk':
+        keys.add('desk');
+        if (seed % 3 === 0) keys.add('flowers');
+        if (seed % 3 === 1) keys.add('desk_lamp');
+        break;
+      case 'sofa': keys.add(seed % 3 === 1 ? 'velvet_sofa' : 'sofa'); break;
+      case 'chair': keys.add(seed % 4 === 3 ? 'silk_pouf' : seed % 2 === 0 ? 'armchair' : 'greenchair'); break;
+      case 'shelf': keys.add('shelf'); break;
+      case 'bed': keys.add('bed'); break;
+      case 'locker': keys.add('locker'); break;
+      case 'bar': keys.add('bar'); break;
+      case 'plant': {
+        const pick = seed % 5;
+        keys.add(pick === 0 ? 'plant_leafy' : pick === 1 ? 'plant_urn' : pick === 2 ? 'flowers' : pick === 3 ? 'plant_succulent' : 'geranium');
+        break;
+      }
     }
-    propsReady = Object.keys(TPL).length > 0;
-    for (const fn of WAITERS.splice(0)) fn();
-  })();
-  return loadingPromise;
+  }
+  if (['office', 'hotel', 'bank', 'club', 'raid'].includes(theme)) {
+    for (const key of ['planter_box', 'plant_urn', 'rose_bush', 'geranium', 'plant_leafy'] as const) keys.add(key);
+  }
+  return [...keys];
 }
 
-export function onPropsReady(fn: () => void): void {
-  if (propsReady) fn();
-  else WAITERS.push(fn);
+export function loadProps(keys: readonly PropAssetKey[] = Object.keys(PROP_FILES) as PropAssetKey[], base = './models/props/'): Promise<void> {
+  activeBatches++; propsReady = false;
+  const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+  const tasks = [...new Set(keys)].map(key => {
+    if (TPL[key]) return Promise.resolve();
+    const existing = ASSET_LOADS.get(key);
+    if (existing) return existing;
+    const spec = PROP_FILES[key];
+    const task = loader.loadAsync(base + spec.file)
+      .then(gltf => { TPL[key] = normalizeAsset(gltf.scene, spec); })
+      .catch(() => { /* keep the procedural fallback and allow a later retry */ })
+      .finally(() => ASSET_LOADS.delete(key));
+    ASSET_LOADS.set(key, task);
+    return task;
+  });
+  return Promise.all(tasks).then(() => {
+    activeBatches = Math.max(0, activeBatches - 1);
+    if (activeBatches === 0) {
+      propsReady = true;
+      for (const fn of WAITERS.splice(0)) fn();
+    }
+  });
+}
+
+export function onPropsReady(fn: () => void): () => void {
+  if (propsReady) { fn(); return () => {}; }
+  WAITERS.push(fn);
+  return () => {
+    const index = WAITERS.indexOf(fn);
+    if (index >= 0) WAITERS.splice(index, 1);
+  };
 }
 
 function cloneAsset(key: PropAssetKey): { obj: THREE.Group; size: THREE.Vector3 } | null {
   const entry = TPL[key];
   if (!entry) return null;
-  return { obj: entry.scene.clone(true), size: entry.size.clone() };
+  const obj = entry.scene.clone(true);
+  obj.userData.sharedAsset = true; // geometry/materials are shared with the cached GLTF template
+  return { obj, size: entry.size.clone() };
 }
 
 const pedestalWood = new THREE.MeshStandardMaterial({ color: 0x3a2d24, roughness: 0.65, metalness: 0.08 });
@@ -137,6 +180,7 @@ function onStand(key: PropAssetKey, h = 0.56): THREE.Group | null {
   if (!c) return null;
   const g = new THREE.Group();
   const stand = new THREE.Mesh(PED_CYL, pedestalWood);
+  stand.userData.sharedAsset = true; // module-level geometry/material are reused by every planter
   stand.scale.y = h / 0.56;
   stand.position.y = h / 2;
   stand.castShadow = true;
@@ -297,6 +341,7 @@ export function exteriorPlanterModel(seed: number): THREE.Group | null {
   g.add(box.obj);
 
   const soil = new THREE.Mesh(SOIL_BOX, soilMat);
+  soil.userData.sharedAsset = true;
   soil.position.y = 0.34;
   g.add(soil);
 
@@ -320,6 +365,7 @@ export function exteriorTreeModel(seed: number, scale = 1.55): THREE.Group | nul
   const g = new THREE.Group();
 
   const plinth = new THREE.Mesh(PLINTH_BOX, pedestalStone);
+  plinth.userData.sharedAsset = true;
   plinth.position.y = 0.17;
   plinth.castShadow = true;
   plinth.receiveShadow = true;

@@ -82,7 +82,7 @@ Output ONLY a single valid JSON object with this exact schema:
   "relayTo": "Ken|Maya|Jack|Zoe|Team A|Team B|ALL|null",
   "relayMsg": "short relayed message to other SWAT or null",
   "commands": [
-    { "team": "A|B|ALL", "who": 0|1|2|3|null, "action": "follow|hold|move|cover|stack|breach|bang|open|close|restrain|fireFree|fireHold|report|shout|joinTeam|peek|c2|wedge|defuse", "dir": "left|right|forward|back|there|null" }
+    { "team": "A|B|ALL", "who": 0|1|2|3|null, "action": "follow|hold|move|cover|stack|breach|bang|open|close|restrain|fireFree|fireHold|report|shout|joinTeam|peek|c2|wedge|defuse|secure", "dir": "left|right|forward|back|there|null" }
   ]
 }
 
@@ -115,6 +115,10 @@ export class TacticalAi {
   private engine: MLCEngineInterface | null = null;
   private loadedModel = '';
   private loadPromise: Promise<boolean> | null = null;
+  private loadingModel = '';
+  private loadEpoch = 0;
+  private loadingEpoch = 0;
+  private unloadPromise: Promise<void> | null = null;
   private history: { role: 'user' | 'assistant'; content: string }[] = [];
 
   static get hasWebGpu(): boolean {
@@ -133,63 +137,82 @@ export class TacticalAi {
   }
 
   async ensureLoaded(modelId: string): Promise<boolean> {
-    this.modelId = modelId || AI_MODELS[0].id;
-    if (this.engine && this.loadedModel === this.modelId && this.state === 'ready') return true;
-    if (this.loadPromise) return this.loadPromise;
-
-    this.loadPromise = (async () => {
-      if (!TacticalAi.hasWebGpu) {
-        this.setState('unsupported', 'WebGPU is not supported in this browser/device. Use Chrome or Edge with WebGPU enabled.');
-        return false;
+    const requestedModel = modelId || AI_MODELS[0].id;
+    this.modelId = requestedModel;
+    if (this.unloadPromise) return this.unloadPromise.then(() => this.ensureLoaded(requestedModel));
+    if (this.engine && this.loadedModel === requestedModel && this.state === 'ready') return true;
+    if (this.loadPromise) {
+      const pending = this.loadPromise;
+      if (this.loadingEpoch !== this.loadEpoch || this.loadingModel !== requestedModel) {
+        return pending.then(() => this.ensureLoaded(requestedModel));
       }
+      return pending;
+    }
+
+    this.loadingModel = requestedModel;
+    const epoch = ++this.loadEpoch;
+    this.loadingEpoch = epoch;
+    const attempt = Promise.resolve().then(async () => {
+      const current = () => epoch === this.loadEpoch;
       try {
-        const adapter = await (navigator as any).gpu.requestAdapter();
-        if (!adapter) {
-          this.setState('unsupported', 'No WebGPU graphics adapter was found.');
+        if (!current()) return false;
+        if (!TacticalAi.hasWebGpu) {
+          this.setState('unsupported', 'WebGPU is not supported in this browser/device. Use Chrome or Edge with WebGPU enabled.');
           return false;
         }
-      } catch {
-        this.setState('unsupported', 'WebGPU could not be initialized.');
-        return false;
-      }
+        let adapter: any;
+        try { adapter = await (navigator as any).gpu.requestAdapter(); }
+        catch { if (current()) this.setState('unsupported', 'WebGPU could not be initialized.'); return false; }
+        if (!current()) return false;
+        if (!adapter) { this.setState('unsupported', 'No WebGPU graphics adapter was found.'); return false; }
 
-      this.setState('loading', 'Preparing AI engine…');
-      try {
+        this.setState('loading', 'Preparing AI engine…');
         const webllm = await import('@mlc-ai/web-llm');
+        if (!current()) return false;
         if (this.engine) {
-          try { await this.engine.unload(); } catch { /* ignore */ }
-          this.engine = null;
+          const previous = this.engine;
+          this.engine = null; this.loadedModel = '';
+          try { await previous.unload(); } catch { /* ignore */ }
+          if (!current()) return false;
         }
-        this.engine = await webllm.CreateMLCEngine(this.modelId, {
+        const engine = await webllm.CreateMLCEngine(requestedModel, {
           initProgressCallback: (rep: InitProgressReport) => {
+            if (!current()) return;
             const pct = rep.progress ? ` (${Math.round(rep.progress * 100)}%)` : '';
             this.setState('loading', `${rep.text || 'Loading model'}${pct}`);
           },
         });
-        this.loadedModel = this.modelId;
-        this.setState('ready', `Ready: ${this.modelId}`);
+        if (!current()) { try { await engine.unload(); } catch { /* ignore */ } return false; }
+        this.engine = engine;
+        this.loadedModel = requestedModel;
+        this.setState('ready', `Ready: ${requestedModel}`);
         return true;
       } catch (e: any) {
+        if (!current()) return false;
         this.engine = null;
         this.loadedModel = '';
         this.setState('error', String(e?.message || e || 'Failed to load AI model.'));
         return false;
       } finally {
-        this.loadPromise = null;
+        // Clear even after unsupported GPU adapters / permission failures so retry and model switching work.
+        if (this.loadPromise === attempt) { this.loadPromise = null; this.loadingModel = ''; this.loadingEpoch = 0; }
       }
-    })();
-
-    return this.loadPromise;
+    });
+    this.loadPromise = attempt;
+    return attempt;
   }
 
   async unload() {
     this.history = [];
-    if (this.engine) {
-      try { await this.engine.unload(); } catch { /* ignore */ }
-      this.engine = null;
-      this.loadedModel = '';
+    const epoch = ++this.loadEpoch; // invalidate any model load that has not finished yet
+    const engine = this.engine;
+    this.engine = null; this.loadedModel = '';
+    if (engine) {
+      const unloading = Promise.resolve().then(() => engine.unload()).then(() => {}).catch(() => {});
+      this.unloadPromise = unloading;
+      try { await unloading; } finally { if (this.unloadPromise === unloading) this.unloadPromise = null; }
     }
-    this.setState('off', '');
+    if (this.loadEpoch === epoch) this.setState('off', '');
   }
 
   /** Interprets a player utterance (text or mic) with live Sim context, returning squad commands and radio relay text. */

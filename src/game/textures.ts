@@ -18,6 +18,11 @@ function blotches(g: CanvasRenderingContext2D, w: number, h: number, n: number, 
     gr.addColorStop(0, color); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.fillRect(x - s, y - s, s * 2, s * 2);
   }
 }
+export function isCachedTexture(texture: THREE.Texture): boolean {
+  for (const cached of cache.values()) if (cached === texture) return true;
+  return false;
+}
+
 export function make(key: string, w: number, h: number, draw: Draw): THREE.CanvasTexture {
   const hit = cache.get(key); if (hit) return hit;
   const c = document.createElement('canvas'); c.width = w; c.height = h;

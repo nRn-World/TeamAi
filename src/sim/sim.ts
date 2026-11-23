@@ -1329,9 +1329,15 @@ export class Sim {
     }
   }
   fire(by: Actor, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, dmg: number, opts: boolean | { nonLethal?: boolean; taser?: boolean; pen?: number } = false, taserArg = false) {
+    const miss = { kind: 'none' as const, x: Number.isFinite(ox) ? ox : 0, y: Number.isFinite(oy) ? oy : 0, z: Number.isFinite(oz) ? oz : 0, d: 0, actor: null, head: false, nx: 0, ny: 0, nz: 0, mat: 'concrete' as HitMaterial, dmgScale: 1, penExits: [] as { x: number; y: number; z: number; nx: number; ny: number; nz: number }[] };
+    if (![ox, oy, oz, dx, dy, dz, dmg].every(Number.isFinite) || dmg <= 0) return miss;
+    const len = Math.hypot(dx, dy, dz);
+    if (len < 1e-6) return miss;
+    dx /= len; dy /= len; dz /= len;
+    dmg = Math.min(34, dmg);
     const nonLethal = typeof opts === 'boolean' ? opts : !!opts.nonLethal;
     const taser = typeof opts === 'boolean' ? taserArg : !!opts.taser;
-    const pen = typeof opts === 'boolean' ? 0 : (opts.pen ?? 0);
+    const pen = typeof opts === 'boolean' ? 0 : Math.max(0, Math.min(1, opts.pen ?? 0));
     const maxD = taser ? 9.5 : 70;
     const h = this.ray(ox, oy, oz, dx, dy, dz, maxD, by, !taser, nonLethal || taser ? 0 : pen);
     if (by.kind === 'player') by.shots++;
@@ -1414,7 +1420,8 @@ export class Sim {
     this.fire(a, a.x + dx * 0.4, sourceY + 1.4, a.z + dz * 0.4, dx / n, dy / n, dz / n, dmg);
   }
   damage(a: Actor, dmg: number, by: Actor, head: boolean, nonLethal = false) {
-    if (!a.alive) return;
+    if (!a.alive || !Number.isFinite(dmg) || dmg <= 0) return;
+    dmg = Math.min(500, dmg);
     if (a.kind === 'player' && a.downed) return; // downed players are protected from stray shots while bleeding out
     // Friendly fire protection in co-op unless explicitly enabled
     const retaliation = by.kind === 'officer' && this.squadHostile;

@@ -6,6 +6,8 @@ import { buildLocalReport, buildTacticalContext } from '../src/sim/context';
 import { findPath, nearestWalkable, walkLine } from '../src/sim/nav';
 import { MISSIONS, buildLevel, groundHeightAt, roomAt, FLOOR, WALL, OUT, HIGH, WINDOW } from '../src/sim/level';
 import { encodeSnap, applySnap, encodeEv, decodeEv } from '../src/sim/netstate';
+import { normalizePeerEnvelopeWithSize, normalizePeerMessage, consumePeerBudget, consumePeerBytes, type PeerReceiveBudget } from '../src/game/netprotocol';
+import { TacticalAi } from '../src/game/ai';
 
 let fails = 0;
 const ok = (c: boolean, msg: string) => { if (!c) { fails++; console.log('  FAIL', msg); } };
@@ -175,7 +177,8 @@ function play(mission: number, seed: number, verbose = false) {
     const rp = host.players[1]; host.moveCircle(rp, 0, -0.02); host.pushTrail(rp); // remote player walks north through collision-safe movement
     host.update(1 / 30);
     const wire = JSON.parse(JSON.stringify({ s: encodeSnap(host), e: host.events.map(encodeEv) })); host.events.length = 0;
-    applySnap(mir, wire.s, me); for (const e of wire.e) { const d = decodeEv(mir, e); evs++; if ('a' in d) ok(d.a === mir.actors[(d.a as any).id], 'event actor decode'); }
+    ok(applySnap(mir, wire.s, me), 'valid co-op snapshot is accepted');
+    for (const e of wire.e) { const d = decodeEv(mir, e); if (!d) { ok(false, 'valid event is decoded'); continue; } evs++; if ('a' in d) ok(d.a === mir.actors[(d.a as any).id], 'event actor decode'); }
   }
   ok(mir.officers.every((o, i) => Math.abs(o.x - host.officers[i].x) < 0.02 && Math.abs(o.z - host.officers[i].z) < 0.02), 'mirror positions');
   ok(mir.teams.A.order.type === host.teams.A.order.type && mir.level.doors.every((d, i) => Math.abs(d.open - host.level.doors[i].open) < 0.02), 'mirror orders/doors');
@@ -185,6 +188,53 @@ function play(mission: number, seed: number, verbose = false) {
   host.damage(host.players[1], 9999, host.suspects[0], false); host.damage(host.players[2], 9999, host.suspects[0], false); ok(!!host.over && !host.over.win, 'mission fails when all players are down');
   console.log('co-op mirror test done');
 }
+// ---- hostile network payload validation and bounded input budget ----
+{
+  const host = new Sim(0, 19, 1, 2), mirror = new Sim(0, 19, 1, 2), player = mirror.players[1];
+  const valid = JSON.parse(JSON.stringify(encodeSnap(host)));
+  ok(applySnap(mirror, valid, player), 'a structurally valid snapshot is accepted');
+  const xBefore = player.x, badPosition = JSON.parse(JSON.stringify(valid)); badPosition.a[1][0] = 999999;
+  ok(!applySnap(mirror, badPosition, player) && player.x === xBefore, 'invalid snapshots are rejected atomically before mutation');
+  const badDoor = JSON.parse(JSON.stringify(valid)); badDoor.o[0][2] = host.actors.length + 50;
+  ok(!applySnap(mirror, badDoor, player), 'invalid snapshot actor references are rejected');
+  const unsafeMvp = JSON.parse('{"name":"x","arrests":0,"kills":0,"shots":0,"hits":0,"dmgTaken":0,"__proto__":{"polluted":true},"alive":false}');
+  const badMvp = JSON.parse(JSON.stringify(valid)); badMvp.over = 1; badMvp.mvp = [unsafeMvp];
+  const guarded = new Sim(0, 19, 1, 2), guardedProto = Object.getPrototypeOf(guarded.players[0]);
+  ok(!applySnap(guarded, badMvp, guarded.players[0]) && Object.getPrototypeOf(guarded.players[0]) === guardedProto && guarded.players[0].alive,
+    'snapshot MVP fields are allowlisted before Object.assign can mutate an actor');
+  ok(decodeEv(mirror, { t: 'hurt', a: { $a: 9999 }, head: true }) === null, 'events with invalid actor ids are ignored');
+  ok(decodeEv(mirror, { t: '__proto__' }) === null && decodeEv(mirror, { t: 'toString' }) === null,
+    'inherited object-property names are not mistaken for valid event types');
+  ok(normalizePeerMessage({ t: 'toString' }) === null, 'inherited object-property names are rejected as wire message types');
+  ok(normalizePeerMessage({ t: 'ping', d: [0, 0, -1] })?.t === 'ping', 'valid peer ping passes schema validation');
+  ok(normalizePeerMessage({ t: 'ping', d: [Infinity, 0, 0] }) === null, 'non-finite peer vectors are rejected');
+  ok(normalizePeerMessage({ t: 'ping', d: [0, 0, -1], admin: true }) === null, 'unexpected top-level peer fields are rejected');
+  ok(normalizePeerMessage({ t: 'fire', weapon: 0, dirs: [[0, 0, -1]] })?.t === 'fire', 'valid weapon-and-aim fire request passes validation');
+  const validInput = { t: 'in', x: 1, z: 1, yaw: Math.PI, pitch: 0, cr: false, pr: false, ln: 0, jy: 0, mv: false, tc: true, ads: false, wp: 0, sh: false, sp: false };
+  ok(normalizePeerMessage(validInput)?.t === 'in' && normalizePeerMessage({ ...validInput, yaw: Math.PI * 9 }) === null,
+    'player yaw is normalized to one turn before crossing the network');
+  ok(normalizePeerMessage({ t: 'fire', o: [0, 1, 0], d: [0, 0, -1], dmg: 999, nl: true, ts: true, pen: 1 }) === null, 'client-supplied shot origin, damage and flags are rejected');
+  ok(normalizePeerMessage({ t: 'cmd', cmd: { team: 'A', action: 'follow', extra: true }, aim: null }) === null,
+    'unexpected nested command fields are rejected too');
+  const hostileGetter = Object.defineProperty({}, 't', { get() { throw new Error('untrusted getter'); } });
+  ok(normalizePeerMessage(hostileGetter) === null, 'peer-message normalization catches throwing accessors before reading fields');
+  const budget: PeerReceiveBudget = { messages: 1, bytes: 100, updatedAt: 1000 };
+  ok(consumePeerBudget(budget, 40, 1000) && !consumePeerBudget(budget, 1, 1000), 'peer receive budget rejects excess packet bursts');
+  const malformed = normalizePeerEnvelopeWithSize({ t: 'ping', d: [0, 0, -1], extra: 'x'.repeat(256) });
+  const byteBudget: PeerReceiveBudget = { messages: 1, bytes: 100, updatedAt: 1000 };
+  ok(malformed?.message === null && malformed.bytes > 100 && !consumePeerBytes(byteBudget, malformed.bytes, 1000) && byteBudget.bytes === 0,
+    'schema-invalid payloads still consume or exhaust the serialized-byte budget');
+  const expiredTimers = new Sim(0, 19, 1, 2);
+  expiredTimers.actors[0].stun = -0.04; expiredTimers.players[1].bleedT = -0.04;
+  const cleanExpiredTimers = encodeSnap(expiredTimers);
+  const expiredMirror = new Sim(0, 19, 1, 2);
+  ok(cleanExpiredTimers.a[0][6] === 0 && cleanExpiredTimers.p[1][6] === 0
+    && applySnap(expiredMirror, cleanExpiredTimers, expiredMirror.players[0]),
+    'expired stun and bleed timers are clamped so valid snapshots remain acceptable');
+  const hp = host.player.hp; host.damage(host.player, -25, host.suspects[0], false);
+  ok(host.player.hp === hp, 'negative damage cannot heal an actor');
+}
+
 // ---- training mode: no live threats while the player practises ----
 {
   const train = new Sim(0, 1, 0, 1, { training: true });
@@ -193,7 +243,6 @@ function play(mission: number, seed: number, verbose = false) {
   ok(train.player.hp === hp && !train.suspects.some(s => s.hostile) && !train.over,
     'training mode keeps suspects and civilians quiet and the trainee unhurt');
 }
-
 // ---- Kista Tech Center: two-storey navigation, interactions, effects and co-op teleports ----
 {
   const mission = MISSIONS.findIndex(m => m.name === 'Kista Tech Center');
@@ -538,9 +587,9 @@ ok(wins >= 4, 'bot should be able to win across missions');
   if (host.level.windows[0]) host.brokenWindows.add(Math.floor(host.level.windows[0].z) * host.level.w + Math.floor(host.level.windows[0].x));
   host.brokenProps.add(host.level.props[0].cz * host.level.w + host.level.props[0].cx);
   host.brokenDoorGlass.add(host.level.doors[0].id);
-  host.bomb!.time = 42.5;
+  host.bomb!.time = 42.5; host.bomb!.started = true;
   applySnap(mir, JSON.parse(JSON.stringify(encodeSnap(host))), mir.players[1]);
-  ok(!mir.powerOn && !!mir.level.doors[0].wedged && Math.abs(mir.bomb!.time - 42.5) < 0.1 && mir.brokenWindows.size === host.brokenWindows.size && mir.brokenProps.size === 1 && mir.brokenDoorGlass.size === 1, 'netstate syncs power, wedge, bomb, broken windows, broken props & door glass');
+  ok(!mir.powerOn && !!mir.level.doors[0].wedged && Math.abs(mir.bomb!.time - 42.5) < 0.1 && !!mir.bomb!.started && mir.brokenWindows.size === host.brokenWindows.size && mir.brokenProps.size === 1 && mir.brokenDoorGlass.size === 1, 'netstate syncs power, wedge, bomb state, broken windows, broken props & door glass');
 
   // 6. Locked door touched by AI suspects/civs must not spam player 'info' events
   const sLock = new Sim(0, 1);
@@ -757,7 +806,7 @@ ok(wins >= 4, 'bot should be able to win across missions');
 
   // Snap sync for downed, lean, torch, ads, speaking, shield & NetTarget interpolation
   p1.torch = false; p1.ads = true; p1.shield = true; p1.speaking = true; p1.weapon = 1; p1.pitch = 0.42; p1.lean = -0.86;
-  const mir2 = new Sim(0, 1, 1, 2);
+  const mir2 = new Sim(0, 1, 1, 2, { blackout: true, extraHostiles: 3, pistolOnly: true });
   const tgMap = new Map<any, { x: number; z: number; yaw: number }>();
   applySnap(mir2, JSON.parse(JSON.stringify(encodeSnap(sCoop))), mir2.players[1], tgMap);
   ok(mir2.players[0].torch === false && mir2.players[0].ads === true && mir2.players[0].shield === true && mir2.players[0].speaking === true && mir2.players[0].weapon === 1 && Math.abs(mir2.players[0].pitch - 0.42) < 0.02, 'encodeSnap/applySnap syncs torch, ads, shield, speaking, weapon & pitch');
@@ -1045,9 +1094,10 @@ function roomSquad(seed: number) {
   ok(!isGearUnlocked('taser', 0) && isGearUnlocked('taser', 200), 'the taser unlocks with the rank that carries it');
 
   const cleared: Record<string, number> = {};
-  ok(missionUnlocked(cleared, 0) && !missionUnlocked(cleared, 1), 'the first operation is open, the second is locked');
+  ok(missionUnlocked(cleared, 0) && missionUnlocked(cleared, 6), 'every campaign operation is selectable from a fresh save');
   cleared[0] = 80;
-  ok(missionUnlocked(cleared, 1) && !missionUnlocked(cleared, 2), 'clearing operation 1 opens operation 2 only');
+  ok(missionUnlocked(cleared, 1) && missionUnlocked(cleared, 2), 'campaign completions do not gate later operations');
+  ok(!missionUnlocked(cleared, -1), 'invalid negative mission indexes are rejected');
   ok(!campaignComplete(cleared, 3) && nextUncleared(cleared, 3) === 1, 'campaign tracks the next uncleared operation');
 
   const c = defaultCareer();
@@ -1074,6 +1124,34 @@ function roomSquad(seed: number) {
 
   const saved = normaliseCareer(JSON.parse(JSON.stringify({ xp: 640, ops: 3 })));
   ok(saved.roster.length === 4 && saved.roster.every(r => r.opsOut === 0), 'an older save without a roster is upgraded safely');
+}
+
+// ---- Tactical AI load retry / cancellation lifecycle ----
+{
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {} });
+    const ai = new TacticalAi();
+    const [first, coalesced] = await Promise.all([ai.ensureLoaded('unsupported-test'), ai.ensureLoaded('unsupported-test')]);
+    ok(!first && !coalesced && ai.state === 'unsupported' && (ai as any).loadPromise === null,
+      'unsupported WebGPU result clears the shared load promise');
+    ok(!(await ai.ensureLoaded('unsupported-test')) && (ai as any).loadPromise === null,
+      'AI can retry after a missing WebGPU adapter');
+
+    let resolveAdapter!: (adapter: unknown) => void;
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { gpu: { requestAdapter: () => new Promise(r => { resolveAdapter = r; }) } } });
+    const cancelling = new TacticalAi();
+    const pending = cancelling.ensureLoaded('cancel-test');
+    await Promise.resolve(); // let ensureLoaded start waiting for requestAdapter
+    const unload = cancelling.unload();
+    resolveAdapter(null);
+    const [loaded] = await Promise.all([pending, unload]);
+    ok(!loaded && cancelling.state === 'off' && (cancelling as any).loadPromise === null,
+      'unloading during adapter initialization invalidates the stale AI load');
+  } finally {
+    if (navigatorDescriptor) Object.defineProperty(globalThis, 'navigator', navigatorDescriptor);
+    else delete (globalThis as any).navigator;
+  }
 }
 
 console.log(fails ? `FAILED (${fails})` : 'ALL OK'); process.exit(fails ? 1 : 0);

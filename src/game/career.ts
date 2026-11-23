@@ -102,10 +102,9 @@ export function saveCareer(c: CareerState) {
   try { s.setItem(KEY, JSON.stringify(c)); } catch { /* private mode */ }
 }
 
-/** Campaign order: an operation opens when the one before it has been completed. */
-export function missionUnlocked(cleared: Record<string, number>, index: number): boolean {
-  if (index <= 0) return true;
-  return cleared[index - 1] != null;
+/** All campaign operations stay selectable; completion is tracked for progress and scores only. */
+export function missionUnlocked(_cleared: Record<string, number>, index: number): boolean {
+  return Number.isInteger(index) && index >= 0;
 }
 export function clearedCount(cleared: Record<string, number>): number {
   return Object.keys(cleared).filter(k => cleared[k] != null).length;

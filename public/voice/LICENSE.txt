@@ -1,4 +1,4 @@
 The voice clips in this folder were generated for TeamAi with the Kokoro-82M speech model
 (https://huggingface.co/hexgrad/Kokoro-82M, Apache License 2.0, by hexgrad) through kokoro-onnx
-(https://github.com/thewh1teagle/kokoro-onnx, MIT). Voices used: am_onyx, am_michael, af_bella, am_puck, af_heart, am_fenrir, am_eric, bm_george, af_kore, am_echo, af_sarah, am_liam, bf_emma, am_adam, af_nova.
+(https://github.com/thewh1teagle/kokoro-onnx, MIT). Voices used: am_onyx, am_michael, af_bella, am_puck, af_heart, am_fenrir, am_eric, bm_george, af_kore, am_echo, af_sarah, am_liam, bf_emma, am_adam, af_nova, bm_lewis.
 The clips were processed with FFmpeg (trimmed, normalised; shouted lines pitch-raised, compressed and given a room echo).
