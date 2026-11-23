@@ -29,9 +29,9 @@ Code dependencies: three.js (MIT), Vite (MIT), TypeScript (Apache-2.0), PeerJS (
   500 Senior Breacher (S-87 shotgun), 950 Entry Team Lead (LL-12 launcher), 1500 Tactical Commander
   (ballistic shield), 2400 Master Operator (+20 % XP). Locked items show up in the Armory with the rank
   that opens them, and the loadout select refuses anything the rank does not carry.
-- **Campaign order.** Operation N opens when N-1 has been completed; the mission strip marks locked
-  operations, the Armory shows the next operation and the cleared count, and the debrief offers
-  *Next mission · name* only when it is actually unlocked.
+- **Operations.** Every listed operation is selectable at any time; campaign progress tracks cleared
+  missions and the suggested next operation, but never locks the mission strip. `?mission=N` starts
+  a valid zero-based mission directly for testing without changing campaign progress.
 - **Consequences.** Officers who end an operation down sit out 1–3 operations. While they recover a
   rookie (lower speed, lower HP, no role perk) takes their slot, which is passed to the sim through
   `CoopMods.roster`; the Armory lists who is fit, and the debrief reports who was hurt and who is back.
@@ -59,9 +59,9 @@ Above graphics level Low every frame goes through a three.js `EffectComposer` ch
 
 - the world scene and then the weapon scene are rendered into one HDR (half-float) target, so the gun is never fogged by the level,
 - `UnrealBloomPass` picks up only the light fittings: the ceiling panels are pushed to ~1.28 in linear space and the threshold sits at 2.7, so a lamp close to a wall or a glass pane can no longer bloom the whole screen white — only the fittings themselves and the neon signs glow,
-- `OutputPass` does the ACES tone map and the sRGB conversion (a render target bypasses the renderer's own tone mapping, so this pass is required),
-- a small grade pass adds cool shadows / warm highlights, a vignette, film grain and a touch of edge aberration, and flashes red at the edges when you are hit,
-- `FXAAPass` on High and Ultra.
+- bloom and the cinematic grade (cool shadows / warm highlights, vignette, film grain and edge aberration) run in linear HDR,
+- `OutputPass` applies ACES tone mapping and sRGB conversion (a render target bypasses the renderer's own tone mapping, so this pass is required),
+- `FXAAPass` follows the output conversion because it expects display-space input.
 
 Glass panes (`MeshPhysicalMaterial`) use a broad, weak specular lobe (`roughness` ~0.22, `specularIntensity` 0.45, `envMapIntensity` 0.9) so a nearby lamp cannot fire a white hotspot across the entrance.
 

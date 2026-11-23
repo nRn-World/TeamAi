@@ -17,7 +17,7 @@ jobs:
         with: { node-version: 22 }
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - run: npm ci
-      - run: npx tsx tools/check-ai.mts || true
+      - run: npx tsx tools/check-ai.mts
       - name: Comment on the commit
         if: always()
         env: { GH_TOKEN: '${{ github.token }}' }

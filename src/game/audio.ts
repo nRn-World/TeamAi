@@ -317,8 +317,9 @@ export class GameAudio {
       'Dispatch to Team 1: Silent alarm triggered at Nordia Bank. Armed crew has taken the Bank Director hostage near the vault. Prioritize VIP extraction and non-lethal compliance.',
       'Dispatch to Team 1: Urgent! Anonymous tip confirms an improvised explosive device inside Club Eclipse backstage. Low visibility, panicked civilians on the dancefloor. Move fast.',
       'Dispatch to Team 1: Tactical warrant active for an unmapped compound. Intel indicates armed lookouts and civilians inside. Watch your corners and clear room by room.',
+      'Dispatch to Team 1: Hostage alarm at Kista Tech Center. Armed intruders are barricaded across two floors; the VIP is reported in the upper-wing offices. Secure the ground floor, reach Floor 2, and extract the hostage.',
     ];
-    const msg = lines[mission % lines.length];
+    const msg = lines[mission] ?? lines[0];
     this.squelch(true);
     if (this.ctx) {
       const o = this.out(0, 0.14, false);

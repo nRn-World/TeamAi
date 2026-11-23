@@ -50,7 +50,10 @@ function loadCityAsset(name: string): Promise<THREE.Group | null> {
         }
       });
       return sc;
-    }).catch(() => null);
+    }).catch(() => {
+      if (CITY_CACHE.get(name) === p) CITY_CACHE.delete(name); // preserve fallback and allow a later retry
+      return null;
+    });
     CITY_CACHE.set(name, p);
   }
   return p;
@@ -135,9 +138,11 @@ async function buildFacadeBlock(
   box: { x0: number; z0: number; x1: number; z1: number; y0: number; floors: number; seed: number },
   group: THREE.Group,
   quality: number,
+  isAlive: () => boolean,
+  ownedGeometry: Set<THREE.BufferGeometry>,
 ): Promise<void> {
   const kit = await loadCityAsset(kitName);
-  if (!kit) return;
+  if (!kit || !isAlive()) return;
   const apt = kitName === 'modular_urban_apartments_facade';
   const upper = apt
     ? ['wall_window_centered_large_01', 'wall_window_centered_double_01', 'wall_window_centered_small_01', 'wall_window_offset_small_01']
@@ -175,17 +180,21 @@ async function buildFacadeBlock(
     }
   }
   // one merged mesh per material keeps the draw calls down
+  const temporary = new Set<THREE.BufferGeometry>(), retained = new Set<THREE.BufferGeometry>();
   for (const [mat, geos] of parts) {
-    let mesh: THREE.Mesh | null = null;
-    try {
-      const merged = mergeGeometries(geos, false);
-      if (merged) mesh = new THREE.Mesh(merged, mat);
-    } catch { mesh = null; }
-    if (!mesh) { for (const g of geos) group.add(new THREE.Mesh(g, mat)); continue; }
+    geos.forEach(geo => temporary.add(geo));
+    let merged: THREE.BufferGeometry | null = null;
+    try { merged = mergeGeometries(geos, false); } catch { merged = null; }
+    if (!merged) {
+      for (const geo of geos) { retained.add(geo); const mesh = new THREE.Mesh(geo, mat); mesh.userData.sharedMaterial = true; group.add(mesh); }
+      continue;
+    }
+    ownedGeometry.add(merged);
+    const mesh = new THREE.Mesh(merged, mat); mesh.userData.sharedMaterial = true;
     // no shadow casting from the street facades: 140k triangles through the torch shadow pass is not worth it
-    mesh.receiveShadow = true;
-    group.add(mesh);
+    mesh.receiveShadow = true; group.add(mesh);
   }
+  for (const geo of temporary) if (!retained.has(geo)) geo.dispose();
   // flat roof slab so the block reads as a finished building from street level
   const roof = new THREE.Mesh(
     new THREE.BoxGeometry(x1 - x0, 0.34, z1 - z0),
@@ -207,6 +216,23 @@ const THEME = {
   raid: { wall: '#b8b4aa', trim: '#3b3c40', brickA: '#635c54', brickB: '#524b44', fog: 0x090b0e },
   tower: { wall: '#c7d0d9', trim: '#253b52', brickA: '#384552', brickB: '#2d3945', fog: 0x09111a },
 };
+
+function disposeLoadedObjectResources(root: THREE.Object3D) {
+  const geometries = new Set<THREE.BufferGeometry>(), materials = new Set<THREE.Material>(), textures = new Set<THREE.Texture>();
+  root.traverse((obj: any) => {
+    if (!obj.isMesh) return;
+    if (obj.geometry) geometries.add(obj.geometry);
+    const mats: THREE.Material[] = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const mat of mats) {
+      if (!mat) continue;
+      materials.add(mat);
+      for (const value of Object.values(mat)) { const tex = value as THREE.Texture | null; if (tex?.isTexture) textures.add(tex); }
+    }
+  });
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) material.dispose();
+  for (const texture of textures) texture.dispose();
+}
 
 export class LevelView {
   group = new THREE.Group();
@@ -235,10 +261,57 @@ export class LevelView {
   private discoBall?: THREE.Group;
   private lasers: THREE.Mesh[] = [];
   private propSlots: (() => void)[] = [];
+  private removePropsReady?: () => void;
+  private ownedGeometry = new Set<THREE.BufferGeometry>();
+  private ownedMaterial = new Set<THREE.Material>();
+  private ownedTexture = new Set<THREE.Texture>();
   private disposed = false;
   private readyPromise: Promise<void> = Promise.resolve();
   whenReady() { return this.readyPromise; }
-  dispose() { this.disposed = true; this.propSlots.length = 0; }
+  private retainDetachedResources(root: THREE.Object3D) {
+    root.traverse((obj: any) => {
+      if (!obj.isMesh) return;
+      if (obj.geometry && obj.geometry !== BOX) this.ownedGeometry.add(obj.geometry);
+      const mats: THREE.Material[] = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const mat of mats) {
+        if (!mat) continue;
+        this.ownedMaterial.add(mat);
+        for (const value of Object.values(mat)) {
+          const tex = value as THREE.Texture | null;
+          if (tex?.isTexture && !T.isCachedTexture(tex)) this.ownedTexture.add(tex);
+        }
+      }
+    });
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true; this.propSlots.length = 0; this.removePropsReady?.(); this.removePropsReady = undefined;
+    const geometries = new Set<THREE.BufferGeometry>(this.ownedGeometry), materials = new Set<THREE.Material>(this.ownedMaterial), textures = new Set<THREE.Texture>(this.ownedTexture);
+    const hasSharedAncestor = (obj: THREE.Object3D) => {
+      for (let p: THREE.Object3D | null = obj; p && p !== this.group; p = p.parent) if (p.userData.sharedAsset) return true;
+      return false;
+    };
+    this.group.traverse((obj: any) => {
+      if (!obj.isMesh) return;
+      const shared = hasSharedAncestor(obj);
+      if (!shared && obj.geometry && obj.geometry !== BOX) geometries.add(obj.geometry);
+      if (shared || obj.userData.sharedMaterial) return;
+      const mats: THREE.Material[] = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const mat of mats) {
+        if (!mat) continue;
+        materials.add(mat);
+        for (const value of Object.values(mat)) {
+          const tex = value as THREE.Texture | null;
+          if (tex?.isTexture && !T.isCachedTexture(tex)) textures.add(tex);
+        }
+      }
+    });
+    for (const geometry of geometries) geometry.dispose();
+    for (const material of materials) material.dispose();
+    for (const texture of textures) texture.dispose();
+    this.ownedGeometry.clear(); this.ownedMaterial.clear(); this.ownedTexture.clear(); this.group.clear(); this.group.removeFromParent();
+    this.lightPool.length = 0; this.lightSources.length = 0; this.propViews.clear(); this.evidenceViews.clear(); this.sensorViews.clear(); this.windows.clear(); this.doors.length = 0;
+  }
   constructor(public sim: Sim, quality: number) {
     const l = sim.level, th = THEME[l.theme], g = this.group;
     // exterior ground: wet stone plaza for architectural themes, dark wet asphalt elsewhere
@@ -531,6 +604,7 @@ export class LevelView {
         const fill = () => {
           const real = propModel(p.kind, seed, high);
           if (!real) return false;
+          this.retainDetachedResources(o);
           o.clear();
           o.add(real);
           o.userData = { ...real.userData };
@@ -550,7 +624,8 @@ export class LevelView {
     }
     this.buildExterior(quality);
     if (!propsReady && this.propSlots.length) {
-      onPropsReady(() => {
+      this.removePropsReady = onPropsReady(() => {
+        this.removePropsReady = undefined;
         if (this.disposed) return;
         for (const populate of this.propSlots) populate();
         this.propSlots.length = 0;
@@ -580,6 +655,7 @@ export class LevelView {
         const sy = opts.h ? opts.h / Math.max(sz.y, 0.001) : (opts.scale ?? sx);
         const szScale = opts.d ? opts.d / Math.max(sz.z, 0.001) : (opts.scale ?? sx);
         const wrap = new THREE.Group();
+        wrap.userData.sharedAsset = true; // keep CITY_CACHE template geometry/materials alive
         obj.scale.set(sx, sy, szScale);
         obj.position.set(-ctr.x * sx, -box3.min.y * sy, -ctr.z * szScale);
         wrap.add(obj);
@@ -601,6 +677,7 @@ export class LevelView {
       const fill = () => {
         const real = exteriorPlanterModel(seed);
         if (!real) return false;
+        this.retainDetachedResources(grp);
         grp.clear(); grp.add(real); return true;
       };
       if (!fill()) {
@@ -619,6 +696,7 @@ export class LevelView {
       const fill = () => {
         const real = exteriorTreeModel(seed, scale);
         if (!real) return false;
+        this.retainDetachedResources(grp);
         grp.clear(); grp.add(real); return true;
       };
       if (!fill()) {
@@ -669,7 +747,7 @@ export class LevelView {
       // Street-facing storeys are built from real modular facade tiles (real window recesses and
       // 1K PBR plaster/stone) instead of the old single baked-texture building.
       g.add(box(23.6, 12.2, 17.4, std({ color: 0x1a1f26, roughness: 0.9, emissive: 0x1d1409, emissiveIntensity: 0.55 }), 16.0, 9.5, 11.9));
-      extPromises.push(buildFacadeBlock('modular_urban_apartments_facade', { x0: 3.9, z0: 2.9, x1: 28.1, z1: 21.05, y0: 3.34, floors: quality >= 2 ? 4 : 3, seed: 11 }, g, quality));
+      extPromises.push(buildFacadeBlock('modular_urban_apartments_facade', { x0: 3.9, z0: 2.9, x1: 28.1, z1: 21.05, y0: 3.34, floors: quality >= 2 ? 4 : 3, seed: 11 }, g, quality, () => !this.disposed, this.ownedGeometry));
       placeCityModel('hotel_neighbor', { x: 39.5, y: 0, z: 10.5, w: 13.5, h: 28.0, d: 11.0, ry: -0.14 });
       placeCityModel('office_tower', { x: -13.5, y: 0, z: 11.5, w: 26.0, h: 12.5, d: 14.0, ry: Math.PI / 2 });
       placeCityModel('hotel_neighbor', { x: 18.0, y: 0, z: -12.0, w: 24.0, h: 11.5, d: 12.0 });
@@ -803,10 +881,12 @@ export class LevelView {
         for (let fx = 3.0; fx <= 37.0; fx += 2.0) {
           if (Math.abs(fx - sx) < 2.6) continue;
           const panel = panelSrc.clone(true);
+          panel.userData.sharedAsset = true;
           panel.position.set(fx, 1.24, fz);
           panel.scale.set(1.04, 0.96, 1.0);
           g.add(panel);
           const post = postSrc.clone(true);
+          post.userData.sharedAsset = true;
           post.position.set(fx - 1.0, 1.26, fz);
           g.add(post);
         }
@@ -849,7 +929,7 @@ export class LevelView {
   private async spawnPoliceUnit(x: number, z: number, yaw: number, quality: number) {
     try {
       const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync('./models/vehicle/marauder.glb');
-      if (this.disposed) return;
+      if (this.disposed) { disposeLoadedObjectResources(gltf.scene); return; }
       const v = gltf.scene;
       v.traverse((o: any) => {
         if (!o.isMesh) return;
@@ -1213,7 +1293,7 @@ export class ActorView {
         if (st !== this.labelState) {
           this.labelState = st;
           const mat = this.label.material as THREE.SpriteMaterial;
-          mat.map?.dispose();
+          // The label map is a shared entry in the global procedural texture cache.
           mat.map = T.labelTex(st, a.downed ? '#ff4a4a' : a.speaking ? '#52e8ff' : a.readyBreach ? '#f2c14e' : '#4fd07a');
           mat.needsUpdate = true;
         }
@@ -1226,7 +1306,7 @@ export class ActorView {
       if (this.teamMat) { this.teamMat.color.setHex(tcol); this.teamMat.emissive.setHex(tcol); }
       if (this.label) {
         const mat = this.label.material as THREE.SpriteMaterial;
-        mat.map?.dispose();
+        // The label map is a shared entry in the global procedural texture cache.
         mat.map = T.labelTex(a.name.slice(0, 7), '#' + tcol.toString(16));
         mat.needsUpdate = true;
       }

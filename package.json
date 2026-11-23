@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "tsx tests/sim.test.ts"
+    "test": "tsx tests/sim.test.ts && tsx tests/net.test.ts"
   },
   "dependencies": {
     "@fontsource/barlow": "^5.3.0",

@@ -105,6 +105,7 @@ export class PostFX {
   readonly composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
   private grade: ShaderPass;
+  private output: OutputPass;
   private fxaa: FXAAPass;
   private quality = 2;
   private t = 0;
@@ -143,10 +144,12 @@ export class PostFX {
     );
     this.composer.addPass(this.bloomPass);
 
-    this.composer.addPass(new OutputPass());
-
+    // Grade in linear HDR. FXAA expects display-space input, so tone mapping and the
+    // linear-to-display color-space conversion happen once before its final pass.
     this.grade = new ShaderPass(GradeShader);
     this.composer.addPass(this.grade);
+    this.output = new OutputPass();
+    this.composer.addPass(this.output);
 
     this.fxaa = new FXAAPass();
     this.composer.addPass(this.fxaa);
@@ -186,5 +189,8 @@ export class PostFX {
   dispose() {
     this.composer.dispose();
     this.bloomPass.dispose();
+    this.grade.dispose();
+    this.output.dispose();
+    this.fxaa.dispose();
   }
 }

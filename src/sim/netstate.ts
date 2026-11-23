@@ -20,13 +20,13 @@ export interface NetTarget { x: number; z: number; yaw: number }
 
 export function encodeSnap(sim: Sim): Snap {
   return {
-    a: sim.actors.map(a => [r2(a.x), r2(a.z), r2(a.yaw), Math.round(a.hp),
+    a: sim.actors.map(a => [r2(a.x), r2(a.z), r2(Math.atan2(Math.sin(a.yaw), Math.cos(a.yaw))), Math.round(a.hp),
       (a.alive ? 1 : 0) | (a.surrendered ? 2 : 0) | (a.restrained ? 4 : 0) | (a.armed ? 8 : 0)
       | (a.moving ? 16 : 0) | (a.target ? 32 : 0) | (a.crouch ? 64 : 0) | (a.hostile ? 128 : 0)
       | (a.prone ? 256 : 0) | (a.team === 'B' ? 512 : 0)
       | (a.downed ? 1024 : 0) | (a.torch ? 2048 : 0) | (a.ads ? 4096 : 0)
       | (a.shield ? 8192 : 0) | (a.speaking ? 16384 : 0) | (a.readyBreach ? 32768 : 0),
-      r2(a.walk % (Math.PI * 2)), r2(a.stun),
+      r2(a.walk % (Math.PI * 2)), r2(Math.max(0, a.stun)),
       ...(a.kind === 'player' ? [r2(a.pitch), a.weapon] : [])]),
     d: sim.level.doors.map(d => Math.round(d.open * 100) + d.target * 1000 + (d.locked ? 10000 : 0) + (d.wedged ? 20000 : 0)),
     dt: sim.level.doors.some(d => d.trapped || d.trapKnown) ? sim.level.doors.map(d => (d.trapped ? 1 : 0) | (d.trapKnown ? 2 : 0)) : undefined,
@@ -34,7 +34,7 @@ export function encodeSnap(sim: Sim): Snap {
     so: sim.officers.map(o => o.solo ? o.solo.order.type : ''),
     g: sim.grenades.map(g => [r2(g.x), r2(g.y), r2(g.z), g.kind === 'smoke' ? 1 : g.kind === 'gas' ? 2 : 0]),
     cl: sim.clouds.length ? sim.clouds.map(c => [c.kind === 'gas' ? 1 : 0, r2(c.x), r2(c.z), r2(c.r), r2(c.t)]) : undefined,
-    p: sim.players.map(p => [p.bangs, r2(p.flash), p.cuff ? p.cuff.id : -1, r2(p.cuffT), p.c2, p.wedges, Math.round(p.bleedT), p.reviving ? p.reviving.id : -1, r2(p.reviveT), p.smokes, p.gases, p.sensors]),
+    p: sim.players.map(p => [p.bangs, r2(p.flash), p.cuff ? p.cuff.id : -1, r2(p.cuffT), p.c2, p.wedges, Math.max(0, Math.round(p.bleedT)), p.reviving ? p.reviving.id : -1, r2(p.reviveT), p.smokes, p.gases, p.sensors]),
     ev: sim.evidence.length ? sim.evidence.map(e => [e.id, r2(e.x), r2(e.z), r2(e.yaw), e.kind === 'shotgun' ? 2 : e.kind === 'rifle' ? 1 : 0, e.secured ? 1 : 0]) : undefined,
     sp: sim.sensorPings.length ? sim.sensorPings.map(pg => [r2(pg.x), r2(pg.z), pg.kind === 'suspect' ? 1 : 0]) : undefined,
     ln: sim.actors.map(a => r2(a.lean)),
@@ -51,7 +51,73 @@ export function encodeSnap(sim: Sim): Snap {
   };
 }
 
-export function applySnap(sim: Sim, s: Snap, me: Actor, targets?: Map<Actor, NetTarget>) {
+const isRecord = (v: unknown): v is Record<string, any> => v !== null && typeof v === 'object' && !Array.isArray(v);
+const onlyKeys = (v: Record<string, any>, allowed: readonly string[]) => Object.keys(v).every(k => allowed.includes(k));
+const isFiniteIn = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
+const isIntIn = (v: unknown, min: number, max: number) => isFiniteIn(v, min, max) && Number.isInteger(v);
+const ORDER_TYPES = new Set(['follow', 'hold', 'move', 'cover', 'stack', 'breach', 'door', 'restrain', 'peek', 'defuse', 'secure']);
+const STAT_KEYS = new Set(['shotsFired', 'suspectsKilled', 'suspectsArrested', 'civsSecured', 'civsKilled', 'civsKilledByPolice', 'officersDown', 'unauthorized', 'c2Used', 'nonLethalHits', 'bangsUsed', 'evidenceSecured', 'negotiatedSurrenders']);
+const REPLAY_KINDS = new Set(['shot', 'bang', 'c2', 'death', 'arrest', 'bomb']);
+
+/** Structural, range and topology checks run before any snapshot field mutates the mirror Sim. */
+export function validateSnap(sim: Sim, raw: unknown): raw is Snap {
+  if (!isRecord(raw)) return false;
+  const s = raw as any, actors = sim.actors.length, doors = sim.level.doors.length, players = sim.players.length;
+  const w = sim.level.w, h = sim.level.h, cells = w * h;
+  const row = (v: unknown, n: number, check: (x: number, i: number) => boolean) => Array.isArray(v) && v.length === n && v.every((x: unknown, i: number) => typeof x === 'number' && check(x, i));
+  const list = (v: unknown, max: number, check: (x: any) => boolean) => Array.isArray(v) && v.length <= max && v.every(check);
+  if (!Array.isArray(s.a) || s.a.length !== actors || !s.a.every((v: unknown, i: number) => {
+    const a = sim.actors[i];
+    if (!Array.isArray(v) || v.length !== (a.kind === 'player' ? 9 : 7)) return false;
+    return isFiniteIn(v[0], -5, w + 5) && isFiniteIn(v[1], -5, h + 5) && isFiniteIn(v[2], -20, 20)
+      && isIntIn(v[3], 0, 100) && isIntIn(v[4], 0, 65535) && isFiniteIn(v[5], 0, Math.PI * 2 + 0.1)
+      && isFiniteIn(v[6], 0, 100) && (v.length === 7 || (isFiniteIn(v[7], -1.6, 1.6) && isIntIn(v[8], 0, 5)));
+  })) return false;
+  if (!row(s.d, doors, v => isIntIn(v, 0, 41000))) return false;
+  if (!Array.isArray(s.o) || s.o.length !== 2 || !s.o.every((v: unknown) => Array.isArray(v) && v.length === 3
+    && typeof v[0] === 'string' && ORDER_TYPES.has(v[0]) && (v[1] === 'free' || v[1] === 'hold') && isIntIn(v[2], -1, actors - 1))) return false;
+  if (!Array.isArray(s.g) || s.g.length > 256 || !s.g.every((v: unknown) => Array.isArray(v) && v.length === 4
+    && isFiniteIn(v[0], -5, w + 5) && isFiniteIn(v[1], -5, 20) && isFiniteIn(v[2], -5, h + 5) && isIntIn(v[3], 0, 2))) return false;
+  if (!Array.isArray(s.p) || s.p.length !== players || !s.p.every((v: unknown) => Array.isArray(v) && v.length === 12
+    && isIntIn(v[0], 0, 100) && isFiniteIn(v[1], 0, 100) && isIntIn(v[2], -1, actors - 1) && isFiniteIn(v[3], 0, 100)
+    && isIntIn(v[4], 0, 100) && isIntIn(v[5], 0, 100) && isFiniteIn(v[6], 0, 10000)
+    && isIntIn(v[7], -1, actors - 1) && isFiniteIn(v[8], 0, 100) && isIntIn(v[9], 0, 100)
+    && isIntIn(v[10], 0, 100) && isIntIn(v[11], 0, 100))) return false;
+  if (!isIntIn(s.over, 0, 2) || !isFiniteIn(s.time, 0, 100000)) return false;
+  if (s.dt !== undefined && (!row(s.dt, doors, v => isIntIn(v, 0, 3)))) return false;
+  if (s.so !== undefined && (!Array.isArray(s.so) || s.so.length !== sim.officers.length || !s.so.every((v: unknown) => v === '' || (typeof v === 'string' && ORDER_TYPES.has(v))))) return false;
+  if (s.cl !== undefined && !list(s.cl, 256, (v: unknown) => Array.isArray(v) && v.length === 5 && isIntIn(v[0], 0, 1) && isFiniteIn(v[1], -5, w + 5) && isFiniteIn(v[2], -5, h + 5) && isFiniteIn(v[3], 0, 100) && isFiniteIn(v[4], 0, 10000))) return false;
+  if (s.ev !== undefined && !list(s.ev, 512, (v: unknown) => Array.isArray(v) && v.length === 6 && isIntIn(v[0], 0, 1000000) && isFiniteIn(v[1], -5, w + 5) && isFiniteIn(v[2], -5, h + 5) && isFiniteIn(v[3], -20, 20) && isIntIn(v[4], 0, 2) && isIntIn(v[5], 0, 1))) return false;
+  if (s.sp !== undefined && !list(s.sp, 256, (v: unknown) => Array.isArray(v) && v.length === 3 && isFiniteIn(v[0], -5, w + 5) && isFiniteIn(v[1], -5, h + 5) && isIntIn(v[2], 0, 1))) return false;
+  if (s.ln !== undefined && !row(s.ln, actors, v => isFiniteIn(v, -1, 1))) return false;
+  if (s.pw !== undefined && !isIntIn(s.pw, 0, 1)) return false;
+  if (s.bm !== undefined && s.bm !== null && (!Array.isArray(s.bm) || s.bm.length !== 2 || !isFiniteIn(s.bm[0], 0, 10000) || !isIntIn(s.bm[1], 0, 1))) return false;
+  const validCells = (v: unknown) => list(v, cells, x => isIntIn(x, 0, cells - 1));
+  if (s.bw !== undefined && !validCells(s.bw)) return false;
+  if (s.bp !== undefined && !validCells(s.bp)) return false;
+  if (s.bd !== undefined && !list(s.bd, doors, x => isIntIn(x, 0, doors - 1))) return false;
+  if (s.bs !== undefined && !isFiniteIn(s.bs, 0, 100)) return false;
+  if (s.st !== undefined && (!isRecord(s.st) || Object.entries(s.st).some(([k, v]) => !STAT_KEYS.has(k) || !isIntIn(v, 0, 100000000)))) return false;
+  if (s.mvp !== undefined && !list(s.mvp, players, (m: unknown) => isRecord(m)
+    && onlyKeys(m, ['name', 'arrests', 'kills', 'shots', 'hits', 'dmgTaken'])
+    && typeof m.name === 'string' && m.name.length <= 32
+    && ['arrests', 'kills', 'shots', 'hits', 'dmgTaken'].every(k => isFiniteIn(m[k], 0, 100000000)))) return false;
+  if (s.rf !== undefined && !list(s.rf, 1600, (f: unknown) => isRecord(f) && onlyKeys(f, ['t', 'actors']) && isFiniteIn(f.t, 0, 100000)
+    && Array.isArray(f.actors) && f.actors.length === actors && f.actors.every((a: unknown, i: number) => isRecord(a)
+      && onlyKeys(a, ['id', 'kind', 'team', 'x', 'z', 'alive', 'down', 'restrained'])
+      && a.id === i && ['player', 'officer', 'suspect', 'civ'].includes(a.kind) && (a.team === 'A' || a.team === 'B')
+      && isFiniteIn(a.x, -5, w + 5) && isFiniteIn(a.z, -5, h + 5) && typeof a.alive === 'boolean' && typeof a.down === 'boolean' && typeof a.restrained === 'boolean'))) return false;
+  if (s.re !== undefined && !list(s.re, 800, (e: unknown) => isRecord(e)
+    && onlyKeys(e, ['t', 'kind', 'x', 'z', 'x2', 'z2', 'team']) && isFiniteIn(e.t, 0, 100000)
+    && typeof e.kind === 'string' && REPLAY_KINDS.has(e.kind) && isFiniteIn(e.x, -5, w + 5) && isFiniteIn(e.z, -5, h + 5)
+    && (e.x2 === undefined || isFiniteIn(e.x2, -5, w + 5)) && (e.z2 === undefined || isFiniteIn(e.z2, -5, h + 5))
+    && (e.team === undefined || e.team === 'A' || e.team === 'B'))) return false;
+  return true;
+}
+
+export function applySnap(sim: Sim, raw: Snap | unknown, me: Actor, targets?: Map<Actor, NetTarget>): boolean {
+  if (!validateSnap(sim, raw)) return false;
+  const s = raw;
   s.a.forEach((v, i) => {
     const a = sim.actors[i]; if (!a) return; const f = v[4];
     if (a === me) {
@@ -123,15 +189,68 @@ export function applySnap(sim: Sim, s: Snap, me: Actor, targets?: Map<Actor, Net
     if (s.re) sim.replayEvents = s.re;
     sim.over = { win: s.over === 2 };
   }
+  return true;
+}
+
+const EV_FIELDS: Record<string, string[]> = {
+  shot: ['by', 'x', 'y', 'z', 'x2', 'y2', 'z2', 'hit', 'head', 'kill', 'nx', 'ny', 'nz', 'mat'],
+  pen: ['x', 'y', 'z', 'nx', 'ny', 'nz'], shield: ['a', 'x', 'y', 'z', 'nx', 'ny', 'nz'], suppress: ['strength'],
+  hurt: ['a', 'head'], death: ['a'], door: ['door', 'open', 'kick'], say: ['a', 'text', 'shout'], trap: ['door', 'kind'],
+  evidence: ['id', 'x', 'z'], sensor: ['x', 'z', 'y', 'kind'], shout: ['a'], bang: ['x', 'z', 'y'], throw: ['x', 'z', 'y'],
+  smoke: ['x', 'z', 'y'], gas: ['x', 'z', 'y'], optiwand: ['door', 'side', 'msg'], c2: ['x', 'z', 'y'], glass: ['x', 'z'],
+  break: ['kind', 'x', 'y', 'z'], power: ['on'], phone: ['x', 'z'], taser: ['x', 'y', 'z', 'x2', 'y2', 'z2'],
+  bomb: ['kind', 'x', 'z'], cuff: ['a', 'by'], surrender: ['a'], marker: ['x', 'z', 'team'], ping: ['by', 'x', 'y', 'z', 'label'],
+  downed: ['a'], revive: ['a', 'by'], breachSync: ['step'], share: ['from', 'to', 'kind'], bark: ['a', 'kind'], info: ['text'],
+  mutiny: ['by', 'a'], end: ['win'],
+};
+const EV_REQUIRED: Record<string, string[]> = {
+  shot: ['by', 'x', 'y', 'z', 'x2', 'y2', 'z2', 'hit'], pen: ['x', 'y', 'z', 'nx', 'ny', 'nz'],
+  shield: ['a', 'x', 'y', 'z', 'nx', 'ny', 'nz'], suppress: ['strength'], hurt: ['a', 'head'], death: ['a'],
+  door: ['door', 'open'], say: ['a', 'text'], trap: ['door', 'kind'], evidence: ['id', 'x', 'z'], sensor: ['x', 'z'],
+  shout: ['a'], bang: ['x', 'z'], throw: ['x', 'z'], smoke: ['x', 'z'], gas: ['x', 'z'], optiwand: ['door', 'side', 'msg'],
+  c2: ['x', 'z'], glass: ['x', 'z'], break: ['kind', 'x', 'y', 'z'], power: ['on'], phone: ['x', 'z'],
+  taser: ['x', 'y', 'z', 'x2', 'y2', 'z2'], bomb: ['kind', 'x', 'z'], cuff: ['a', 'by'], surrender: ['a'],
+  marker: ['x', 'z', 'team'], ping: ['by', 'x', 'y', 'z', 'label'], downed: ['a'], revive: ['a', 'by'],
+  breachSync: ['step'], share: ['from', 'to', 'kind'], bark: ['a', 'kind'], info: ['text'], mutiny: ['by', 'a'], end: ['win'],
+};
+const ACTOR_REFS = new Set(['a', 'by', 'from', 'to']);
+const BOOL_FIELDS = new Set(['head', 'kill', 'open', 'kick', 'shout', 'on', 'win']);
+const ENUM_FIELDS: Record<string, Record<string, string[]>> = {
+  shot: { hit: ['wall', 'actor', 'none'], mat: ['concrete', 'wood', 'glass', 'metal'] },
+  trap: { kind: ['found', 'disarmed', 'detonated'] }, sensor: { kind: ['plant', 'ping'] },
+  break: { kind: ['pc', 'server', 'glass'] }, bomb: { kind: ['defused', 'detonate'] },
+  marker: { team: ['A', 'B'] }, share: { kind: ['bang', 'ammo'] },
+  bark: { kind: ['spot', 'surrender', 'pain', 'die', 'panic', 'unrest'] },
+};
+
+export function decodeEv(sim: Sim, raw: Record<string, any> | unknown): Ev | null {
+  if (!isRecord(raw) || typeof raw.t !== 'string' || !Object.prototype.hasOwnProperty.call(EV_FIELDS, raw.t)) return null;
+  const allowed = new Set(['t', ...EV_FIELDS[raw.t]]), required = EV_REQUIRED[raw.t];
+  if (!required) return null;
+  if (Object.keys(raw).some(k => !allowed.has(k)) || required.some(k => !Object.prototype.hasOwnProperty.call(raw, k))) return null;
+  const e: Record<string, unknown> = Object.create(null);
+  for (const [k, v] of Object.entries(raw)) {
+    if (k === 't') { e.t = v; continue; }
+    if (ACTOR_REFS.has(k)) {
+      if (!isRecord(v) || Object.keys(v).length !== 1 || !isIntIn(v.$a, 0, sim.actors.length - 1)) return null;
+      e[k] = sim.actors[v.$a]; continue;
+    }
+    if (k === 'door') {
+      if (!isRecord(v) || Object.keys(v).length !== 1 || !isIntIn(v.$d, 0, sim.level.doors.length - 1)) return null;
+      e[k] = sim.level.doors[v.$d]; continue;
+    }
+    if (BOOL_FIELDS.has(k)) { if (typeof v !== 'boolean') return null; e[k] = v; continue; }
+    const enumValues = ENUM_FIELDS[raw.t]?.[k];
+    if (enumValues) { if (typeof v !== 'string' || !enumValues.includes(v)) return null; e[k] = v; continue; }
+    if (typeof v === 'string') { if (v.length > 400) return null; e[k] = v; continue; }
+    if (!isFiniteIn(v, -10000, 10000)) return null;
+    e[k] = v;
+  }
+  return e as unknown as Ev;
 }
 
 export function encodeEv(e: Ev): Record<string, unknown> {
   const o: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(e)) o[k] = v instanceof Actor ? { $a: v.id } : k === 'door' ? { $d: (v as Door).id } : typeof v === 'number' ? r2(v) : v;
   return o;
-}
-export function decodeEv(sim: Sim, o: Record<string, any>): Ev {
-  const e: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(o)) e[k] = v && typeof v === 'object' && '$a' in v ? sim.actors[v.$a] : v && typeof v === 'object' && '$d' in v ? sim.level.doors[v.$d] : v;
-  return e as unknown as Ev;
 }

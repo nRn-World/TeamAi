@@ -6,15 +6,17 @@ import { MenuScene } from './game/menuscene';
 import { operatorEnv } from './game/operator';
 import { loadWeapons, weaponsReady, FpsArms, studioEnv, setShieldCracks } from './game/weapons';
 import { upgradeViewModel } from './game/world';
-import { loadProps } from './game/props';
+import { loadProps, propAssetKeysFor } from './game/props';
 import '@fontsource/barlow-condensed/500.css'; import '@fontsource/barlow-condensed/600.css'; import '@fontsource/barlow-condensed/700.css'; import '@fontsource/barlow/400.css'; import '@fontsource/barlow/600.css';
 import { parseCommands, shouldUseAiBrain, ACTION_LABEL, DIR_LABEL } from './sim/commands';
 import { TacticalAi, AI_MODELS, AiState, AiResult } from './game/ai';
 import { LevelView, ActorView, FX, makeViewModel, TEAM_COLOR } from './game/world';
 import { PostFX } from './game/postfx';
+import { disconnectRemotePlayer, findReconnectSlot, moveRemotePlayer, reconnectRemotePlayer, type RemoteMovementBudget } from './game/netplayers';
+import { canRemoteFireDuringReload, cancelRemoteShellReloadForFire } from './game/netcombat';
 import {
   RANKS, GEAR_NAMES, SQUAD, loadCareer, saveCareer, rankOf, nextRank, isGearUnlocked, gearLockLabel,
-  missionUnlocked, clearedCount, nextUncleared, campaignComplete, deployRoster, applyMissionResult,
+  clearedCount, nextUncleared, campaignComplete, deployRoster, applyMissionResult,
   type GearKey, type AppliedResult,
 } from './game/career';
 import { GameAudio, Speech } from './game/audio';
@@ -31,6 +33,13 @@ const LEAN_CAMERA_DROP = 0.16; // lower the eye slightly while peeking around co
 const LEAN_RESPONSE = 14;
 const params = new URLSearchParams(location.search);
 const AUTO = params.has('auto');
+const seedText = params.get('seed');
+const seedParam = Number(seedText);
+const START_SEED = !!seedText?.trim() && Number.isSafeInteger(seedParam) ? seedParam : 1;
+const missionText = params.get('mission');
+const missionParam = Number(missionText);
+// A mission deep-link is a tester shortcut that starts one map directly without changing campaign progress.
+const DIRECT_MISSION = missionText?.trim() && Number.isInteger(missionParam) && missionParam >= 0 && missionParam < MISSIONS.length ? missionParam : null;
 
 // ---------------- settings & career ----------------
 const defaults = { sens: 1, adsSens: 0.65, vol: 0.8, music: 1, mic: 1, ptt: 1, lang: 'en-US', asr: 'local', tts: 1, head: 0, qual: 1, diff: 1, name: '', ai: 0, aiModel: AI_MODELS[0].id as string, primary: 'carbine' as PrimaryLoadout, secondary: 'pistol' as SecondaryLoadout, stream: 0, censor: 1, pip: 1 };
@@ -73,6 +82,12 @@ const SECONDARY_SPECS: Record<SecondaryLoadout, WeaponSpec> = {
   pistol: { name: 'P-17 SERVICE', mag: 17, res: 68, rate: 0.15, dmg: 26, auto: false, spread: 0.008, reload: 1.4, kick: 0.016, gun: 'pistol', pen: 0 },
   taser: { name: 'ARC-2 STUNNER', mag: 2, res: 12, rate: 0.45, dmg: 4, auto: false, spread: 0.006, reload: 1.5, kick: 0.008, nonLethal: true, taser: true, gun: 'pistol', pen: 0 },
 };
+interface RemoteCombatState {
+  specs: [WeaponSpec, WeaponSpec];
+  ammo: [number, number]; reserve: [number, number]; lastShot: number;
+  reloadUntil: [number, number]; speedReload: [boolean, boolean]; shellReload: [boolean, boolean];
+  activeReload: number | null; switchUntil: number; movement: RemoteMovementBudget; lastPingAt: number; lastCommandAt: number; lastShoutAt: number;
+}
 const ORDER_LABEL: Record<string, string> = {
   follow: 'FOLLOWING', hold: 'HOLDING', move: 'MOVING', cover: 'COVERING YOU',
   stack: 'AT DOOR', breach: 'BREACHING', door: 'DOOR', restrain: 'SECURING',
@@ -93,6 +108,7 @@ class Game {
   audio = new GameAudio(); speech = new Speech(); webVoice = new Voice(); localVoice = new LocalVoice(); voice: Voice | LocalVoice = this.webVoice; ai = new TacticalAi();
   net = new Net(); connIdx = new Map<DataConnection, number>(); connName = new Map<DataConnection, string>(); snapT = 0; inT = 0; stepPh = new Map<Actor, number>(); lobbyMission = 0; lobbyNames: string[] = [];
   netTargets = new Map<Actor, NetTarget>();
+  private remoteCombat = new Map<number, RemoteCombatState>();
   lobbyMeta = new Map<DataConnection, { ready: boolean; prim: PrimaryLoadout; sec: SecondaryLoadout; debReady?: boolean }>();
   lobbyIds: string[] = [];
   lobbyList: { name: string; peerId: string; ready: boolean; prim: PrimaryLoadout; sec: SecondaryLoadout; speaking?: boolean; debReady?: boolean }[] = [];
@@ -117,7 +133,7 @@ class Game {
   planTool: 'B' | 'A' | 'c2' | 'flash' = 'B';
   briefLevel: Level | null = null;
   dispatchPlaying = false;
-  dispatchOn = false; isDaily = false; stress = 0; clubBeatT = 0; hbT = 0; breathT = 0; acousticT = 0; sensorPingSfxT = 0; radioCardT = 0;
+  dispatchOn = false; isDaily = false; private directMissionRun = false; stress = 0; clubBeatT = 0; hbT = 0; breathT = 0; acousticT = 0; sensorPingSfxT = 0; radioCardT = 0;
   shieldHits = 0; suppressFx = 0; highReadyK = 0; lastRT = 0; speedReload = false; reloadShell = false; reloadDur = 2;
   private censorBoxes: HTMLDivElement[] = [];
   private replayRaf = 0; private replayPlaying = false; private replayTime = 0; private replayLast = 0; private replayBase: HTMLCanvasElement | null = null;
@@ -166,7 +182,8 @@ class Game {
     window.addEventListener('pointerdown', unlockMenuAudio, { once: true });
     window.addEventListener('keydown', unlockMenuAudio, { once: true });
     requestAnimationFrame(() => this.frame());
-    if (AUTO) this.start(+(params.get('auto') || 0), +(params.get('seed') || 1));
+    if (AUTO) this.start(+(params.get('auto') || 0), START_SEED);
+    else if (DIRECT_MISSION !== null) { this.directMissionRun = true; this.start(DIRECT_MISSION, START_SEED); }
   }
   syncMenuMusic() {
     void this.audio.setMenuMusic(this.state === 'menu' && !!S.music && !AUTO);
@@ -220,7 +237,7 @@ class Game {
   // ---------------- menus ----------------
   showPlan = false;
   selectMission(i: number) {
-    if (!missionUnlocked(best, i)) i = nextUncleared(best, MISSIONS.length) ?? 0;
+    if (!Number.isInteger(i) || i < 0 || i >= MISSIONS.length) return;
     this.mission = i;
     const m = MISSIONS[i];
     const LOCS = ['KISTA, STOCKHOLM', 'DOCKLANDS, HARBOR', 'CITY CENTER', 'FINANCIAL DISTRICT', 'DOWNTOWN UNDERGROUND', 'OUTSKIRTS COMPOUND', 'KISTA SCIENCE TOWER · STOCKHOLM'];
@@ -305,11 +322,10 @@ class Game {
           : `<div><b>${m.name} · ${m.role}</b>${m.perk}</div>`;
       }).join('');
     }
-    // locked operations on the mission strip
+    // Every mission stays selectable; campaign completion is tracked separately.
     document.querySelectorAll<HTMLElement>('#mPills .mpill').forEach((el, i) => {
-      const locked = !missionUnlocked(best, i);
-      el.classList.toggle('locked', locked);
-      el.title = locked ? `Locked — complete operation ${i} first` : MISSIONS[i].name;
+      el.classList.remove('locked');
+      el.title = MISSIONS[i].name;
     });
   }
   updateRankDock() {
@@ -330,11 +346,6 @@ class Game {
       b.textContent = `0${i + 1}`;
       b.onclick = () => {
         this.audio.init(); this.audio.ui();
-        if (!missionUnlocked(best, i)) {
-          const bb = $('mBestBadge'); bb.textContent = `LOCKED · CLEAR OPERATION 0${i} FIRST`; bb.className = 'none';
-          this.audio.fail();
-          return;
-        }
         this.selectMission(i);
       };
       pills.appendChild(b);
@@ -359,7 +370,6 @@ class Game {
     });
     $('btnStartMission').onclick = () => {
       this.audio.init(); this.audio.ui(); this.isDaily = false;
-      if (!missionUnlocked(best, this.mission)) { this.audio.fail(); return; }
       this.openBrief(this.mission);
     };
     const di = dailyInfo();
@@ -871,7 +881,7 @@ class Game {
     click('btnAgain', () => { show('debrief', false); if (this.isDaily) { const di = dailyInfo(); this.start(di.mission, di.seed, 1, 0, Math.max(1, S.diff)); this.lock(); } else this.newRound(this.mission); });
     click('btnNext', () => {
       const next = this.mission + 1;
-      if (next >= MISSIONS.length || !missionUnlocked(best, next)) return;
+      if (next >= MISSIONS.length) return;
       show('debrief', false); this.isDaily = false; this.newRound(next);
     });
     click('btnDispatchToggle', () => { show('pause', false); this.state = 'play'; this.toggleDispatch(true); });
@@ -912,7 +922,7 @@ class Game {
       void this.ai.ensureLoaded(S.aiModel);
     };
   }
-  toMenu() { this.stopReplay(); this.dispatchPlaying = false; this.audio.stopDispatch(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn', 'mutinyWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); this.updateRankDock(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
+  toMenu() { this.stopReplay(); this.dispatchPlaying = false; this.audio.stopDispatch(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.remoteCombat.clear(); this.directMissionRun = false; this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn', 'mutinyWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); this.updateRankDock(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
   // ---------------- online co-op ----------------
   private currentMods(): CoopMods & { daily?: boolean } {
     const black = ($('modBlackout') as HTMLInputElement).checked;
@@ -933,6 +943,11 @@ class Game {
     if (this.net.role === 'host') {
       const conns = this.net.conns.slice(0, 3), names = [S.name || 'Host', ...conns.map((c, i) => this.connName.get(c) || 'Player ' + (i + 2))];
       const shields = [this.lobbyPrim === 'shield', ...conns.map(c => (this.lobbyMeta.get(c)?.prim ?? 'carbine') === 'shield')];
+      this.remoteCombat.clear();
+      conns.forEach((c, i) => {
+        const loadout = this.lobbyMeta.get(c);
+        this.remoteCombat.set(i + 1, this.newRemoteCombat(loadout?.prim ?? 'carbine', loadout?.sec ?? 'pistol', !!mods.pistolOnly));
+      });
       this.connIdx.clear();
       this.lobbyMeta.forEach(meta => { meta.debReady = false; });
       this.debReady = false;
@@ -943,6 +958,7 @@ class Game {
   }
   bindNet() {
     const err = (e: any) => {
+      if (e?.message === 'closed') return; // a cancelled connection attempt is not a user-facing failure
       const t = e?.type, m = String(e?.message || '');
       const why = m.startsWith('Hittade') ? m : t === 'network' || t === 'server-error' || t === 'socket-error' || t === 'socket-closed' || m === 'timeout' ? 'The matchmaking service that hands out room codes is not responding. It may be down, or blocked by an ad blocker, VPN or firewall. Turn those off for this page and try again in a moment.' : t === 'browser-incompatible' ? 'This browser does not support direct connections (WebRTC). Use Chrome or Edge.' : t === 'peer-unavailable' ? 'No room found with that code.' : 'Unknown error (' + (t || m || e) + ').';
       $('mpErr').textContent = 'Could not connect. ' + why;
@@ -994,10 +1010,12 @@ class Game {
     const sel = $('lobbyMission') as HTMLSelectElement; sel.innerHTML = MISSIONS.map((m, i) => `<option value="${i}">Mission ${i + 1}: ${m.name}</option>`).join(''); sel.onchange = () => this.lobby();
     this.net.onPeers = () => {
       if (this.net.role !== 'host') return;
+      const connected = new Set(this.net.conns);
+      for (const c of this.connName.keys()) if (!connected.has(c)) { this.connName.delete(c); this.lobbyMeta.delete(c); }
       if (this.sim && (this.state === 'play' || this.state === 'pause')) {
         for (const [c, i] of this.connIdx) if (!this.net.conns.includes(c)) {
           const pa = this.sim.players[i]; this.connIdx.delete(c);
-          if (pa?.alive) { pa.alive = false; pa.downed = false; pa.hp = 0; this.log(`${pa.name} disconnected (slot held for reconnect).`, 'warn'); this.sim.checkPlayers(); }
+          if (pa && disconnectRemotePlayer(pa)) { this.log(`${pa.name} disconnected (slot held for reconnect).`, 'warn'); this.sim.checkPlayers(); }
         }
       }
       this.lobby();
@@ -1064,9 +1082,86 @@ class Game {
     $('btnLobbyStart').classList.toggle('hidden', !host);
     $('lobbyInfo').textContent = (host ? 'Give the room code to your friends. Up to 4 players. Reconnect supported with matching callsign.' : 'The game starts automatically when the host launches.') + (this.net.micOk ? ' Spatial Voice & Tactical Radio active.' : this.net.stream ? ' Listen-only voice mode.' : ' Allow microphone access to join voice chat.');
   }
+  private newRemoteCombat(prim: PrimaryLoadout, sec: SecondaryLoadout, pistolOnly = false): RemoteCombatState {
+    const specs: [WeaponSpec, WeaponSpec] = pistolOnly
+      ? [SECONDARY_SPECS.pistol, SECONDARY_SPECS.taser]
+      : [PRIMARY_SPECS[prim] ?? PRIMARY_SPECS.carbine, SECONDARY_SPECS[sec] ?? SECONDARY_SPECS.pistol];
+    return {
+      specs, ammo: [specs[0].mag, specs[1].mag], reserve: [specs[0].res, specs[1].res],
+      lastShot: -1000, reloadUntil: [0, 0], speedReload: [false, false], shellReload: [false, false],
+      activeReload: null, switchUntil: 0, movement: { lastInputAt: performance.now(), timeCredit: 0 },
+      lastPingAt: -1000, lastCommandAt: -1000, lastShoutAt: -1000,
+    };
+  }
+  private advanceRemoteReload(state: RemoteCombatState, now: number) {
+    for (let i = 0; i < 2; i++) {
+      if (state.reloadUntil[i] <= 0 || state.reloadUntil[i] > now) continue;
+      const ws = state.specs[i];
+      if (state.shellReload[i]) {
+        let loops = 0;
+        while (state.reloadUntil[i] > 0 && state.reloadUntil[i] <= now && state.ammo[i] < ws.mag && state.reserve[i] > 0 && loops++ < ws.mag) {
+          state.ammo[i]++; state.reserve[i]--;
+          if (state.ammo[i] < ws.mag && state.reserve[i] > 0) state.reloadUntil[i] += 0.48;
+          else { state.reloadUntil[i] = 0; state.shellReload[i] = false; }
+        }
+      } else {
+        if (state.speedReload[i] && state.ammo[i] > 0) state.ammo[i] = 0;
+        const n = Math.min(ws.mag - state.ammo[i], state.reserve[i]);
+        state.ammo[i] += n; state.reserve[i] -= n;
+        state.reloadUntil[i] = 0; state.speedReload[i] = false;
+      }
+      if (state.reloadUntil[i] <= 0 && state.activeReload === i) state.activeReload = null;
+    }
+  }
+  private startRemoteReload(state: RemoteCombatState, weapon: number, speed: boolean, now: number) {
+    this.advanceRemoteReload(state, now);
+    const ws = state.specs[weapon];
+    if (state.reloadUntil[weapon] > now) {
+      if (speed && ws.gun !== 'shotgun' && !state.speedReload[weapon]) {
+        state.speedReload[weapon] = true;
+        state.reloadUntil[weapon] = now + Math.max(0.25, (state.reloadUntil[weapon] - now) * 0.58);
+      }
+      return;
+    }
+    if (state.ammo[weapon] >= ws.mag || state.reserve[weapon] <= 0) return;
+    state.activeReload = weapon;
+    if (ws.gun === 'shotgun') {
+      state.shellReload[weapon] = true; state.speedReload[weapon] = false; state.reloadUntil[weapon] = now + 0.48;
+    } else {
+      state.shellReload[weapon] = false; state.speedReload[weapon] = speed;
+      state.reloadUntil[weapon] = now + ws.reload * (speed ? 0.62 : 1);
+    }
+  }
+  private remoteEye(sim: Sim, pa: Actor, lean: { lx: number; lz: number; actual: number }) {
+    const stance = !pa.alive ? 0.35 : pa.downed ? 0.48 : pa.prone ? 0.36 : pa.crouch ? 1.12 : 1.62;
+    return groundHeightAt(sim.level, pa.x, pa.z) + stance + (pa.alive && !pa.downed ? pa.jumpY : 0) - Math.abs(lean.actual) * LEAN_CAMERA_DROP;
+  }
+  private remoteFire(sim: Sim, pa: Actor, state: RemoteCombatState, msg: Msg) {
+    const weapon = msg.weapon as number;
+    if (!Number.isInteger(weapon) || weapon < 0 || weapon > 1) return;
+    const ws = state.specs[weapon], dirs = msg.dirs as number[][];
+    this.advanceRemoteReload(state, sim.time);
+    const pellets = ws.pellets ?? 1;
+    if (pa.downed || !pa.alive || weapon !== pa.weapon || sim.time < state.switchUntil || !Array.isArray(dirs) || dirs.length !== pellets
+      || state.ammo[weapon] <= 0 || !canRemoteFireDuringReload(state, weapon, sim.time)
+      || sim.time - state.lastShot + 1e-6 < ws.rate) return;
+    const normalized = dirs.map(d => {
+      const n = Math.hypot(d[0], d[1], d[2]);
+      return n > 0.5 ? [d[0] / n, d[1] / n, d[2] / n] : null;
+    });
+    if (normalized.some(d => !d)) return;
+    // Only a fully authorized, well-formed shot may interrupt a loaded shell's reload.
+    cancelRemoteShellReloadForFire(state, weapon);
+    state.ammo[weapon]--; state.lastShot = sim.time;
+    const lean = sim.leanOffset(pa, pa.lean), ox = pa.x + lean.lx, oz = pa.z + lean.lz, oy = this.remoteEye(sim, pa, lean);
+    for (const d of normalized as number[][]) {
+      sim.fire(pa, ox, oy, oz, d[0], d[1], d[2], ws.dmg, { nonLethal: !!ws.nonLethal, taser: !!ws.taser, pen: ws.pen ?? 0 });
+    }
+  }
   fromHost(m: Msg) {
     const sim = this.sim;
     if (m.t === 'lobby') {
+      if (!Number.isInteger(m.mission) || m.mission < 0 || m.mission >= MISSIONS.length) return;
       this.lobbyMe = (m.ids as string[]).indexOf(this.net.id);
       this.lobbyNames = m.names; this.lobbyIds = m.ids || []; this.lobbyMission = m.mission;
       if (m.list) this.lobbyList = m.list;
@@ -1076,25 +1171,32 @@ class Game {
       if (!$('lobby').classList.contains('hidden')) this.lobby();
       if (!$('debrief').classList.contains('hidden')) this.updateDebReadyUi();
     }
-    else if (m.t === 'start') { this.isDaily = !!m.daily; this.debReady = false; this.start(m.mission, m.seed, m.n, m.you, m.diff, m.names, m.mods || {}, m.shields || [], m.preplan || this.preplan || {}); }
+    else if (m.t === 'start') {
+      if (!Number.isInteger(m.mission) || m.mission < 0 || m.mission >= MISSIONS.length || !Number.isInteger(m.you) || m.you < 0 || m.you >= m.n) return;
+      this.isDaily = !!m.daily; this.debReady = false;
+      this.start(m.mission, m.seed, m.n, m.you, m.diff, m.names, m.mods || {}, m.shields || [], m.preplan || this.preplan || {});
+    }
     else if (m.t === 'snap' && sim && (this.state === 'play' || this.state === 'pause')) applySnap(sim, m.s, sim.player, this.netTargets);
-    else if (m.t === 'ev' && sim && (this.state === 'play' || this.state === 'pause')) for (const e of m.e) this.handle(decodeEv(sim, e));
+    else if (m.t === 'ev' && sim && (this.state === 'play' || this.state === 'pause')) for (const e of m.e) { const decoded = decodeEv(sim, e); if (decoded) this.handle(decoded); }
   }
   fromClient(c: DataConnection, m: Msg) {
+    if (!this.net.conns.includes(c)) return;
     if (m.t === 'hello') {
-      const nm = String(m.name || 'Player').slice(0, 12);
+      if (this.connName.has(c)) return; // reconnect grants a slot once per new data connection
+      const nm = (m.name || 'Player').trim().replace(/[<>&]/g, '').slice(0, 12) || 'Player';
       this.connName.set(c, nm);
-      this.lobbyMeta.set(c, { ready: !!m.ready, prim: (m.prim as PrimaryLoadout) || 'carbine', sec: (m.sec as SecondaryLoadout) || 'pistol', debReady: false });
+      this.lobbyMeta.set(c, { ready: m.ready, prim: m.prim as PrimaryLoadout, sec: m.sec as SecondaryLoadout, debReady: false });
       // Drop-in / Reconnect into active match if matching disconnected slot exists
       if (this.sim && !this.sim.over && (this.state === 'play' || this.state === 'pause')) {
         const sim = this.sim;
-        const activeIdxs = new Set(this.connIdx.values());
-        let slot = sim.players.findIndex((pl, idx) => idx > 0 && !activeIdxs.has(idx) && pl.name.toLowerCase() === nm.toLowerCase());
-        if (slot < 0) slot = sim.players.findIndex((_, idx) => idx > 0 && !activeIdxs.has(idx));
+        const slot = findReconnectSlot(sim.players, this.connIdx.values(), nm);
         if (slot > 0) {
           const pa = sim.players[slot];
-          pa.name = nm; pa.alive = true; pa.downed = false; pa.hp = Math.max(50, pa.hp || 75);
-          pa.shield = m.prim === 'shield';
+          // A reconnect restarts its local weapon HUD at full magazines, so reset the host-side
+          // authoritative magazine state to the reconnecting client's validated loadout as well.
+          const combat = this.newRemoteCombat(m.prim as PrimaryLoadout, m.sec as SecondaryLoadout, !!sim.mods.pistolOnly);
+          this.remoteCombat.set(slot, combat);
+          reconnectRemotePlayer(pa, nm, !!combat.specs[0].shield);
           this.connIdx.set(c, slot);
           const names = sim.players.map(pl => pl.name);
           const shields = sim.players.map(pl => pl.shield);
@@ -1109,62 +1211,81 @@ class Game {
       return;
     }
     if (m.t === 'lobbyMeta') {
+      if (this.connIdx.has(c) || (this.sim && (this.state === 'play' || this.state === 'pause'))) return;
       const cur = this.lobbyMeta.get(c) ?? { ready: false, prim: 'carbine' as PrimaryLoadout, sec: 'pistol' as SecondaryLoadout };
-      cur.ready = !!m.ready;
-      if (m.prim) cur.prim = m.prim;
-      if (m.sec) cur.sec = m.sec;
-      this.lobbyMeta.set(c, cur);
-      this.lobby();
-      return;
+      cur.ready = m.ready; cur.prim = m.prim as PrimaryLoadout; cur.sec = m.sec as SecondaryLoadout;
+      this.lobbyMeta.set(c, cur); this.lobby(); return;
     }
     if (m.t === 'debReady') {
       const cur = this.lobbyMeta.get(c) ?? { ready: true, prim: 'carbine' as PrimaryLoadout, sec: 'pistol' as SecondaryLoadout };
-      cur.debReady = !!m.ready;
-      this.lobbyMeta.set(c, cur);
-      this.lobby();
-      this.updateDebReadyUi();
+      cur.debReady = m.ready; this.lobbyMeta.set(c, cur); this.lobby(); this.updateDebReadyUi(); return;
+    }
+    const sim = this.sim, i = this.connIdx.get(c);
+    if (!sim || i === undefined || i <= 0 || sim.over) return;
+    const pa = sim.players[i]; if (!pa) return;
+    let combat = this.remoteCombat.get(i);
+    if (!combat) {
+      const loadout = this.lobbyMeta.get(c);
+      combat = this.newRemoteCombat(loadout?.prim ?? 'carbine', loadout?.sec ?? 'pistol', !!sim.mods.pistolOnly);
+      this.remoteCombat.set(i, combat);
+    }
+    this.advanceRemoteReload(combat, sim.time);
+    if (m.t === 'ping') {
+      if (!pa.alive || pa.downed || sim.time - combat.lastPingAt < 1) return;
+      const d = m.d as number[], lean = sim.leanOffset(pa, pa.lean);
+      combat.lastPingAt = sim.time;
+      sim.playerPing(pa, pa.x + lean.lx, this.remoteEye(sim, pa, lean), pa.z + lean.lz, d[0], d[1], d[2]);
       return;
     }
-    const sim = this.sim, i = this.connIdx.get(c); if (!sim || !i || sim.over) return; const pa = sim.players[i]; if (!pa) return;
-    const num = (v: any) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-    if (m.t === 'ping') { sim.playerPing(pa, num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2])); return; }
     if (!pa.alive) return;
     switch (m.t) {
       case 'in': {
-        const x = num(m.x), z = num(m.z), d = Math.hypot(x - pa.x, z - pa.z);
-        if (!pa.downed && d < 3) {
-          const bx = pa.x, bz = pa.z;
-          // Remote positions are untrusted movement input, not a teleport: sweep through the same
-          // wall/prop/door/vehicle colliders as local movement instead of checking only the centre tile.
-          sim.moveCircle(pa, x - pa.x, z - pa.z);
-          const moved = Math.hypot(pa.x - bx, pa.z - bz);
-          pa.walk += moved * 2.4;
-          sim.pushTrail(pa);
+        const nextWeapon = m.wp as number;
+        if (nextWeapon !== pa.weapon) combat.switchUntil = sim.time + 0.35;
+        if (combat.activeReload !== null && combat.activeReload !== nextWeapon) {
+          const old = combat.activeReload; combat.reloadUntil[old] = 0; combat.shellReload[old] = false; combat.speedReload[old] = false; combat.activeReload = null;
         }
-        pa.yaw = num(m.yaw); pa.pitch = num(m.pitch);
-        pa.crouch = !!m.cr; pa.prone = !!m.pr;
-        pa.lean = sim.leanOffset(pa, num(m.ln)).actual;
-        pa.jumpY = Math.max(0, Math.min(0.8, num(m.jy))); pa.moving = !pa.downed && !!m.mv; pa.torch = m.tc !== undefined ? !!m.tc : pa.torch; pa.ads = !!m.ads; pa.weapon = num(m.wp); pa.shield = !!m.sh; pa.speaking = !!m.sp; break;
+        pa.crouch = m.cr; pa.prone = m.pr;
+        if (!pa.downed) {
+          // Bound average movement speed with a small time-credit window for network jitter; packet
+          // bursts cannot add a fresh positional allowance each time they arrive.
+          moveRemotePlayer(sim, pa, m.x, m.z, pa.crouch, pa.prone, performance.now(), combat.movement);
+        } else pa.moving = false;
+        pa.yaw = m.yaw; pa.pitch = m.pitch; pa.lean = sim.leanOffset(pa, m.ln).actual;
+        pa.jumpY = Math.max(0, Math.min(0.8, m.jy)); pa.torch = m.tc; pa.ads = m.ads; pa.weapon = nextWeapon;
+        // Shield/loadout, voice activity and hit points are host-owned; never accept them from input packets.
+        break;
       }
-      case 'fire': if (!pa.downed) sim.fire(pa, num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), Math.min(34, num(m.dmg)), { nonLethal: !!m.nl, taser: !!m.ts, pen: m.pen ? 1 : 0 }); break;
+      case 'fire': this.remoteFire(sim, pa, combat, m); break;
+      case 'reload': if (m.weapon === pa.weapon) this.startRemoteReload(combat, m.weapon as number, m.speed, sim.time); break;
       case 'use': sim.playerUse(pa); break;
       case 'crack': sim.playerUse(pa, { crack: true }); break;
       case 'sensor': sim.deploySensor(pa); break;
       case 'c2': sim.playerC2(pa); break;
       case 'wedge': sim.playerWedge(pa); break;
       case 'peek': sim.playerPeek(pa); break;
-      case 'shout': sim.playerShout(pa); break;
+      case 'shout':
+        if (sim.time - combat.lastShoutAt >= 1) { combat.lastShoutAt = sim.time; sim.playerShout(pa); }
+        break;
       case 'breachSync': sim.toggleBreachSync(pa); break;
       case 'share': sim.shareGear(pa); break;
       case 'bang': {
         if (pa.downed) break;
-        const gk = m.kind === 'smoke' ? 'smoke' : m.kind === 'gas' ? 'gas' : 'bang';
-        if (gk === 'smoke' && pa.smokes > 0) { pa.smokes--; sim.throwGrenade(num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), 'smoke'); }
-        else if (gk === 'gas' && pa.gases > 0) { pa.gases--; sim.throwGrenade(num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), 'gas'); }
-        else if (gk === 'bang' && pa.bangs > 0) { pa.bangs--; sim.throwGrenade(num(m.o[0]), num(m.o[1]), num(m.o[2]), num(m.d[0]), num(m.d[1]), num(m.d[2]), 'bang'); }
+        const kind = m.kind as 'bang' | 'smoke' | 'gas', d = m.d as number[];
+        const lean = sim.leanOffset(pa, pa.lean), ox = pa.x + lean.lx + d[0] * 0.4, oz = pa.z + lean.lz + d[2] * 0.4;
+        const oy = this.remoteEye(sim, pa, lean) - 0.1;
+        if (kind === 'smoke' && pa.smokes > 0) { pa.smokes--; sim.throwGrenade(ox, oy, oz, d[0], d[1], d[2], kind); }
+        else if (kind === 'gas' && pa.gases > 0) { pa.gases--; sim.throwGrenade(ox, oy, oz, d[0], d[1], d[2], kind); }
+        else if (kind === 'bang' && pa.bangs > 0) { pa.bangs--; sim.throwGrenade(ox, oy, oz, d[0], d[1], d[2], kind); }
         break;
       }
-      case 'cmd': sim.command(m.cmd, m.aim ?? null, pa); break;
+      case 'cmd': {
+        if (sim.time - combat.lastCommandAt < 0.12 || (m.cmd.action === 'shout' && sim.time - combat.lastShoutAt < 1)) break;
+        combat.lastCommandAt = sim.time;
+        if (m.cmd.action === 'shout') combat.lastShoutAt = sim.time;
+        const aim = m.aim && m.aim.x >= -5 && m.aim.x <= sim.level.w + 5 && m.aim.z >= -5 && m.aim.z <= sim.level.h + 5 ? m.aim : null;
+        sim.command(m.cmd, aim, pa); break;
+      }
     }
   }
   get mirror() { return this.net.role === 'client'; }
@@ -1175,7 +1296,7 @@ class Game {
   // ---------------- mission start ----------------
   private starting = false;
   async start(mission: number, seed: number, n = 1, me = 0, diff: number = S.diff, names: string[] = [], mods: CoopMods = {}, shields: boolean[] = [], preplan: PrePlan = {}) {
-    if (this.starting) return;
+    if (!Number.isInteger(mission) || mission < 0 || mission >= MISSIONS.length || this.starting) return;
     this.starting = true;
     const setLoad = (pct: number, msg: string) => {
       $('loadFill').style.width = `${pct}%`;
@@ -1186,12 +1307,14 @@ class Game {
     try {
       $('loadTitle').textContent = 'Loading...';
       $('loadMission').textContent = MISSIONS[mission]?.name ?? 'Operation';
-      setLoad(18, 'Loading 3D props, weapons & squad models...');
+      const propLevel = buildLevel(mission, seed);
+      const propsPromise = loadProps(propAssetKeysFor(propLevel.props, propLevel.theme));
+      setLoad(18, 'Loading this operation’s 3D props, weapons & squad models...');
       for (const id of ['lobby', 'debrief', 'pause', 'brief', 'firstrun', 'help', 'settings', 'menu']) show(id, false);
       show('loading', true);
       await nextFrame();
       await nextFrame();
-      await withTimeout(assetsDone, 10000);
+      await withTimeout(Promise.all([assetsDone, propsPromise]), 10000);
       setLoad(62, 'Building operation environment...');
       await nextFrame();
 
@@ -1209,7 +1332,7 @@ class Game {
       });
       this.stepPh.clear();
       this.recentSay.clear(); this.recentBarkActor.clear(); this.recentBarkKind.clear(); this.recentBarkLine.clear(); this.lastTeamShoutT = 0;
-      const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp || career.ironman); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
+      const mp = this.net.online; $('btnRestart').classList.toggle('hidden', mp || (career.ironman && !this.directMissionRun)); $('btnAgain').classList.toggle('hidden', this.net.role === 'client'); $('btnNext').classList.toggle('hidden', this.net.role === 'client'); show('vc', mp);
       show('coopHud', sim.players.length > 1);
       show('breachBanner', false); show('ffWarn', false); show('mutinyWarn', false);
       this.post?.dispose(); this.post = null; this.postScene = null;
@@ -1382,7 +1505,7 @@ class Game {
       case 'KeyZ': sim.player.prone = !sim.player.prone; sim.player.crouch = false; break;
       case 'KeyX': this.slow = !this.slow; this.audio.ui(); break;
       case 'Space': { const pl = sim.player; if (pl.prone || pl.crouch) { pl.prone = false; pl.crouch = false; } else if (pl.jumpY <= 0 && pl.alive) this.jumpV = 3.4; break; }
-      case 'Digit1': case 'Digit2': { const w = code === 'Digit1' ? 0 : 1; if (w !== this.weapon) { this.weapon = w; this.reloadT = 0; this.reloadShell = false; this.speedReload = false; this.fireCd = 0.35; this.vmKick = -0.5; this.audio.draw(); if (!this.weaponSpecs[w].shield) this.arms.draw(); this.updateHud(true); } break; }
+      case 'Digit1': case 'Digit2': { const w = code === 'Digit1' ? 0 : 1; if (w !== this.weapon) { this.weapon = w; this.reloadT = 0; this.reloadShell = false; this.speedReload = false; this.fireCd = 0.35; this.vmKick = -0.5; this.audio.draw(); if (!this.weaponSpecs[w].shield) this.arms.draw(); this.updateHud(true); if (this.mirror) this.sendNetInput(); } break; }
       case 'Tab': this.selTeam = this.selTeam === 'ALL' ? 'A' : this.selTeam === 'A' ? 'B' : 'ALL'; this.audio.ui(); this.updateHud(true); break;
       case 'Enter': this.setTyping(true); break;
       default: if (quick[code]) { const q = quick[code]; this.exec(q === 'there' ? { team: this.selTeam, action: 'move', dir: 'there' } : { team: this.selTeam, action: q }, true); }
@@ -1574,11 +1697,13 @@ class Game {
       if (speed && !this.speedReload && !this.reloadShell) {
         this.speedReload = true;
         this.reloadT = Math.max(0.25, this.reloadT * 0.58);
+        if (this.mirror) this.net.send({ t: 'reload', weapon: this.weapon, speed: true });
         this.audio.reload(this.activeGun(w), this.reloadT, true);
       }
       return;
     }
     const gun = this.activeGun(w);
+    if (this.mirror) this.net.send({ t: 'reload', weapon: this.weapon, speed });
     if (gun === 'shotgun') {
       this.reloadShell = true;
       this.speedReload = false;
@@ -1608,7 +1733,7 @@ class Game {
     }
     const d = this.aimDir(), lo = sim.leanOffset(p, this.lean);
     const o = [p.x + lo.lx + d.x * 0.4, this.eye - 0.1, p.z + lo.lz + d.z * 0.4];
-    if (this.mirror) this.net.send({ t: 'bang', o, d: [d.x, d.y, d.z], kind: gk });
+    if (this.mirror) this.net.send({ t: 'bang', d: [d.x, d.y, d.z], kind: gk });
     else {
       if (gk === 'smoke') p.smokes--;
       else if (gk === 'gas') p.gases--;
@@ -1622,7 +1747,7 @@ class Game {
     const sim = this.sim; if (!sim || !sim.player.alive || sim.over) return;
     const p = sim.player, d = this.aimDir(), lo = sim.leanOffset(p, this.lean);
     const ox = p.x + lo.lx, oz = p.z + lo.lz;
-    if (this.mirror) this.net.send({ t: 'ping', o: [ox, this.eye, oz], d: [d.x, d.y, d.z] });
+    if (this.mirror) this.net.send({ t: 'ping', d: [d.x, d.y, d.z] });
     else sim.playerPing(p, ox, this.eye, oz, d.x, d.y, d.z);
   }
   breachSync() {
@@ -1672,6 +1797,7 @@ class Game {
     const baseDir = new THREE.Vector3();
     this.camera.getWorldDirection(baseDir);
 
+    const shotDirs: [number, number, number][] = [];
     for (let i = 0; i < pellets; i++) {
       const d = baseDir.clone();
       if (sp > 0) {
@@ -1680,9 +1806,10 @@ class Game {
         d.z += (Math.random() - 0.5) * sp * 2;
         d.normalize();
       }
-      if (this.mirror) { this.net.send({ t: 'fire', o: [ox, oy, oz], d: [d.x, d.y, d.z], dmg: w.dmg, nl: !!w.nonLethal, ts: !!w.taser, pen: w.pen ?? 0 }); }
-      else sim.fire(p, ox, oy, oz, d.x, d.y, d.z, w.dmg, { nonLethal: !!w.nonLethal, taser: !!w.taser, pen: w.pen ?? 0 });
+      shotDirs.push([d.x, d.y, d.z]);
     }
+    if (this.mirror) this.net.send({ t: 'fire', weapon: this.weapon, dirs: shotDirs });
+    else for (const d of shotDirs) sim.fire(p, ox, oy, oz, d[0], d[1], d[2], w.dmg, { nonLethal: !!w.nonLethal, taser: !!w.taser, pen: w.pen ?? 0 });
     const gunType = this.activeGun(w);
     if (this.mirror && !this.preShot && !w.taser) this.audio.shot(0, 0, true, gunType);
     this.preShot = false;
@@ -2026,17 +2153,21 @@ class Game {
     // ---- career: XP, unlocks, injuries, campaign order ----
     const solo = !this.net.online;
     const downed = sim.officers.filter(o => o.hp <= 0 || !o.alive).map(o => o.name);
-    const res: AppliedResult = applyMissionResult(career, {
-      win, mission: this.mission, score: sc.total,
-      downed: solo ? downed : [], ironman: solo && (career.ironman || this.isDaily),
-    });
-    if (win) career.arrests += sim.stats.suspectsArrested;
-    saveCareer(career);
-    if (win) {
-      if ((best[this.mission] ?? -1) < sc.total) { best[this.mission] = sc.total; localStorage.setItem('teamai.best', JSON.stringify(best)); }
-      if (this.isDaily) {
-        const di = dailyInfo();
-        if ((dailyBest[di.key] ?? -1) < sc.total) { dailyBest[di.key] = sc.total; localStorage.setItem('teamai.daily', JSON.stringify(dailyBest)); }
+    const res: AppliedResult = this.directMissionRun
+      ? { xpBefore: career.xp, xpGained: 0, xpAfter: career.xp, rankUp: null, unlocked: [], injured: [], healed: [], ironmanPenalty: false }
+      : applyMissionResult(career, {
+        win, mission: this.mission, score: sc.total,
+        downed: solo ? downed : [], ironman: solo && (career.ironman || this.isDaily),
+      });
+    if (!this.directMissionRun) {
+      if (win) career.arrests += sim.stats.suspectsArrested;
+      saveCareer(career);
+      if (win) {
+        if ((best[this.mission] ?? -1) < sc.total) { best[this.mission] = sc.total; localStorage.setItem('teamai.best', JSON.stringify(best)); }
+        if (this.isDaily) {
+          const di = dailyInfo();
+          if ((dailyBest[di.key] ?? -1) < sc.total) { dailyBest[di.key] = sc.total; localStorage.setItem('teamai.daily', JSON.stringify(dailyBest)); }
+        }
       }
     }
     this.updateRankDock();
@@ -2051,16 +2182,15 @@ class Game {
       for (const inj of res.injured) lines.push(`<div class="dc-line neg">INJURED · ${inj.name} sits out ${inj.ops} op${inj.ops > 1 ? 's' : ''} — a rookie stands in</div>`);
       for (const h of res.healed) lines.push(`<div class="dc-line">BACK ON DUTY · ${h}</div>`);
       if (campaignComplete(best, MISSIONS.length)) lines.push(`<div class="dc-line up">CAMPAIGN COMPLETE · every sector secured — try the Daily Raid or a random raid</div>`);
-      else if (!win && best[this.mission] == null) lines.push(`<div class="dc-line">${MISSIONS[this.mission].name} is still uncleared — the next operation stays locked until it is done.</div>`);
+      else if (!win && best[this.mission] == null) lines.push(`<div class="dc-line">${MISSIONS[this.mission].name} is still uncleared — you can replay it or select any other sector.</div>`);
       $('debCareer').innerHTML = lines.join('');
     }
     const nextIdx = this.mission + 1;
-    const nextOk = nextIdx < MISSIONS.length && missionUnlocked(best, nextIdx);
-    const showNext = nextOk && this.net.role !== 'client' && !this.isDaily;
+    const showNext = nextIdx < MISSIONS.length && this.net.role !== 'client' && !this.isDaily;
     $('btnNext').classList.toggle('hidden', !showNext);
     if (showNext) $('btnNext').textContent = `Next mission · ${MISSIONS[nextIdx].name}`;
     // ironman: no retry of a failed operation
-    $('btnAgain').classList.toggle('hidden', this.net.role === 'client' || (career.ironman && !win && !this.isDaily));
+    $('btnAgain').classList.toggle('hidden', this.net.role === 'client' || (career.ironman && !win && !this.isDaily && !this.directMissionRun));
     show('hud', false); show('debrief', true); win ? this.audio.ok() : this.audio.fail();
     this.startReplay();
   }
@@ -2331,6 +2461,16 @@ class Game {
     }
   }
 
+  private sendNetInput() {
+    const sim = this.sim;
+    if (!sim || !this.mirror) return;
+    const p = sim.player, K = this.keys;
+    this.net.send({ t: 'in', x: p.x, z: p.z, yaw: Math.atan2(Math.sin(this.yaw), Math.cos(this.yaw)), pitch: this.pitch,
+      cr: p.crouch, pr: p.prone, ln: this.lean, jy: p.jumpY,
+      mv: !p.downed && (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD')),
+      tc: this.torchOn, ads: this.ads, wp: this.weapon, sh: p.shield, sp: p.speaking });
+  }
+
   // ---------------- frame ----------------
   frame() {
     requestAnimationFrame(() => this.frame());
@@ -2415,7 +2555,7 @@ class Game {
         const dy = Math.atan2(Math.sin(tg.yaw - a.yaw), Math.cos(tg.yaw - a.yaw));
         a.yaw += dy * lk;
       }
-      this.inT -= dt; if (this.inT <= 0) { this.inT = 0.05; this.net.send({ t: 'in', x: p.x, z: p.z, yaw: this.yaw, pitch: this.pitch, cr: p.crouch, pr: p.prone, ln: this.lean, jy: p.jumpY, mv: !p.downed && (K.has('KeyW') || K.has('KeyA') || K.has('KeyS') || K.has('KeyD')), tc: this.torchOn, ads: this.ads, wp: this.weapon, sh: p.shield, sp: p.speaking }); }
+      this.inT -= dt; if (this.inT <= 0) { this.inT = 0.05; this.sendNetInput(); }
       sim.events.length = 0;
     } else {
       sim.update(dt);
@@ -2719,7 +2859,6 @@ class Game {
 }
 
 const game = new Game();
-const propsDone = loadProps();
 const weaponsDone = loadWeapons().then(async () => {
   if (weaponsReady) { upgradeViewModel(game.vm); game.menu.upgradeWeapons(); }
   if (S.qual > 0 && await game.arms.load()) { // animated arms replace the static weapon (not on the lowest graphics setting)
@@ -2730,7 +2869,7 @@ const weaponsDone = loadWeapons().then(async () => {
 const modelsDone = loadModels().then(() => {
   $('modelStatus').textContent = modelsReady ? '' : 'The 3D characters could not be loaded – built-in figures are used.';
 });
-assetsDone = Promise.all([propsDone, weaponsDone, modelsDone]);
+assetsDone = Promise.all([weaponsDone, modelsDone]);
 document.body.classList.add('menu-wait');
 const revealMenu = () => {
   if (game.menu.ready) return;
