@@ -8,7 +8,9 @@ Voice-commanded tactical first-person shooter for the browser (inspired by SWAT 
 npm install
 npm run dev      # http://localhost:5173 – use Chrome or Edge for voice control
 npm test         # headless simulation + tests of the voice-command parser
+npm run playtest # fast headless playthrough used as a CI gate (a few seconds)
 npm run build    # production build in dist/
+npm run smoke:browser # Chromium smoke at High (shadows, post FX, F3 metrics)
 ```
 
 ## Structure
@@ -38,7 +40,44 @@ Code dependencies: three.js (MIT), Vite (MIT), TypeScript (Apache-2.0), PeerJS (
 - **Ironman.** A toggle in the Armory: no restarts (the pause menu hides *Restart mission*) and a failed
   operation earns no XP — but the injuries still come home. The daily raid always runs under the same rule.
 - **Onboarding.** The first launch shows a *First deployment* card with the six controls that matter and
-  the scoring rule (arrests pay, bodies do not).
+  the scoring rule (arrests pay, bodies do not). *START TRAINING* (or `?training=1`) runs an optional,
+  repeatable first deployment with no live threats and a six-step controls/ROE checklist; finishing it
+  marks the tutorial as done, while *END TRAINING* returns to the menu without changing progress.
+
+## Feedback, performance and stairs
+
+- **Debrief.** The debrief keeps the score, awards, notes and replay, and adds a *Rules of engagement*
+  block: arrests, unauthorized force, civilians killed by police, officers down, evidence and non-lethal
+  hits. It ends in CLEAN or REVIEW with a short explanation of what to correct.
+- **High performance.** `F3` (or `?perf=1`) shows FPS, p95 frame time, draw calls, triangles and the
+  active render scale. On High/Ultra the render scale adapts between 70 % and 100 % when frame time
+  stays above 24 ms, so a slower GPU keeps a playable frame rate; the menu and mission start reset it.
+- **Performance report.** `F4` downloads the overlay as `teamai-perf-high-<timestamp>.json`: the GPU
+  vendor and renderer string, the graphics settings, the current frame, and one sample per second of
+  the overlay. The file says whether the renderer was hardware or a software fallback
+  (SwiftShader/llvmpipe), so a measurement from a real graphics card can be told apart from the CI
+  machine. `__taPerfReport()` returns the same object in the console without downloading it.
+- **Smoke test.** `tools/browser-smoke.mts` boots the production build at High in Chromium/SwiftShader,
+  checks shadows, post FX, first-person arms and the perf probe, and runs in GitHub Actions with a
+  screenshot artifact. It intentionally reports timings on the software renderer instead of enforcing
+  an FPS threshold.
+- **Stairs.** Kista's stair flights are walkable by both the player and the live squad; the minimap
+  marks stair endpoints with their floor (`F1`, `F2`) and the HUD shows `STAIRS ↑/↓` when you are on
+  a flight.
+
+## Bomb operations and insertion points
+
+The bomb timer is held until the squad earns the pressure: it starts when a player gets within 14 m of the device or when a firefight begins. Until then the HUD reads `BOMB · TIMER HELD`; afterwards it counts down, and the bomb hint under it shows the distance and a relative bearing arrow. If the whole entry team goes down with less than 30 s left, the nearest officer takes over and moves to defuse the device on their own.
+
+Locked wooden doors are kicked open with `F` (metal vault doors still need a Breach Charge). This is what makes the Club Eclipse *Backstage Alley (Locked)* insertion usable: it starts six metres from the bomb, behind a door the team can kick in. `tools/playtest.mts` checks that route, the deployment grace and the bomb flow on every push.
+
+## Key bindings
+
+Movement, stance, use, reload, shout, grenade cycle and voice are rebindable under Settings → Key bindings; the bindings are stored with the rest of the settings and conflicts are swapped rather than silently dropped. The Controls screen still lists the default layout. Default keys are also shown in the HUD quick bar, which follows the shout binding.
+
+## Service elevator
+
+Kista's two storeys are joined by a real lift, not a teleport. Stand at either landing and press `F`: if the car is parked on the other floor it travels over empty first (`CAR ARRIVING`), then boards you when it opens here. The landing chime sounds, the two brushed-steel leaves slide into their wall pockets, the cab light comes up for a moment, the doors close and the car travels for about three and a half seconds. The HUD tracks the trip (`DOORS OPENING`, `TRAVELLING ▲`, `DOORS OPEN`) with a progress bar; the floor indicator's amber pip rides between the two floor lamps, the landing call button blinks while the car is coming, the cab shows a mirror and a lit car-button plate, and the doors open again on the other floor before the player is placed on the new landing. Walking away before the doors shut cancels the ride. Co-op hosts replicate the door phase, the car position and the empty-car call flag in the snapshot, so every client sees the same doors and the same `CAR ARRIVING` status.
 
 ## Furniture placement
 
@@ -49,9 +88,15 @@ a wall cell, with its back to that wall and its front into the room. The pieces 
 stand free (chairs, poufs, crates) turn towards the middle of their room instead of staring at a
 wall, and a desk gets a chair pulled up in front of it, facing the desk.
 
-The budget per room and the front-clearance rule are unchanged, so walkways, doors and the
-reachability check behave exactly as before; `tests/sim.test.ts` still passes and 100 % of the
-wall furniture in every mission/seed now has a wall behind it (it used to be about 50 %).
+The budget per room was raised (offices, bedrooms and stores about twice as dense, corridors now
+carry benches, lockers and greenery instead of one lonely plant), and the rooms are finished with
+non-colliding skirting boards, framed prints, clocks, whiteboards, notice boards, fire
+extinguishers, exit signs, area rugs and ceiling grilles. All of that trim is merged per material,
+so a whole floor of it costs a handful of draw calls. The three-metre halo around each stair
+landing is kept free of furniture so the squad can queue for the flight, the lift lobby stays open
+in front of the doors, and the player spawn plus every co-op entry cell is reserved so nobody starts
+inside a prop. `tests/sim.test.ts` still passes and 100 % of the wall furniture in every
+mission/seed has a wall behind it.
 
 ## Lighting and finish
 
@@ -80,7 +125,7 @@ The room lighting was rebalanced for it: ambient and hemisphere light were cut b
 
 The lines in `voice/lines.json` are rendered by the workflow `.github/workflows/voices.yml` with the speech model Kokoro-82M (Apache-2.0) and stored in `public/voice/`. Edit or add lines in `voice/lines.json` and push; the clips are regenerated automatically.
 
-Each entry has the text `t`, the roles that speak it `r` (`p` player, `o` officer, `s` suspect, `c` civilian) and optionally `s: 1` for a shouted line. Every role has its own set of voices (`voice/make.py`), so the four officers, the suspects and the civilians all sound like different people, and women figures have women's voices. Shouted lines are spoken faster, pitch-raised, heavily compressed, given a presence boost, light overdrive and a short room echo. Lines without a clip are read by the browser's speech synthesis.
+Each entry has the text `t`, the roles that speak it `r` (`p` player, `o` officer, `s` suspect, `c` civilian, `d` dispatcher) and optionally `s: 1` for a shouted line. Every role has its own set of voices (`voice/make.py`), so the four officers, the suspects and the civilians all sound like different people, and women figures have women's voices. Shouted lines are spoken faster, pitch-raised, heavily compressed, given a presence boost, light overdrive and a short room echo. Every spoken line, including the 911 dispatch briefing, is a recorded clip: the game never falls back to the browser's robotic speech synthesis, and a line without a clip stays silent.
 
 All voice clips are measured when they are loaded and played at the same loudness, shouted or not: a shout differs in delivery, strain and room echo, not in volume. `LINE_LEVEL` and the `CH_*` constants in `src/game/audio.ts` set the levels.
 

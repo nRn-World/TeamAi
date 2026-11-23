@@ -142,16 +142,22 @@ const P = { // tuning (overridable from the console through window.__op)
 const AIMQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 1, 0).cross(new THREE.Vector3(0, 0, -1))).transpose())
   .premultiply(new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1).cross(new THREE.Vector3(0, 1, 0)))));
 let ENV: THREE.Texture | null = null; const GAME_MATS = new Map<THREE.Material, THREE.Material>();
+const PLANT_EVERY = 0.05; // seconds between sole measurements
 /** Reflections for the operator's metal and fabric inside the game (the game scene itself has no environment map). */
 export function operatorEnv(t: THREE.Texture | null) { ENV = t; }
 /** One officer in the game. `obj` faces -z like every other character in the game. */
 export class OperatorBody {
   obj = new THREE.Group(); private inner: THREE.Object3D; private B: Record<string, THREE.Bone>; private mixer: THREE.AnimationMixer; private gun: THREE.Object3D | null;
-  private deadK = 0; private aimK = 0; private q = Q(); private q2 = Q(); private v = V();
+  private deadK = 0; private aimK = 0; private q = Q(); private q2 = Q(); private v = V(); private v2 = V();
+  private boots: THREE.SkinnedMesh[] = [];
+  // Foot planting: the boots are sampled a few times a second (not every frame) and the whole officer
+  // eases towards the result, so the pose cannot make him twitch frame by frame.
+  private plantY = 0; private plantWant = 0; private plantT = 0;
   constructor() {
     this.inner = skinnedClone(T!.wrap); this.inner.rotation.y = Math.PI; this.obj.add(this.inner); this.B = bonesOf(this.inner); this.gun = this.inner.getObjectByName('OperatorRifle') ?? null;
     this.inner.traverse((o: any) => {
       if (!o.isMesh) return; if (!o.isSkinnedMesh) o.castShadow = false;
+      if (o.isSkinnedMesh && o.material && o.material.name === 'boots') this.boots.push(o);
       let m = GAME_MATS.get(o.material); if (!m) { m = (o.material as THREE.MeshStandardMaterial).clone(); if (ENV) { (m as THREE.MeshStandardMaterial).envMap = ENV; (m as THREE.MeshStandardMaterial).envMapIntensity = P.env; } GAME_MATS.set(o.material, m); } o.material = m;
     });
     this.mixer = new THREE.AnimationMixer(this.inner); if (T!.clip) { const a = this.mixer.clipAction(T!.clip); a.play(); this.mixer.setTime(Math.random() * 7); }
@@ -163,7 +169,7 @@ export class OperatorBody {
     }
   }
   /** Call after the stand-in rig has been animated and placed. */
-  update(src: Rig, dt: number, o: { alive: boolean; aim: boolean; armed: boolean }) {
+  update(src: Rig, dt: number, o: { alive: boolean; aim: boolean; armed: boolean; plant: boolean }) {
     const t = T!, S = SRC!, B = this.B, C = (window as any).__op ?? P;
     this.obj.position.copy(src.obj.position); this.obj.rotation.copy(src.obj.rotation);
     this.deadK = Math.min(1, Math.max(0, this.deadK + (o.alive ? -1 : 1) * dt * 5)); this.aimK += ((o.aim && o.alive ? 1 : 0) - this.aimK) * Math.min(1, dt * 9);
@@ -184,6 +190,28 @@ export class OperatorBody {
     }
     if (this.gun) this.gun.visible = o.armed || !o.alive;
     if (this.aimK > 0.01 && this.gun) this.shoulder(this.aimK * (1 - this.deadK), C);
+    // Measure the soles at ~20 Hz and ease the correction in, then move the officer by the eased value.
+    if (o.plant && this.deadK <= 0.001) {
+      this.plantT -= dt;
+      if (this.plantT <= 0) { this.plantWant = this.soleOffset(src); this.plantT = PLANT_EVERY; }
+    } else this.plantWant = 0;
+    const k = Math.min(1, dt * 12);
+    this.plantY += (this.plantWant - this.plantY) * k;
+    if (Math.abs(this.plantY) < 0.0008) this.plantY = this.plantWant;
+    if (this.plantY) this.obj.position.y += this.plantY;
+  }
+  /** How far the officer has to move down (or up) for the lower boot to touch the floor he stands on. */
+  private soleOffset(src: Rig) {
+    if (!this.boots.length) return 0;
+    const body = src.obj.parent; if (!body) return 0;
+    const v = this.v; let lowest = Infinity;
+    for (const m of this.boots) {
+      const pos = m.geometry.getAttribute('position'), step = Math.max(1, Math.floor(pos.count / 24));
+      for (let i = 0; i < pos.count; i += step) { m.getVertexPosition(i, v); m.localToWorld(v); if (v.y < lowest) lowest = v.y; }
+    }
+    const dy = body.getWorldPosition(this.v2).y - lowest;
+    if (!Number.isFinite(dy) || Math.abs(dy) > 0.2) return 0; // never react to a wildly different pose (stairs, fall, ladder)
+    return dy;
   }
   /** Bring the rifle up to the shoulder and put both hands back on it. */
   private shoulder(k: number, C: typeof P) {

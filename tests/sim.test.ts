@@ -78,12 +78,22 @@ for (const [t, exp, last] of named) { const c = parseCommand(t, 'ALL', last ?? n
 { // one officer on an order of their own, then back into the team
   const sim = new Sim(0, 5), [ken, maya] = sim.officers, p = sim.player;
   ok(ken.name === 'Ken' && sim.officers[3].name === 'Zoe', 'officers have names');
+  ok(sim.teams.A.order.type === 'hold' && sim.teams.B.order.type === 'hold', 'the squad holds position until it is told to follow');
+  sim.command({ team: 'A', action: 'follow' });
   sim.command({ team: 'A', action: 'hold', who: 0 });
   ok(!!ken.solo && ken.solo.order.type === 'hold' && !maya.solo && sim.teams.A.order.type === 'follow', 'solo order leaves the team order alone');
   const k0 = { x: ken.x, z: ken.z }, m0 = { x: maya.x, z: maya.z };
-  for (let i = 0, a = p.yaw; i < 240; i++) { (sim as any).checkT = 9; p.x += Math.sin(a) * 0.03; p.z += Math.cos(a) * 0.03; if (sim.solidCell(Math.floor(p.x), Math.floor(p.z))) { p.x -= Math.sin(a) * 0.03; p.z -= Math.cos(a) * 0.03; a += 1.3; } sim.update(1 / 30); }
+  // Follow means she moves with the player; once he stops she takes a guarding post again, which can
+  // well be where she started, so the walk itself is what is measured.
+  let mayaFar = 0;
+  for (let i = 0, a = p.yaw; i < 240; i++) {
+    (sim as any).checkT = 9; p.x += Math.sin(a) * 0.03; p.z += Math.cos(a) * 0.03;
+    if (sim.solidCell(Math.floor(p.x), Math.floor(p.z))) { p.x -= Math.sin(a) * 0.03; p.z -= Math.cos(a) * 0.03; a += 1.3; }
+    sim.update(1 / 30);
+    mayaFar = Math.max(mayaFar, Math.hypot(maya.x - m0.x, maya.z - m0.z));
+  }
   ok(Math.hypot(ken.x - k0.x, ken.z - k0.z) < 1, 'Ken holds while the others follow');
-  ok(Math.hypot(maya.x - m0.x, maya.z - m0.z) > 0.5, 'Maya keeps following');
+  ok(mayaFar > 0.5, `Maya keeps following (${mayaFar.toFixed(2)} m from her start)`);
   sim.command({ team: 'A', action: 'cover', who: 1 }); ok(maya.solo?.order.type === 'cover', 'Maya covers alone');
   sim.command({ team: 'A', action: 'follow' }); ok(!ken.solo && !maya.solo, 'a team order brings them back');
   const g0 = sim.grenades.length; sim.command({ team: 'B', action: 'bang', who: 2 }, { x: sim.officers[2].x + 3, z: sim.officers[2].z });
@@ -144,7 +154,8 @@ function play(mission: number, seed: number, verbose = false) {
     for (const a of sim.actors) {
       ok(Number.isFinite(a.x) && Number.isFinite(a.z), 'NaN position');
       if (Math.floor(t * 4) !== Math.floor((t - dt) * 4) && a.alive) {
-        ok(sim.isActorPositionClear(a.x, a.z, a.r), `actor ${a.kind}#${a.id} intersects a wall, door, prop or exterior collider`);
+        ok(sim.isActorPositionClear(a.x, a.z, a.r),
+          `actor ${a.kind}#${a.id} intersects a wall, door, prop or exterior collider at ${a.x.toFixed(2)},${a.z.toFixed(2)}`);
       }
       if (a.alive && !a.down && sim.solidCell(Math.floor(a.x), Math.floor(a.z)) && sim.cell(Math.floor(a.x), Math.floor(a.z)) !== 3) { fails++; if (fails < 20) console.log('  FAIL actor inside solid', a.name, a.x.toFixed(2), a.z.toFixed(2), sim.cell(Math.floor(a.x), Math.floor(a.z))); }
       maxStuck = Math.max(maxStuck, a.stuckT);
@@ -223,6 +234,15 @@ function play(mission: number, seed: number, verbose = false) {
   const hp = host.player.hp; host.damage(host.player, -25, host.suspects[0], false);
   ok(host.player.hp === hp, 'negative damage cannot heal an actor');
 }
+
+// ---- training mode: no live threats while the player practises ----
+{
+  const train = new Sim(0, 1, 0, 1, { training: true });
+  const hp = train.player.hp;
+  for (let i = 0; i < 5 * 30; i++) { train.update(1 / 30); train.events.length = 0; }
+  ok(train.player.hp === hp && !train.suspects.some(s => s.hostile) && !train.over,
+    'training mode keeps suspects and civilians quiet and the trainee unhurt');
+}
 // ---- Kista Tech Center: two-storey navigation, interactions, effects and co-op teleports ----
 {
   const mission = MISSIONS.findIndex(m => m.name === 'Kista Tech Center');
@@ -236,6 +256,18 @@ function play(mission: number, seed: number, verbose = false) {
         && Math.abs(groundHeightAt(level, stair.x0, stair.z0) - stair.fromY) < 0.05
         && Math.abs(groundHeightAt(level, stair.x1, stair.z1) - stair.toY) < 0.05,
       'stair floor height interpolates the three-metre rise from F1 to F2');
+      ok(level.cells[15 * level.w + 33] === FLOOR
+        && walkLine(level, { x: 32.8, z: 15.5 }, { x: 33.6, z: 15.5 }),
+      'the top of the flight opens through the F2 command-floor wall');
+      ok(level.cells[15 * level.w + 25] === FLOOR
+        && walkLine(level, { x: 24.6, z: 15.5 }, { x: 25.8, z: 15.5 }),
+      'the bottom landing opens into the F1 operations floor');
+      ok(level.props.every(p => {
+        const dx = p.cx + 0.5 - stair.x0, dz = p.cz + 0.5 - stair.z0;
+        const t = (dx * (stair.x1 - stair.x0) + dz * (stair.z1 - stair.z0)) / Math.hypot(stair.x1 - stair.x0, stair.z1 - stair.z0) ** 2;
+        const lat = Math.abs(dx * (stair.z1 - stair.z0) - dz * (stair.x1 - stair.x0)) / Math.hypot(stair.x1 - stair.x0, stair.z1 - stair.z0);
+        return !(t >= -0.15 && t <= 1.15 && lat <= stair.width / 2 + 1.1);
+      }), 'furniture stays clear of the stair flight');
       ok(groundHeightAt(level, vip.x, vip.z) > 2.9 && level.rooms[vip.room]?.name === 'Hostage Wing · F2',
         'hostage suspect spawns in the upper-floor hostage wing');
       const vipCivilian = new Sim(mission, 3).civs.find(c => c.vip);
@@ -269,6 +301,22 @@ function play(mission: number, seed: number, verbose = false) {
       for (let i = 0; i < 90; i++) walker.movePlayer(0.1, 0);
       ok(groundHeightAt(walker.level, player.x, player.z) > 2.9,
         'player collision movement can walk up the rendered staircase to F2');
+
+      // The player route also has to work with the live squad behind it: follow uses the player
+      // trail and has to cross the same graded stair cells without a floor-height jump.
+      const squad = new Sim(mission, 12, 0), lead = squad.player;
+      lead.x = 24.2; lead.z = 15.5; lead.yaw = Math.PI / 2;
+      squad.officers.forEach((o, i) => { o.x = 22.8; o.z = 14.2 + i * 0.9; o.path = null; o.goal = null; });
+      squad.command({ team: 'ALL', action: 'follow' });
+      for (let i = 0; i < 600; i++) {
+        lead.yaw = Math.PI / 2;
+        if (squad.floorY(lead.x, lead.z) < 2.95 && lead.x < stair.x1 + 0.7) squad.movePlayer(0.03, 0);
+        squad.update(1 / 30);
+        squad.events.length = 0;
+      }
+      const followersUp = squad.officers.filter(o => squad.floorY(o.x, o.z) > 2.9).length;
+      ok(squad.floorY(lead.x, lead.z) > 2.9 && followersUp === squad.officers.length,
+        `the live squad follows the player up the staircase (${followersUp}/${squad.officers.length} on F2)`);
 
       const floors = new Sim(mission, 9), lower = { x: stair.x0, z: stair.z0 }, upper = { x: stair.x1, z: stair.z1 };
       ok(!floors.sameFloor(lower, upper) && !floors.los(lower.x, lower.z, upper.x, upper.z),
@@ -328,12 +376,83 @@ function play(mission: number, seed: number, verbose = false) {
       lp.x = from.x; lp.z = from.z; lp.yaw = from.yaw;
       ok(!!liftSim.interactTarget(lp)?.elevatorTo, 'service elevator stop offers an interaction');
       liftSim.playerUse(lp);
-      ok(Math.hypot(lp.x - to.x, lp.z - to.z) < 0.01 && Math.abs(groundHeightAt(liftSim.level, lp.x, lp.z) - to.floorY) < 0.1
+      const car = liftSim.elevators[0];
+      ok(car.phase === 'opening' && car.door < 0.1 && Math.hypot(lp.x - to.x, lp.z - to.z) > 1,
+        'pressing the landing button starts an animated door cycle instead of teleporting');
+      let sawOpen = false, sawClosed = false, sawMove = false;
+      for (let i = 0; i < 25 * 30; i++) {
+        liftSim.over = null; // the whole squad is dead: keep only the elevator running for this check
+        liftSim.update(1 / 30);
+        if (car.phase === 'open') sawOpen = true;
+        if (car.phase === 'closing') sawClosed = true;
+        if (car.phase === 'moving') sawMove = true;
+        if (Math.hypot(lp.x - to.x, lp.z - to.z) < 0.02) break;
+      }
+      ok(sawOpen && sawClosed && sawMove, 'the landing doors open, hold, close, and the car travels before arriving');
+      ok(Math.hypot(lp.x - to.x, lp.z - to.z) < 0.02 && Math.abs(groundHeightAt(liftSim.level, lp.x, lp.z) - to.floorY) < 0.1
         && lp.nx === lp.x && lp.nz === lp.z && lp.nd === 0 && lp.nt === 0,
-        'using the service elevator transfers the player and resets the local footstep-distance accumulator');
-      ok(!!liftSim.interactTarget(lp)?.elevatorTo, 'upper elevator stop offers a return trip');
+        'the car carries the player to the other landing and resets the footstep accumulator');
+      ok((car.phase === 'opening' || car.phase === 'open') && car.at === 1,
+        'the lift opens its doors again on arrival at the upper floor');
+      for (let i = 0; i < 10 * 30 && car.phase !== 'idle'; i++) { liftSim.over = null; liftSim.update(1 / 30); }
+      ok(!!liftSim.interactTarget(lp)?.elevatorTo, 'upper elevator stop offers a return trip once the car is idle');
       liftSim.playerUse(lp);
-      ok(Math.hypot(lp.x - from.x, lp.z - from.z) < 0.01, 'service elevator works in both directions');
+      for (let i = 0; i < 25 * 30; i++) {
+        liftSim.over = null;
+        liftSim.update(1 / 30);
+        if (Math.hypot(lp.x - from.x, lp.z - from.z) < 0.02) break;
+      }
+      ok(Math.hypot(lp.x - from.x, lp.z - from.z) < 0.02, 'service elevator works in both directions');
+
+      for (let i = 0; i < 10 * 30 && car.phase !== 'idle'; i++) { liftSim.over = null; liftSim.update(1 / 30); }
+      liftSim.over = null;
+      lp.x = to.x; lp.z = to.z; lp.path = null; lp.goal = null;
+      ok(!!liftSim.interactTarget(lp)?.elevatorTo, 'the upper landing can call a car parked downstairs');
+      liftSim.playerUse(lp);
+      ok(car.phase === 'moving' && car.pending === lp && car.at === 0,
+        'a call from the far floor sends the empty car over instead of teleporting it');
+      ok(!!encodeSnap(liftSim).el?.[0]?.[5], 'the empty-car call is replicated to co-op clients');
+      for (let i = 0; i < 25 * 30; i++) {
+        liftSim.over = null;
+        liftSim.update(1 / 30);
+        if (car.phase === 'open' && car.at === 1) break;
+      }
+      ok(car.at === 1 && car.rider === lp && car.target === 0,
+        'the arriving car opens and takes the waiting officer aboard');
+      ok(!encodeSnap(liftSim).el?.[0]?.[5], 'the replicated call flag clears once the officer is aboard');
+      for (let i = 0; i < 25 * 30; i++) {
+        liftSim.over = null;
+        liftSim.update(1 / 30);
+        if (Math.hypot(lp.x - from.x, lp.z - from.z) < 0.02) break;
+      }
+      ok(Math.hypot(lp.x - from.x, lp.z - from.z) < 0.02, 'the called car carries the officer back down');
+
+      // Walking out of the open doors cancels the ride instead of dragging the player along.
+      const away = new Sim(mission, 23), ap = away.player;
+      for (const a of away.actors) if (a !== ap) { a.alive = false; }
+      ap.x = from.x; ap.z = from.z; ap.yaw = from.yaw;
+      away.over = null;
+      away.playerUse(ap);
+      const awayCar = away.elevators[0];
+      for (let i = 0; i < 10 * 30 && awayCar.phase !== 'open'; i++) { away.over = null; away.update(1 / 30); }
+      ap.x = from.x; ap.z = from.z + 4.2;
+      for (let i = 0; i < 10 * 30 && awayCar.phase !== 'idle'; i++) { away.over = null; away.update(1 / 30); }
+      ok(awayCar.phase === 'idle' && awayCar.at === 0 && Math.hypot(ap.x - to.x, ap.z - to.z) > 4,
+        'walking away before the doors shut cancels the ride');
+
+      // A call whose caller walks off must not drag them into the car when it reaches the landing.
+      const wander = new Sim(mission, 29), wp = wander.player;
+      for (const a of wander.actors) if (a !== wp) a.alive = false;
+      const wcar = wander.elevators[0];
+      wcar.at = 1; wcar.phase = 'idle'; wcar.door = 0;
+      wp.x = from.x; wp.z = from.z; wp.yaw = from.yaw;
+      wander.over = null;
+      wander.playerUse(wp);
+      ok(wcar.pending === wp, 'the empty car answers the call');
+      wp.x = from.x; wp.z = from.z + 4.2;
+      for (let i = 0; i < 30 * 30 && wcar.phase !== 'idle'; i++) { wander.over = null; wander.update(1 / 30); }
+      ok(wcar.phase === 'idle' && wcar.at === 0 && Math.hypot(wp.x - to.x, wp.z - to.z) > 4,
+        'a caller who walks away is not taken along when the empty car arrives');
 
       const grenades = new Sim(mission, 13), gx = vip.x, gz = vip.z, gy = groundHeightAt(grenades.level, gx, gz);
       for (const a of grenades.actors) if (a !== grenades.player) a.alive = false;
@@ -348,6 +467,7 @@ function play(mission: number, seed: number, verbose = false) {
       for (const a of host.actors) if (a !== remote) a.alive = false;
       remote.x = from.x; remote.z = from.z; remote.yaw = from.yaw;
       host.playerUse(remote);
+      for (let i = 0; i < 25 * 30; i++) { host.over = null; host.update(1 / 30); if (Math.hypot(remote.x - to.x, remote.z - to.z) < 0.02) break; }
       applySnap(mirror, JSON.parse(JSON.stringify(encodeSnap(host))), local);
       ok(Math.hypot(local.x - to.x, local.z - to.z) < 0.02 && groundHeightAt(mirror.level, local.x, local.z) > 2.9
         && local.nx === local.x && local.nz === local.z && local.nd === 0 && local.nt === 0,
@@ -453,7 +573,10 @@ ok(wins >= 4, 'bot should be able to win across missions');
   ok(sus.alive && sus.stun > 1.5, 'taser stuns suspect without killing');
   const t0 = sc.bomb!.time;
   sc.update(1.0);
-  ok(sc.bomb!.time < t0, 'bomb timer counts down');
+  ok(sc.bomb!.time === t0 && !sc.bomb!.started, 'bomb timer is held until the squad closes in or a firefight starts');
+  sc.bomb!.started = true;
+  sc.update(1.0);
+  ok(sc.bomb!.time < t0, 'bomb timer counts down once it is armed');
   sc.bomb!.defused = true;
   ok(sc.debriefNotes().length > 0, 'debriefNotes provides tactical feedback');
 
@@ -464,9 +587,9 @@ ok(wins >= 4, 'bot should be able to win across missions');
   if (host.level.windows[0]) host.brokenWindows.add(Math.floor(host.level.windows[0].z) * host.level.w + Math.floor(host.level.windows[0].x));
   host.brokenProps.add(host.level.props[0].cz * host.level.w + host.level.props[0].cx);
   host.brokenDoorGlass.add(host.level.doors[0].id);
-  host.bomb!.time = 42.5;
+  host.bomb!.time = 42.5; host.bomb!.started = true;
   applySnap(mir, JSON.parse(JSON.stringify(encodeSnap(host))), mir.players[1]);
-  ok(!mir.powerOn && !!mir.level.doors[0].wedged && Math.abs(mir.bomb!.time - 42.5) < 0.1 && mir.brokenWindows.size === host.brokenWindows.size && mir.brokenProps.size === 1 && mir.brokenDoorGlass.size === 1, 'netstate syncs power, wedge, bomb, broken windows, broken props & door glass');
+  ok(!mir.powerOn && !!mir.level.doors[0].wedged && Math.abs(mir.bomb!.time - 42.5) < 0.1 && !!mir.bomb!.started && mir.brokenWindows.size === host.brokenWindows.size && mir.brokenProps.size === 1 && mir.brokenDoorGlass.size === 1, 'netstate syncs power, wedge, bomb state, broken windows, broken props & door glass');
 
   // 6. Locked door touched by AI suspects/civs must not spam player 'info' events
   const sLock = new Sim(0, 1);
@@ -607,13 +730,25 @@ ok(wins >= 4, 'bot should be able to win across missions');
   const aw = sDisp.awards();
   ok(Array.isArray(aw) && aw.length >= 1 && !!aw[0].title, 'awards() generates tactical badges on win');
 
-  // 11. Bullet ray precision & no invisible mid-air hits (curtain-wall windows, broken props, trees, perimeter sky)
+  // 11. Bullet ray precision & no invisible mid-air hits (sealed exteriors, interior glass, broken props, trees, perimeter sky)
   const sRay = new Sim(0, 1, 1);
-  // Curtain-wall window at x=13.5, z=20.5 on Office should pass through at low (y=0.5) and high (y=2.5)
-  const hLowWin = sRay.ray(13.5, 0.5, 22.0, 0, 0, -1, 10, sRay.player);
-  ok(hLowWin.d > 2.0, `curtain-wall window passes bullet at y=0.5 (d=${hLowWin.d.toFixed(2)})`);
-  const hHighWin = sRay.ray(13.5, 2.5, 22.0, 0, 0, -1, 10, sRay.player);
-  ok(hHighWin.d > 2.0, `curtain-wall window passes bullet at y=2.5 (d=${hHighWin.d.toFixed(2)})`);
+  // Nothing may be visible from the street: the office front at x=13.5, z=20.5 is solid wall, so a
+  // bullet stops there at every height instead of passing into the lobby.
+  for (const y of [0.5, 1.6, 2.5]) {
+    const h = sRay.ray(13.5, y, 22.0, 0, 0, -1, 10, sRay.player);
+    ok(h.kind === 'wall' && h.d < 2.0, `sealed front wall stops the bullet at y=${y} (${h.kind} at ${h.d.toFixed(2)})`);
+  }
+  // Interior glass partition (corridor ↔ meeting room): glass band 0.9–2.3 m passes, the sill blocks.
+  const hWin = sRay.ray(14.5, 1.6, 12.2, 0, 0, -1, 4, sRay.player);
+  ok(hWin.d > 1.8, `interior glass partition lets a bullet through at 1.6 m (d=${hWin.d.toFixed(2)}, ${hWin.kind})`);
+  const hSill = sRay.ray(14.5, 0.5, 12.2, 0, 0, -1, 4, sRay.player);
+  ok(hSill.kind === 'wall', `the sill below the partition stops a bullet at 0.5 m (got ${hSill.kind})`);
+  // Every remaining window is an interior partition; none sits in an exterior wall.
+  const outsideWin = sRay.level.windows.filter(w => {
+    const cx = Math.floor(w.x), cz = Math.floor(w.z);
+    return sRay.cell(cx, cz + 1) === OUT || sRay.cell(cx, cz - 1) === OUT || sRay.cell(cx + 1, cz) === OUT || sRay.cell(cx - 1, cz) === OUT;
+  });
+  ok(outsideWin.length === 0, `no window sits in an exterior wall (${outsideWin.length} found)`);
   // Shooting over exterior perimeter curb (z = h - 1) towards sky should not hit invisible wall/ceiling
   const hSky = sRay.ray(14.5, 1.6, 24.4, 0, 0.05, 1, 30, sRay.player);
   ok(hSky.kind === 'none', `shooting over perimeter curb goes to open sky (got ${hSky.kind} at d=${hSky.d.toFixed(2)})`);
@@ -907,14 +1042,18 @@ function roomSquad(seed: number) {
   const before = list.map(o => ({ x: o.x, z: o.z }));
   const target = nearestWalkable(sim.level, room.x + 1.5, room.z + 1.5, 4) ?? { x: room.x + 1.5, z: room.z + 1.5 };
   const route = findPath(sim.level, p, target) ?? [];
+  // Each officer's furthest point during the walk: they come along and then settle back on post, so a
+  // net displacement measured after the player stops would say nothing about whether they followed.
+  const far = before.map(() => 0);
   let wi = 0;
   for (let i = 0; i < 60 * 8 && wi < route.length; i++) {
     const wp = route[wi], dx = wp.x - p.x, dz = wp.z - p.z, d = Math.hypot(dx, dz) || 1;
     if (d < 0.3) { wi++; continue; }
     sim.movePlayer((dx / d) * 2.4 / 60, (dz / d) * 2.4 / 60);
     sim.update(1 / 60);
+    list.forEach((o, k) => { far[k] = Math.max(far[k], Math.hypot(o.x - before[k].x, o.z - before[k].z)); });
   }
-  const moved = list.filter((o, i) => Math.hypot(o.x - before[i].x, o.z - before[i].z) > 0.5).length;
+  const moved = far.filter(d => d > 0.5).length;
   ok(moved >= list.length - 1, `the squad moves again once the player walks (${moved}/${list.length} followed)`);
 }
 

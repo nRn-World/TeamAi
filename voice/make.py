@@ -10,12 +10,13 @@ FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / 'public' / 'voice'
 MODELS = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else '/tmp/kokoro')
-# key: (Kokoro voice, speaking speed). First letter = role: p player, o officer, s suspect, c civilian.
+# key: (Kokoro voice, speaking speed). First letter = role: p player, o officer, s suspect, c civilian, d dispatcher.
 VOICES = {
     'p1': ('am_onyx', 1.0),
     'o1': ('am_michael', 1.0), 'o2': ('af_bella', 1.0), 'o3': ('am_puck', 0.97), 'o4': ('af_heart', 1.03),
     's1': ('am_fenrir', 1.0), 's2': ('am_eric', 1.05), 's3': ('bm_george', 1.0), 's4': ('af_kore', 1.0), 's5': ('am_echo', 0.95),
     'c1': ('af_sarah', 1.05), 'c2': ('am_liam', 1.05), 'c3': ('bf_emma', 1.0), 'c4': ('am_adam', 1.1), 'c5': ('af_nova', 1.0),
+    'd1': ('bm_lewis', 1.0),
 }
 lines = json.load(open(ROOT / 'voice' / 'lines.json', encoding='utf-8'))
 tmp = pathlib.Path('/tmp/voicewav'); tmp.mkdir(exist_ok=True)

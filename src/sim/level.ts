@@ -144,6 +144,31 @@ class Builder {
   nearElevator(x: number, z: number) {
     return this.elevators.some(e => e.stops.some(s => Math.abs(x + 0.5 - s.x) < 1.3 && Math.abs(z + 0.5 - s.z) < 1.3));
   }
+  /** True in the open floor in front of an elevator landing, which must stay clear for the doors. */
+  nearElevatorLanding(x: number, z: number, deep = 2.8, wide = 1.4) {
+    return this.elevators.some(e => e.stops.some(s => {
+      const fx = -Math.sin(s.yaw), fz = -Math.cos(s.yaw);
+      const dx = x + 0.5 - s.x, dz = z + 0.5 - s.z;
+      const along = dx * fx + dz * fz;
+      const across = Math.abs(dx * fz - dz * fx);
+      return along > -1.4 && along < deep && across < wide;
+    }));
+  }
+  /** True around a stair landing, where furniture would crowd the squad queuing for the flight. */
+  nearStairLanding(x: number, z: number, r = 3.4) {
+    return this.staircases.some(s =>
+      Math.hypot(x + 0.5 - s.x0, z + 0.5 - s.z0) < r || Math.hypot(x + 0.5 - s.x1, z + 0.5 - s.z1) < r);
+  }
+  /** True inside a stair flight plus a little shoulder room, where furniture would clip the treads or rails. */
+  nearStair(x: number, z: number, clear = 1.1) {
+    return this.staircases.some(s => {
+      const dx = s.x1 - s.x0, dz = s.z1 - s.z0, len2 = dx * dx + dz * dz;
+      if (len2 < 1e-6) return false;
+      const px = x + 0.5 - s.x0, pz = z + 0.5 - s.z0;
+      const t = (px * dx + pz * dz) / len2, lat = Math.abs(px * dz - pz * dx) / Math.sqrt(len2);
+      return t >= -0.15 && t <= 1.15 && lat <= s.width / 2 + clear;
+    });
+  }
   placeBreaker(x: number, z: number) {
     this.breaker = { x: x + 0.5, z: z + 0.5, floorY: this.groundY[z * this.w + x] };
   }
@@ -193,8 +218,12 @@ class Builder {
       else if (kind === 'pc' || kind === 'bed' || kind === 'chair' || kind === 'plant' || kind === 'shelf' || kind === 'server') rot = wallSide;
     }
     const blockWin = high || kind === 'sofa' || kind === 'desk' || kind === 'bed' || kind === 'bar' || kind === 'pc';
+    const reserved = (ix: number, iz: number) => (Math.abs(ix - sx) <= 1 && Math.abs(iz - sz) <= 1)
+      || this.entries.some(e => Math.abs(ix - Math.floor(e.x)) <= 1 && Math.abs(iz - Math.floor(e.z)) <= 1);
     for (let iz = cz; iz < cz + d; iz++) for (let ix = cx; ix < cx + w; ix++) {
-      if (this.get(ix, iz) !== FLOOR || this.nearDoor(ix, iz) || this.nearBreaker(ix, iz) || this.nearElevator(ix, iz)) return false;
+      // Never furnish the player spawn or a co-op entry: actors start standing there.
+      if (reserved(ix, iz)) return false;
+      if (this.get(ix, iz) !== FLOOR || this.nearDoor(ix, iz) || this.nearBreaker(ix, iz) || this.nearElevator(ix, iz) || this.nearStair(ix, iz) || this.nearStairLanding(ix, iz) || this.nearElevatorLanding(ix, iz)) return false;
       if (blockWin && this.nearWindow(ix, iz)) return false;
       if (this.bomb && Math.abs(ix + 0.5 - this.bomb.x) < 1.5 && Math.abs(iz + 0.5 - this.bomb.z) < 1.5) return false;
     }
@@ -262,34 +291,35 @@ class Builder {
     const sx = Math.floor(spawn.x), sz = Math.floor(spawn.z);
     /** What belongs against a wall, in the order we would like to see it. */
     const wallKit: Record<RoomKind, [PropKind, boolean][]> = {
-      office: [['pc', true], ['desk', false], ['shelf', true], ['server', true], ['plant', false], ['chair', false]],
-      lobby: [['sofa', false], ['plant', false], ['shelf', true], ['chair', false]],
-      club: [['bar', false], ['sofa', false], ['plant', false], ['chair', false]],
-      bedroom: [['bed', false], ['locker', true], ['shelf', true], ['sofa', false], ['plant', false]],
-      storage: [['shelf', true], ['shelf', true], ['crate', false]],
-      vault: [['locker', true], ['locker', true], ['crate', false]],
-      warehouse: [['crate', false], ['crate', false], ['shelf', true]],
-      corridor: [['plant', false]],
+      office: [['pc', true], ['desk', false], ['shelf', true], ['server', true], ['plant', false], ['chair', false], ['locker', true]],
+      lobby: [['sofa', false], ['plant', false], ['shelf', true], ['chair', false], ['desk', false], ['locker', true]],
+      club: [['bar', false], ['sofa', false], ['plant', false], ['chair', false], ['shelf', true]],
+      bedroom: [['bed', false], ['locker', true], ['shelf', true], ['sofa', false], ['plant', false], ['desk', false], ['chair', false]],
+      storage: [['shelf', true], ['shelf', true], ['crate', false], ['locker', true], ['plant', false]],
+      vault: [['locker', true], ['locker', true], ['crate', false], ['shelf', true]],
+      warehouse: [['crate', false], ['crate', false], ['shelf', true], ['locker', true]],
+      // Corridors used to get one lonely plant; they now hold benches, lockers and greenery.
+      corridor: [['plant', false], ['shelf', true], ['locker', true], ['chair', false], ['sofa', false], ['crate', false]],
     };
     /** Free-standing pieces that are happy in the middle of a room. */
     const floorKit: Record<RoomKind, [PropKind, boolean][]> = {
-      office: [['chair', false], ['plant', false]],
-      lobby: [['chair', false], ['plant', false]],
-      club: [['chair', false]],
-      bedroom: [['chair', false]],
-      storage: [['crate', false]],
-      vault: [['crate', false]],
-      warehouse: [['crate', false], ['crate', true]],
-      corridor: [],
+      office: [['chair', false], ['plant', false], ['crate', false]],
+      lobby: [['chair', false], ['plant', false], ['sofa', false]],
+      club: [['chair', false], ['plant', false]],
+      bedroom: [['chair', false], ['plant', false]],
+      storage: [['crate', false], ['crate', true], ['chair', false]],
+      vault: [['crate', false], ['crate', true]],
+      warehouse: [['crate', false], ['crate', true], ['chair', false]],
+      corridor: [['plant', false], ['crate', false]],
     };
     for (const r of this.rooms) {
       const area = (r.w - 2) * (r.h - 2);
-      let budget = r.kind === 'corridor' ? Math.floor(area / 40)
-        : r.kind === 'warehouse' ? Math.floor(area / 9)
-        : r.kind === 'club' ? Math.floor(area / 12)
-        : r.kind === 'vault' ? Math.floor(area / 9)
-        : r.kind === 'lobby' ? Math.floor(area / 12)
-        : Math.floor(area / 8);
+      let budget = r.kind === 'corridor' ? Math.floor(area / 12)
+        : r.kind === 'warehouse' ? Math.floor(area / 7)
+        : r.kind === 'club' ? Math.floor(area / 7)
+        : r.kind === 'vault' ? Math.floor(area / 7)
+        : r.kind === 'lobby' ? Math.floor(area / 6)
+        : Math.floor(area / 4);
       if (budget <= 0) continue;
       const { wall, open } = this.freeCells(r, rng);
 
@@ -364,7 +394,8 @@ const SPECS: Spec[] = [
       b.door(24, 10, true); // Manager's Office locked
       b.door(7, 14, true);  // Archive locked
       b.door(23, 14); b.door(19, 17); b.door(27, 12);
-      // Interior office glass + front floor-to-ceiling curtain-wall glass facade
+      // Interior office glass partitions only — the street facade is sealed solid (see
+      // sealExteriorWindows), so nobody can look into the building from outside.
       b.win(11, 10); b.win(14, 10); b.win(22, 10);
       b.win(6, 20); b.win(8, 20); b.win(11, 20); b.win(12, 20); b.win(13, 20);
       b.win(16, 20); b.win(17, 20); b.win(18, 20); b.win(22, 20); b.win(24, 20);
@@ -576,7 +607,7 @@ const SPECS: Spec[] = [
     },
   },
   {
-    name: 'Kista Tech Center', theme: 'tower', objective: 'hostage', w: 58, h: 40, suspects: 8, civs: 7,
+    name: 'Kista Tech Center', theme: 'tower', objective: 'hostage', w: 58, h: 40, suspects: 7, civs: 6,
     brief: 'A coordinated crew has seized the Kista Tech Center. Clear a dense ground-floor office, then push up the full stairwell or use the service elevator to reach the command floor and rescue the VIP.',
     build(b) {
       // Ground floor: six linked rooms around a service spine.
@@ -592,11 +623,19 @@ const SPECS: Spec[] = [
       b.room(33, 3, 11, 11, 'Control Room · F2', 'office', 'carpet', true, 3);
       b.room(43, 3, 13, 11, 'Executive Suite · F2', 'office', 'wood', true, 3);
       b.room(33, 13, 23, 5, 'Command Spine · F2', 'corridor', 'tile', false, 3);
-      b.room(33, 17, 11, 16, 'Server Farm · F2', 'storage', 'concrete', true, 3);
+      // Optional side wing: no objectives spawn here, so the sweep can end when the VIP wing is clear.
+      b.room(33, 17, 11, 16, 'Server Farm · F2', 'storage', 'concrete', false, 3);
       b.room(43, 17, 13, 16, 'Hostage Wing · F2', 'bedroom', 'wood', true, 3);
 
-      // An 8m stair flight rises 3m; it is a real walkable route in both directions.
-      b.staircase(25.5, 15.5, 33.5, 15.5, 2.3, 0, 3);
+      // A 7.5m stair flight rises 3m and lands flush with the F2 floor edge (x=33), so the top
+      // step is not buried under the command floor. It is a real walkable route both ways.
+      b.staircase(25.5, 15.5, 33.0, 15.5, 2.3, 0, 3);
+      // Open the bottom landing into Operations Floor: without this the flight ends half a
+      // metre from the service-spine wall with no exit. Three cells match the 2.3m flight.
+      b.set(25, 14, FLOOR); b.set(25, 15, FLOOR); b.set(25, 16, FLOOR);
+      // The F2 command spine starts at x = 33, so its west wall would cover the top tread.
+      // Open the three cells the 2.3 m flight crosses, making the landing a real stair doorway.
+      b.set(33, 14, FLOOR); b.set(33, 15, FLOOR); b.set(33, 16, FLOOR);
 
       // Door graph: several loops and side rooms on both storeys.
       b.door(8, 12); b.door(13, 7); b.door(13, 17); b.door(8, 21); b.door(13, 27);
@@ -606,12 +645,16 @@ const SPECS: Spec[] = [
       b.door(38, 17); b.door(49, 17); b.door(43, 24, true); b.door(55, 27);
       b.win(7, 32); b.win(10, 32); b.win(36, 32); b.win(48, 32); b.win(51, 32);
 
-      // Paired stops share a visible, interactive service lift; stairs remain available as a second route.
+      // Paired stops are steel doors set into a wall, not a cabin standing on the floor: both face
+      // south out of the north wall, clear of the stair landing at z = 15.5 on both storeys.
       b.elevator('Service elevator',
-        { x: 28.5, z: 7.5, floorY: 0, label: 'FLOOR 1', yaw: 0 },
-        { x: 35.5, z: 15.5, floorY: 3, label: 'FLOOR 2', yaw: 0 },
+        { x: 30.5, z: 4.6, floorY: 0, label: 'FLOOR 1', yaw: Math.PI },
+        { x: 37.5, z: 4.6, floorY: 3, label: 'FLOOR 2', yaw: Math.PI },
       );
       b.placeBreaker(5, 25);
+      // The armoured truck is staged on the plaza east of the atrium entrance, clear of the entry
+      // point, the canopy posts, the bollards and the cones.
+      b.vehicle = { x: 21.5, z: 36.0, yaw: -0.22, hx: 3.0, hz: 1.2, h: 2.43 };
       b.entries.push(
         { name: 'South Atrium Entrance', x: 8.5, z: 36.2, yaw: 0 },
         { name: 'West Emergency Door', x: 1.9, z: 17.5, yaw: Math.PI / 2 },
@@ -620,6 +663,22 @@ const SPECS: Spec[] = [
     },
   },
 ];
+
+/**
+ * The occupants are hiding, so a building must not show its inside from the street: every window
+ * cell that sits in an exterior wall becomes solid wall. Interior glass partitions (meeting rooms,
+ * teller glass, corridor glazing) stay — they are only visible from inside the building.
+ */
+function sealExteriorWindows(b: Builder) {
+  const out = (x: number, z: number) => x >= 0 && z >= 0 && x < b.w && z < b.h && b.get(x, z) === OUT;
+  for (const w of [...b.windows]) {
+    const cx = Math.floor(w.x), cz = Math.floor(w.z);
+    if (!(out(cx, cz + 1) || out(cx, cz - 1) || out(cx + 1, cz) || out(cx - 1, cz))) continue;
+    b.set(cx, cz, WALL);
+    const i = b.windows.indexOf(w);
+    if (i >= 0) b.windows.splice(i, 1);
+  }
+}
 
 export const MISSIONS = SPECS.map(s => ({ name: s.name, brief: s.brief, suspects: s.suspects, civs: s.civs, objective: s.objective }));
 
@@ -630,6 +689,9 @@ export function buildLevel(index: number, seed: number): Level {
   const spawn = spec.build(b, rng);
   const entries = b.entries.length ? b.entries : [{ name: 'Main Entrance', x: spawn.x, z: spawn.z, yaw: spawn.yaw }];
   b.furnish(rng, spawn);
+  // Seal after furnishing and spawning: a window cell is solid either way, so movement is unchanged,
+  // and the furniture/actor layout stays exactly the one the level was tuned with.
+  sealExteriorWindows(b);
   const doorAt = new Map<number, Door>();
   for (const d of b.doors) doorAt.set(d.cz * b.w + d.cx, d);
   const propAt = new Map<number, Prop>();

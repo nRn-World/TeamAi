@@ -15,7 +15,38 @@ const BOX = new THREE.BoxGeometry(1, 1, 1);
 const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...o });
 function box(w: number, h: number, d: number, m: THREE.Material, x = 0, y = 0, z = 0) { const b = new THREE.Mesh(BOX, m); b.scale.set(w, h, d); b.position.set(x, y, z); return b; }
 
+type SlabRect = { x: number; z: number; w: number; d: number };
+/** Splits a horizontal slab around a rectangular opening, so a stair can break through it. */
+function cutSlab(rects: SlabRect[], hole: SlabRect): SlabRect[] {
+  const out: SlabRect[] = [];
+  for (const r of rects) {
+    const x0 = Math.max(r.x, hole.x), x1 = Math.min(r.x + r.w, hole.x + hole.w);
+    const z0 = Math.max(r.z, hole.z), z1 = Math.min(r.z + r.d, hole.z + hole.d);
+    if (x1 - x0 <= 0.001 || z1 - z0 <= 0.001) { out.push(r); continue; }
+    if (z0 - r.z > 0.001) out.push({ x: r.x, z: r.z, w: r.w, d: z0 - r.z });
+    if (r.z + r.d - z1 > 0.001) out.push({ x: r.x, z: z1, w: r.w, d: r.z + r.d - z1 });
+    if (x0 - r.x > 0.001) out.push({ x: r.x, z: z0, w: x0 - r.x, d: z1 - z0 });
+    if (r.x + r.w - x1 > 0.001) out.push({ x: x1, z: z0, w: r.x + r.w - x1, d: z1 - z0 });
+  }
+  return out;
+}
+
 const CITY_CACHE = new Map<string, Promise<THREE.Group | null>>();
+// Traffic-cone template is shared by every exterior: one GLB fetch/decode no matter how many
+// cordons a level builds. Cones stay purely decorative (no shadow casting) so the extra
+// dressing cannot stall software GPUs in the High smoke test.
+let coneTplPromise: Promise<THREE.Group | null> | null = null;
+function loadConeTemplate(): Promise<THREE.Group | null> {
+  if (!coneTplPromise) {
+    coneTplPromise = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
+      .loadAsync('./models/props/traffic_cone.glb')
+      .then(tpl => { tpl.scene.updateMatrixWorld(true); return tpl.scene as THREE.Group; })
+      .catch(() => null);
+  }
+  return coneTplPromise;
+}
+let coneOrangeMat: THREE.MeshStandardMaterial | null = null;
+let coneWhiteMat: THREE.MeshStandardMaterial | null = null;
 function loadCityAsset(name: string): Promise<THREE.Group | null> {
   let p = CITY_CACHE.get(name);
   if (!p) {
@@ -237,6 +268,13 @@ function disposeLoadedObjectResources(root: THREE.Object3D) {
 export class LevelView {
   group = new THREE.Group();
   doors: { door: Door; pivot: THREE.Group; base: number; wedge: THREE.Mesh; lock: THREE.Mesh; tripwire: THREE.Mesh; glass?: THREE.Mesh }[] = [];
+  /** Sliding landing doors and their indicator lamps, one entry per stop. */
+  liftViews: {
+    id: number; stopIndex: number; left: THREE.Group; right: THREE.Group;
+    up: THREE.MeshBasicMaterial; down: THREE.MeshBasicMaterial; cabLight: THREE.MeshBasicMaterial;
+    callUp: THREE.MeshBasicMaterial; callDown: THREE.MeshBasicMaterial; floorLamps: THREE.MeshBasicMaterial[];
+    carPip: THREE.Mesh; cabButtons: THREE.MeshBasicMaterial[];
+  }[] = [];
   windows = new Map<number, THREE.Mesh>();
   private evidenceViews = new Map<number, THREE.Group>();
   private sensorViews = new Set<object>();
@@ -334,16 +372,54 @@ export class LevelView {
       g.add(pl);
       this.lightPool.push(pl);
     }
+    // A stair flight has to break through the slab it arrives on. Without this opening the top
+    // steps are swallowed by the ceiling/floor plane and the player climbs into solid geometry.
+    // The opening is widened to the cell boundaries across the flight so the handrails never run
+    // through the shaft walls, and it reaches STAIR_LANDING metres past the bottom tread: a
+    // stairwell you can only see into from the first step reads as a slot in a low ceiling, so the
+    // foot of the flight stands in the open shaft and you look up into the stairwell from the floor.
+    const STAIR_LANDING = 1.6;
+    const stairBounds = (s: (typeof l.staircases)[number]) => {
+      const alongX = Math.abs(s.x1 - s.x0) >= Math.abs(s.z1 - s.z0);
+      const ax0 = Math.min(s.x0, s.x1), ax1 = Math.max(s.x0, s.x1);
+      const az0 = Math.min(s.z0, s.z1), az1 = Math.max(s.z0, s.z1);
+      const up = s.toY >= s.fromY;
+      return {
+        // The opening ends exactly at the top tread, so the last step meets the upper floor
+        // instead of leaving a walkable gap, and it runs past the bottom tread over the landing.
+        x0: alongX ? (up ? ax0 - STAIR_LANDING : ax0) : Math.floor(ax0 - s.width / 2),
+        x1: alongX ? (up ? ax1 : ax1 + STAIR_LANDING) : Math.ceil(ax1 + s.width / 2),
+        z0: alongX ? Math.floor(az0 - s.width / 2) : (up ? az0 - STAIR_LANDING : az0),
+        z1: alongX ? Math.ceil(az1 + s.width / 2) : (up ? az1 : az1 + STAIR_LANDING),
+      };
+    };
+    const slabHoles = l.staircases.map(s => {
+      const b = stairBounds(s);
+      return { x: b.x0, z: b.z0, w: b.x1 - b.x0, d: b.z1 - b.z0, y: Math.max(s.fromY, s.toY) };
+    });
     for (const r of l.rooms) {
       const floorY = r.floorY ?? 0;
-      const fl = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), std({ map: T.floorTex(r.floor), roughness: r.floor === 'tile' ? 0.35 : 0.95 }));
-      scaleUV(fl.geometry, r.w / 2, r.h / 2); fl.rotation.x = -Math.PI / 2; fl.position.set(r.x + r.w / 2, floorY + r.id * 0.0006, r.z + r.h / 2); g.add(fl);
-      const ce = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h), ceilMat.clone()); (ce.material as THREE.MeshStandardMaterial).map = T.floorTex('ceiling');
-      scaleUV(ce.geometry, r.w / 2, r.h / 2); ce.rotation.x = Math.PI / 2; ce.position.set(r.x + r.w / 2, floorY + 3 - r.id * 0.0006, r.z + r.h / 2); g.add(ce);
+      const floorMat = std({ map: T.floorTex(r.floor), roughness: r.floor === 'tile' ? 0.35 : 0.95 });
+      const ceilRoomMat = ceilMat.clone(); (ceilRoomMat as THREE.MeshStandardMaterial).map = T.floorTex('ceiling');
+      const roomRect: SlabRect = { x: r.x, z: r.z, w: r.w, d: r.h };
+      let floorRects: SlabRect[] = [roomRect];
+      for (const h of slabHoles) if (Math.abs(h.y - floorY) < 0.06) floorRects = cutSlab(floorRects, h);
+      let ceilRects: SlabRect[] = [roomRect];
+      for (const h of slabHoles) if (Math.abs(h.y - (floorY + 3)) < 0.06) ceilRects = cutSlab(ceilRects, h);
+      for (const rc of floorRects) {
+        const fl = new THREE.Mesh(new THREE.PlaneGeometry(rc.w, rc.d), floorMat);
+        scaleUV(fl.geometry, rc.w / 2, rc.d / 2); fl.rotation.x = -Math.PI / 2; fl.position.set(rc.x + rc.w / 2, floorY + r.id * 0.0006, rc.z + rc.d / 2); g.add(fl);
+      }
+      for (const rc of ceilRects) {
+        const ce = new THREE.Mesh(new THREE.PlaneGeometry(rc.w, rc.d), ceilRoomMat);
+        scaleUV(ce.geometry, rc.w / 2, rc.d / 2); ce.rotation.x = Math.PI / 2; ce.position.set(rc.x + rc.w / 2, floorY + 3 - r.id * 0.0006, rc.z + rc.d / 2); g.add(ce);
+      }
       const dark = l.theme === 'club' ? (r.kind === 'club') : (r.kind !== 'corridor' && r.kind !== 'lobby' && ((r.id * 7 + sim.mission * 3 + Math.floor(l.suspects[0]?.x ?? 0)) % 4 === 0));
       const nx = Math.max(1, Math.round((r.w - 2) / 6)), nz = Math.max(1, Math.round((r.h - 2) / 6));
       for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
         const x = r.x + 1 + ((i + 0.5) * (r.w - 2)) / nx, z = r.z + 1 + ((j + 0.5) * (r.h - 2)) / nz;
+        // do not leave a light fitting floating in the stairwell opening
+        if (slabHoles.some(h => Math.abs(h.y - (floorY + 3)) < 0.06 && x > h.x && x < h.x + h.w && z > h.z && z < h.z + h.d)) continue;
         const lm = box(r.kind === 'warehouse' ? 0.4 : 1.1, 0.05, r.kind === 'corridor' ? 0.3 : 0.5, dark ? lampOff : lampOn, x, floorY + 2.97, z);
         g.add(lm);
         if (!dark) this.lampMeshes.push(lm);
@@ -417,6 +493,34 @@ export class LevelView {
     const curbMat = std({ color: 0x262a31, roughness: 0.72, metalness: 0.25 });
     const perimH = l.theme === 'club' ? 2.6 : 0.85;
     mk(inner, wallMat); mk(outer.filter(([x, z]) => !(x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1)), brickMat, 3.2); mk(outer.filter(([x, z]) => x === 0 || z === 0 || x === l.w - 1 || z === l.h - 1), l.theme === 'club' ? brickMat : curbMat, perimH);
+    // Enclose the stairwell above the level it leaves: the flight breaks through the F1 ceiling,
+    // so it needs a real shaft (walls + ceiling) rather than a raw hole into the sky.
+    for (const s of l.staircases) {
+      const top = Math.max(s.fromY, s.toY), low = Math.min(s.fromY, s.toY);
+      if (top - low < 1) continue;
+      const dx = s.x1 - s.x0, dz = s.z1 - s.z0;
+      if (Math.abs(dx) > 0.01 && Math.abs(dz) > 0.01) continue; // only axis-aligned shafts; others keep the opening
+      const b = stairBounds(s);
+      const x0 = b.x0, x1 = b.x1, z0 = b.z0, z1 = b.z1;
+      const shaftH = 3, t = 0.12;
+      for (let x = x0; x < x1 - 0.01; x += 1) {
+        const w = Math.min(1, x1 - x);
+        g.add(box(w, shaftH, t, wallMat, x + w / 2, top + shaftH / 2, z0));
+        g.add(box(w, shaftH, t, wallMat, x + w / 2, top + shaftH / 2, z1));
+      }
+      for (let z = z0; z < z1 - 0.01; z += 1) {
+        const d = Math.min(1, z1 - z);
+        g.add(box(t, shaftH, d, wallMat, x0, top + shaftH / 2, z + d / 2));
+      }
+      const sc = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), ceilMat.clone());
+      (sc.material as THREE.MeshStandardMaterial).map = T.floorTex('ceiling');
+      scaleUV(sc.geometry, (x1 - x0) / 2, (z1 - z0) / 2);
+      sc.rotation.x = Math.PI / 2; sc.position.set((x0 + x1) / 2, top + shaftH, (z0 + z1) / 2); g.add(sc);
+      if (quality > 0) {
+        const light = new THREE.PointLight(0xffe9c8, 8, 10, 1.7);
+        light.position.set((x0 + x1) / 2, top + shaftH - 0.3, (z0 + z1) / 2); g.add(light);
+      }
+    }
     // Perimeter cells are drawn with the dark exterior brick/curb material, but many of them also
     // face a playable room. Skin those faces in the interior plaster so the level does not end in
     // a matte-black wall like the corridor corner did.
@@ -441,28 +545,20 @@ export class LevelView {
       });
       g.add(im);
     }
-    // breakable glass windows (floor-to-ceiling curtain-wall glass on office/hotel/club ground exterior)
+    // Breakable glass windows. Only interior glass partitions are left in the level — every
+    // exterior window is sealed to solid wall in the level data — so these always get a sill below
+    // and a header above, exactly the 0.9–2.3 m band the bullet code lets glass pass through.
     const glassMat = quality > 0
       ? new THREE.MeshPhysicalMaterial({ color: 0xaad8ee, transparent: true, opacity: 0.2, roughness: 0.24, metalness: 0.05, specularIntensity: 0.45 })
       : std({ color: 0xaad8ee, transparent: true, opacity: 0.34, roughness: 0.15 });
     const frameAlum = std({ color: 0x161a20, roughness: 0.35, metalness: 0.65 });
-    const curtainWall = l.theme === 'office' || l.theme === 'hotel' || l.theme === 'club' || l.theme === 'tower';
     for (const w of l.windows) {
       const cx = Math.floor(w.x), cz = Math.floor(w.z), floorY = w.floorY ?? groundHeightAt(l, w.x, w.z);
       const horiz = sim.cell(cx - 1, cz) === WALL || sim.cell(cx - 1, cz) === WINDOW || sim.cell(cx + 1, cz) === WALL || sim.cell(cx + 1, cz) === WINDOW;
-      const isFront = sim.cell(cx, cz + 1) === OUT || sim.cell(cx, cz - 1) === OUT || sim.cell(cx + 1, cz) === OUT || sim.cell(cx - 1, cz) === OUT;
-      if (curtainWall && isFront) {
-        g.add(box(1, 0.12, 1, frameAlum, w.x, floorY + 0.06, w.z), box(1, 0.25, 1, frameAlum, w.x, floorY + 2.875, w.z));
-        g.add(box(horiz ? 0.08 : 0.14, 2.7, horiz ? 0.14 : 0.08, frameAlum, w.x + (horiz ? 0.46 : 0), floorY + 1.45, w.z + (horiz ? 0 : 0.46)));
-        const pane = box(horiz ? 0.96 : 0.06, 2.65, horiz ? 0.06 : 0.96, glassMat, w.x, floorY + 1.44, w.z);
-        g.add(pane);
-        this.windows.set(cz * l.w + cx, pane);
-      } else {
-        g.add(box(1, 0.9, 1, wallMat, w.x, floorY + 0.45, w.z), box(1, 0.7, 1, wallMat, w.x, floorY + 2.65, w.z));
-        const pane = box(horiz ? 0.98 : 0.06, 1.4, horiz ? 0.06 : 0.98, glassMat, w.x, floorY + 1.6, w.z);
-        g.add(pane);
-        this.windows.set(cz * l.w + cx, pane);
-      }
+      g.add(box(1, 0.9, 1, wallMat, w.x, floorY + 0.45, w.z), box(1, 0.7, 1, wallMat, w.x, floorY + 2.65, w.z));
+      const pane = box(horiz ? 0.98 : 0.06, 1.4, horiz ? 0.06 : 0.98, glassMat, w.x, floorY + 1.6, w.z);
+      g.add(pane);
+      this.windows.set(cz * l.w + cx, pane);
     }
     // doors (+ lock & wedge indicators; glass entrance doors on office/hotel/bank)
     const doorMat = std({ map: T.doorTex(), roughness: 0.6 }), frameMat = std({ color: 0x202328, roughness: 0.4, metalness: 0.4 });
@@ -504,31 +600,98 @@ export class LevelView {
       if (quality >= 2) pivot.traverse((o: any) => { if (o.isMesh && o !== glass) { o.castShadow = true; o.receiveShadow = true; } });
       const base = d.horiz ? 0 : -Math.PI / 2; pivot.rotation.y = base; g.add(pivot); this.doors.push({ door: d, pivot, base, wedge, lock, tripwire, glass });
     }
-    // Functional lifts: each stop is rendered as a compact, open service-elevator landing. F activates
-    // the matching stop in Sim and transfers the operator to its paired floor.
+    // Functional lifts. Each landing is a pair of brushed-steel sliding panels set into a wall
+    // pocket: press the button, the panels part, the car closes its doors, travels three metres and
+    // opens again on the other floor (Sim.updateElevators drives the numbers used here).
     if (l.elevators.length) {
-      const liftFrame = std({ color: 0x26323d, roughness: 0.38, metalness: 0.74 });
-      const liftBack = std({ color: 0x3b4651, roughness: 0.58, metalness: 0.45 });
-      const liftFloor = std({ color: 0x56616b, roughness: 0.64, metalness: 0.34 });
-      const liftGlass = new THREE.MeshPhysicalMaterial({ color: 0x4cc9f0, transparent: true, opacity: 0.25, roughness: 0.18, metalness: 0.18 });
-      for (const elevator of l.elevators) for (const stop of elevator.stops) {
-        const cab = new THREE.Group(); cab.position.set(stop.x, stop.floorY, stop.z); cab.rotation.y = stop.yaw;
-        cab.add(box(1.92, 0.08, 1.92, liftFloor, 0, 0.04, 0));
+      const liftFrame = std({ color: 0x2a333c, roughness: 0.4, metalness: 0.72 });
+      const liftWall = std({ map: T.brushedTex('#4d5760'), roughness: 0.6, metalness: 0.45, envMapIntensity: 0.5 });
+      // Brushed, matte leaves: a polished finish mirrored the corridor lamp into a white bloom.
+      const liftLeaf = std({ map: T.brushedTex('#77828c'), roughness: 0.5, metalness: 0.5, envMapIntensity: 0.55 });
+      const liftBrushed = std({ color: 0x5d6771, roughness: 0.55, metalness: 0.45 });
+      const doorGlass = std({ color: 0x0b1016, roughness: 0.25, metalness: 0.6 });
+      for (const elevator of l.elevators) for (let si = 0; si < elevator.stops.length; si++) {
+        const stop = elevator.stops[si];
+        // The doorway sits in the wall behind the landing; local -z is out into the room.
+        const fx = -Math.sin(stop.yaw), fz = -Math.cos(stop.yaw);
+        const doors = new THREE.Group();
+        doors.position.set(stop.x - fx * 0.58, stop.floorY, stop.z - fz * 0.58);
+        doors.rotation.y = stop.yaw;
+        // Recessed cab: a dark brushed back wall with a lit ceiling strip and a handrail, so an
+        // open door shows a lift car rather than the inside of the wall.
+        const cab = new THREE.Group();
         cab.add(
-          box(0.09, 2.8, 1.95, liftFrame, -0.94, 1.4, 0),
-          box(0.09, 2.8, 1.95, liftFrame, 0.94, 1.4, 0),
-          box(1.95, 2.8, 0.11, liftBack, 0, 1.4, 0.92),
-          box(0.12, 2.8, 0.12, liftFrame, -0.87, 1.4, -0.94),
-          box(0.12, 2.8, 0.12, liftFrame, 0.87, 1.4, -0.94),
-          box(1.82, 0.13, 0.12, liftFrame, 0, 2.74, -0.94),
+          box(1.02, 2.34, 0.04, doorGlass, 0, 1.17, 0.035),
+          box(1.02, 0.06, 0.05, liftBrushed, 0, 1.02, 0.02),
+          box(0.035, 1.02, 0.035, liftBrushed, -0.49, 1.05, 0.02),
+          box(0.035, 1.02, 0.035, liftBrushed, 0.49, 1.05, 0.02),
         );
-        // A split glazed gate sits open at the landing; the center stays visually clear and walkable.
-        cab.add(box(0.34, 2.34, 0.035, liftGlass, -0.68, 1.19, -0.90), box(0.34, 2.34, 0.035, liftGlass, 0.68, 1.19, -0.90));
-        cab.add(box(0.14, 0.42, 0.08, std({ color: 0x111820, metalness: 0.5 }), 0.73, 1.48, -0.87));
-        cab.add(box(0.045, 0.08, 0.085, new THREE.MeshBasicMaterial({ color: 0x4ade80 }), 0.73, 1.7, -0.87));
-        const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.32, 0.25), new THREE.MeshBasicMaterial({ map: T.signTex(`${elevator.name.toUpperCase()} · ${stop.label}`, '#0b1620', '#dbeafe', '#38bdf8') }));
-        sign.position.set(0, 2.91, -1.015); sign.rotation.y = Math.PI; cab.add(sign);
-        g.add(cab);
+        const cabLight = new THREE.MeshBasicMaterial({ color: 0x2a2118 });
+        cab.add(box(0.92, 0.05, 0.06, cabLight, 0, 2.34, 0.005));
+        cab.add(box(0.86, 0.02, 0.02, new THREE.MeshBasicMaterial({ color: 0x9fb6c4 }), 0, 0.02, -0.06));
+        // Inside: mirror over the handrail and a car-button plate, so the cab reads as a lift.
+        cab.add(box(0.66, 0.74, 0.012, std({ color: 0x1c262e, roughness: 0.14, metalness: 0.9, envMapIntensity: 0.7 }), 0, 1.68, 0.055));
+        cab.add(box(0.12, 0.3, 0.014, liftBrushed, 0.39, 1.32, 0.055));
+        const cabButtons = [0, 1].map(i => {
+          const m = new THREE.MeshBasicMaterial({ color: 0x1b2a33 });
+          cab.add(box(0.05, 0.04, 0.006, m, 0.39, 1.41 - i * 0.09, 0.063));
+          return m;
+        });
+        doors.add(cab);
+        // Opening 1.01 m wide, framed by brushed-steel wall panels that hide the open leaves.
+        doors.add(
+          box(2.46, 0.05, 0.4, liftFrame, 0, 0.025, -0.08),
+          box(1.12, 0.035, 0.16, liftBrushed, 0, 0.017, -0.11),
+          box(0.56, 2.38, 0.1, liftWall, -0.79, 1.19, -0.055),
+          box(0.56, 2.38, 0.1, liftWall, 0.79, 1.19, -0.055),
+          box(2.14, 0.2, 0.12, liftFrame, 0, 2.5, -0.05),
+          box(1.09, 0.08, 0.11, liftFrame, 0, 2.37, -0.055),
+        );
+        // Two sliding panels meeting at the centre seam.
+        const leaf = (seal: number) => {
+          const g2 = new THREE.Group();
+          g2.add(box(0.548, 2.3, 0.045, liftLeaf, 0, 1.15, 0));
+          g2.add(box(0.52, 0.28, 0.012, liftBrushed, 0, 0.2, -0.023));
+          // Dark rubber seal on the meeting edge makes the centre seam read when shut.
+          g2.add(box(0.018, 2.3, 0.05, liftFrame, seal * 0.265, 1.15, 0));
+          return g2;
+        };
+        const left = leaf(1), right = leaf(-1);
+        left.position.set(-0.2725, 0, -0.105);
+        right.position.set(0.2725, 0, -0.105);
+        doors.add(left, right);
+        // Above the door: illuminated car-position panel and direction arrows.
+        doors.add(box(1.24, 0.28, 0.06, liftFrame, 0, 2.63, -0.09));
+        const upMat = new THREE.MeshBasicMaterial({ color: 0x1b2a33 });
+        const downMat = new THREE.MeshBasicMaterial({ color: 0x1b2a33 });
+        const up = new THREE.Mesh(new THREE.ConeGeometry(0.062, 0.1, 3), upMat);
+        const down = new THREE.Mesh(new THREE.ConeGeometry(0.062, 0.1, 3), downMat);
+        up.position.set(-0.26, 2.63, -0.125); down.position.set(0.26, 2.63, -0.125);
+        down.rotation.z = Math.PI;
+        doors.add(up, down);
+        const floorLampMats = [0, 1].map(i => {
+          const m = new THREE.MeshBasicMaterial({ color: 0x1b2a33 });
+          // Narrow lamps either side of the centre gap, so the travelling pip stays readable.
+          doors.add(box(0.15, 0.11, 0.04, m, i === 0 ? 0.12 : -0.12, 2.63, -0.125));
+          return m;
+        });
+        // A small amber pip slides between the two floor lamps while the car is travelling.
+        const carPip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.03), new THREE.MeshBasicMaterial({ color: 0xffb545 }));
+        carPip.position.set(0, 2.57, -0.128);
+        doors.add(carPip);
+        // Landing call plate with separate up and down buttons and a key switch.
+        const callUp = new THREE.MeshBasicMaterial({ color: 0x1b2a33 });
+        const callDown = new THREE.MeshBasicMaterial({ color: 0x1b2a33 });
+        doors.add(box(0.17, 0.52, 0.06, liftBrushed, 1.19, 1.35, -0.1));
+        const bu = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.075, 3), callUp);
+        const bd = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.075, 3), callDown);
+        bu.position.set(1.19, 1.5, -0.14); bd.position.set(1.19, 1.31, -0.14); bd.rotation.z = Math.PI;
+        doors.add(bu, bd, box(0.055, 0.055, 0.05, new THREE.MeshBasicMaterial({ color: 0xffd166 }), 1.19, 1.18, -0.13));
+        const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.2), new THREE.MeshBasicMaterial({ map: T.signTex(`${elevator.name.toUpperCase()} · ${stop.label}`, '#0b1620', '#dbeafe', '#38bdf8') }));
+        sign.position.set(0, 2.86, -0.1); sign.rotation.y = Math.PI; doors.add(sign);
+        if (quality >= 2) doors.traverse((o: any) => { if (o.isMesh && o.material !== cabLight) o.receiveShadow = true; });
+        g.add(doors);
+        this.liftViews.push({ id: elevator.id, stopIndex: si, left, right, up: upMat, down: downMat, cabLight, callUp, callDown, floorLamps: floorLampMats, carPip, cabButtons });
       }
     }
     g.add(this.sensorGroup);
@@ -559,6 +722,11 @@ export class LevelView {
     // props
     const crate = std({ map: T.crateTex() }), wood = std({ map: T.woodTex(), roughness: 0.6 }), shelf = std({ map: T.shelfTex() }), dark = std({ color: 0x1a1c20, roughness: 0.5 });
     const locker = std({ map: T.metalTex('locker', '#5d6b78'), metalness: 0.4, roughness: 0.55 }), white = std({ map: T.fabricTex('w', '#d8d6d0') }), pot = std({ color: 0x8a5a3c }), leaf = std({ color: 0x2f6b35 });
+    // Shared geometry for the procedural plant, used until the scanned plant models arrive.
+    const potGeo = new THREE.CylinderGeometry(0.25, 0.18, 0.46, 14), rimGeo = new THREE.CylinderGeometry(0.266, 0.256, 0.06, 14), soilGeo = new THREE.CylinderGeometry(0.225, 0.225, 0.03, 14);
+    const stemGeo = new THREE.CylinderGeometry(0.022, 0.036, 0.95, 6), leafGeo = new THREE.SphereGeometry(1, 6, 4);
+    const soilMat = std({ color: 0x2a1d14, roughness: 1 }), stemMat = std({ color: 0x3d6b3a, roughness: 0.85 });
+    const leafMats = [leaf, std({ color: 0x3f7f45, roughness: 0.8 }), std({ color: 0x255a2d, roughness: 0.8 })];
     const sofaCols = ['#7a2f2f', '#2f4a6a', '#4a4a4a', '#6a5a2f'];
     for (const p of l.props) {
       const o = new THREE.Group();
@@ -598,7 +766,24 @@ export class LevelView {
             case 'bed': o.add(box(1.24, 0.34, 1.92, wood, 0, 0.17, 0), box(1.18, 0.24, 1.84, white, 0, 0.44, 0), box(0.8, 0.12, 0.36, white, 0, 0.6, -0.68)); break;
             case 'chair': { const fm = std({ map: T.fabricTex('s' + (p.rot % 4), sofaCols[p.rot % 4]) }); o.add(box(0.76, 0.44, 0.74, fm, 0, 0.22, 0), box(0.76, 0.56, 0.18, fm, 0, 0.72, -0.28)); break; }
             case 'sofa': { const fm = std({ map: T.fabricTex('s' + (p.rot % 4), sofaCols[p.rot % 4]) }); o.add(box(1.82, 0.44, 0.84, fm, 0, 0.22, 0), box(1.82, 0.4, 0.2, fm, 0, 0.64, -0.32), box(0.16, 0.26, 0.84, fm, -0.83, 0.56, 0), box(0.16, 0.26, 0.84, fm, 0.83, 0.56, 0)); break; }
-            case 'plant': { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.18, 0.48, 10), pot); c.position.y = 0.24; o.add(c); for (let i = 0; i < 3; i++) { const s = new THREE.Mesh(new THREE.IcosahedronGeometry(0.32 - i * 0.05, 0), leaf); s.position.set((i - 1) * 0.09, 0.72 + i * 0.24, (rj - 0.5) * 0.1); s.rotation.set(i, rj * 6, i * 2); o.add(s); } break; }
+            case 'plant': {
+              // Real potted plant: tapered terracotta pot, soil, a stem and nine broad leaves
+              // fanned out at different heights. The 3D scans replace it when they finish loading.
+              const c = new THREE.Mesh(potGeo, pot); c.position.y = 0.23; o.add(c);
+              const rim = new THREE.Mesh(rimGeo, pot); rim.position.y = 0.44; o.add(rim);
+              const soil = new THREE.Mesh(soilGeo, soilMat); soil.position.y = 0.455; o.add(soil);
+              const stem = new THREE.Mesh(stemGeo, stemMat); stem.position.y = 0.9; o.add(stem);
+              for (let i = 0; i < 9; i++) {
+                const a = (i / 9) * Math.PI * 2 + rj * 1.7, y = 0.55 + ((i * 7) % 5) * 0.125;
+                const lf = new THREE.Mesh(leafGeo, leafMats[i % 3]);
+                lf.scale.set(0.17, 0.4 + (i % 3) * 0.06, 0.055);
+                lf.position.set(Math.cos(a) * 0.19, y + 0.2, Math.sin(a) * 0.19);
+                lf.rotation.set(0, -a + Math.PI / 2, 0);
+                lf.rotateX(-0.62 - (i % 3) * 0.16);
+                o.add(lf);
+              }
+              break;
+            }
           }
         };
         const fill = () => {
@@ -622,6 +807,7 @@ export class LevelView {
       }
       g.add(o);
     }
+    this.buildInteriorDetail(quality);
     this.buildExterior(quality);
     if (!propsReady && this.propSlots.length) {
       this.removePropsReady = onPropsReady(() => {
@@ -632,6 +818,184 @@ export class LevelView {
       });
     }
   }
+  /**
+   * Interior finish that does not collide with anything: skirting boards, framed signs, clocks,
+   * whiteboards, fire extinguishers, exit signs and area rugs. Everything is merged per material,
+   * so a whole floor of trim costs a handful of draw calls.
+   */
+  private buildInteriorDetail(quality: number) {
+    const l = this.sim.level, g = this.group;
+    const buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
+    /** Clone a geometry, turn it to face the room, move it into place and file it under its material. */
+    const add = (mat: THREE.Material, geo: THREE.BufferGeometry, x: number, y: number, z: number, ry = 0) => {
+      const c = geo.clone();
+      c.applyMatrix4(new THREE.Matrix4().makeRotationY(ry));
+      c.translate(x, y, z);
+      geo.dispose();
+      const b = buckets.get(mat);
+      if (b) b.push(c); else buckets.set(mat, [c]);
+    };
+    const trimMat = std({ color: 0x20262c, roughness: 0.8, metalness: 0.08 });
+    const frameMat = std({ color: 0x14181d, roughness: 0.55, metalness: 0.3 });
+    const ventMat = std({ color: 0x2b333b, roughness: 0.45, metalness: 0.6 });
+    const redMat = std({ color: 0x9e1b1b, roughness: 0.42, metalness: 0.25 });
+    const artMats = [
+      T.signTex('KISTA', '#0f172a', '#dbeafe', '#38bdf8'),
+      T.signTex('SAFETY FIRST', '#1f2937', '#fbbf24', '#fbbf24'),
+      T.signTex('TEAM AI', '#0b1620', '#e0f2fe', '#22d3ee'),
+      T.signTex('EVIDENCE', '#111827', '#c7d2fe', '#818cf8'),
+    ].map(t => new THREE.MeshBasicMaterial({ map: t }));
+    const exitMat = new THREE.MeshBasicMaterial({ map: T.signTex('EXIT', '#0b2a1b', '#7df0b0', '#34d399') });
+    const clockMat = new THREE.MeshBasicMaterial({ map: T.signTex('09:41', '#0b1016', '#e6edf3', '#64748b') });
+    const boardMat = std({ map: T.signTex('WHITEBOARD', '#e8eef2', '#334155', ''), roughness: 0.35, metalness: 0.05 });
+    const corkMat = std({ map: T.signTex('NOTICE', '#7a5a3a', '#f8f4e8', '#caa46a'), roughness: 0.9 });
+    const rugs = [std({ map: T.fabricTex('rug_a2', '#46282a'), roughness: 1 }), std({ map: T.fabricTex('rug_b2', '#28323f'), roughness: 1 }), std({ map: T.fabricTex('rug_c2', '#3b3529'), roughness: 1 })];
+    const doorCells = new Set(l.doors.map(d => d.cz * l.w + d.cx));
+    const liftCells = new Set<number>();
+    for (const e of l.elevators) for (const s of e.stops) for (let oz = -1; oz <= 1; oz++) for (let ox = -1; ox <= 1; ox++) liftCells.add((Math.floor(s.z) + oz) * l.w + Math.floor(s.x) + ox);
+    const tallProp = (x: number, z: number) => {
+      const p = l.propAt.get(z * l.w + x);
+      return !!p && (p.kind === 'shelf' || p.kind === 'locker' || p.kind === 'server' || p.kind === 'bar' || p.kind === 'bed');
+    };
+    const faceYaw = (dx: number, dz: number) => Math.atan2(dx, dz);
+
+    // Skirting boards around every wall face, no collision and one merged mesh in the end.
+    for (let z = 0; z < l.h; z++) for (let x = 0; x < l.w; x++) {
+      if (l.cells[z * l.w + x] !== WALL) continue;
+      for (const [dx, dz] of [[0, 1], [0, -1], [1, 0], [-1, 0]] as const) {
+        const nx = x + dx, nz = z + dz;
+        if (nx < 0 || nz < 0 || nx >= l.w || nz >= l.h) continue;
+        if (l.cells[nz * l.w + nx] !== FLOOR) continue;
+        const fy = l.groundY[nz * l.w + nx] ?? 0;
+        if (Math.abs(fy - (l.groundY[z * l.w + x] ?? 0)) > 0.4) continue;
+        const alongX = dx === 0;
+        add(trimMat, new THREE.BoxGeometry(alongX ? 0.96 : 0.06, 0.13, alongX ? 0.06 : 0.96),
+          x + 0.5 + dx * 0.49, fy + 0.065, z + 0.5 + dz * 0.49);
+      }
+    }
+
+    for (const r of l.rooms) {
+      const fy = r.floorY ?? 0;
+      type Face = { x: number; z: number; dx: number; dz: number };
+      const faces: Face[] = [];
+      for (let x = r.x + 1; x < r.x + r.w - 1; x++) {
+        if (l.cells[r.z * l.w + x] === WALL) faces.push({ x, z: r.z, dx: 0, dz: 1 });
+        if (l.cells[(r.z + r.h - 1) * l.w + x] === WALL) faces.push({ x, z: r.z + r.h - 1, dx: 0, dz: -1 });
+      }
+      for (let z = r.z + 1; z < r.z + r.h - 1; z++) {
+        if (l.cells[z * l.w + r.x] === WALL) faces.push({ x: r.x, z, dx: 1, dz: 0 });
+        if (l.cells[z * l.w + r.x + r.w - 1] === WALL) faces.push({ x: r.x + r.w - 1, z, dx: -1, dz: 0 });
+      }
+      // Prints, whiteboards and notice boards are 1–1.5 m wide, so they hang over their neighbours
+      // too. Both cells along the wall must be solid as well, otherwise a whiteboard centred on the
+      // last wall cell before a door would cover most of the doorway.
+      const solidRun = (f: Face) => {
+        const ax = f.dz !== 0 ? 1 : 0, az = f.dx !== 0 ? 1 : 0;
+        for (const s of [-1, 1]) {
+          const nx = f.x + ax * s, nz = f.z + az * s;
+          if (nx < 0 || nz < 0 || nx >= l.w || nz >= l.h) return false;
+          if (l.cells[nz * l.w + nx] !== WALL) return false;
+        }
+        return true;
+      };
+      const usable = (f: Face) => {
+        const k = f.z * l.w + f.x;
+        if (doorCells.has(k) || liftCells.has(k)) return false;
+        const fx = f.x + f.dx, fz = f.z + f.dz;
+        if (fz < 0 || fz >= l.h || fx < 0 || fx >= l.w) return false;
+        if (l.cells[fz * l.w + fx] !== FLOOR) return false;
+        if (Math.abs((l.groundY[fz * l.w + fx] ?? 0) - fy) > 0.4) return false;
+        if (tallProp(fx, fz)) return false;
+        return solidRun(f);
+      };
+      const hash = (f: Face) => ((f.x * 73856093) ^ (f.z * 19349663) ^ (r.id * 83492791)) >>> 0;
+      const wallFace = faces.find(usable);
+      if (wallFace && r.w * r.h > 20) {
+        const yaw = faceYaw(wallFace.dx, wallFace.dz);
+        const px = wallFace.x + 0.5 + wallFace.dx * 0.505, pz = wallFace.z + 0.5 + wallFace.dz * 0.505;
+        add(frameMat, new THREE.BoxGeometry(0.5, 0.28, 0.045), px, fy + 2.02, pz, yaw);
+        add(clockMat, new THREE.PlaneGeometry(0.44, 0.2), px + wallFace.dx * 0.026, fy + 2.02, pz + wallFace.dz * 0.026, yaw);
+      }
+      let placed = 0;
+      for (const f of faces) {
+        if (placed >= 5) break;
+        if (!usable(f)) continue;
+        const h = hash(f), pick = h % 12;
+        const yaw = faceYaw(f.dx, f.dz);
+        const px = f.x + 0.5 + f.dx * 0.505, pz = f.z + 0.5 + f.dz * 0.505;
+        const office = r.kind === 'office' || r.kind === 'corridor' || r.kind === 'lobby' || r.kind === 'bedroom';
+        if (pick < 4) {
+          const art = artMats[(h >> 4) % artMats.length];
+          add(frameMat, new THREE.BoxGeometry(1.02, 0.58, 0.045), px, fy + 1.68, pz, yaw);
+          add(art, new THREE.PlaneGeometry(0.92, 0.48), px + f.dx * 0.026, fy + 1.68, pz + f.dz * 0.026, yaw);
+          placed++;
+        } else if (pick === 4 && (r.kind === 'office' || r.kind === 'storage')) {
+          add(frameMat, new THREE.BoxGeometry(1.5, 0.98, 0.045), px, fy + 1.5, pz, yaw);
+          add(boardMat, new THREE.PlaneGeometry(1.4, 0.88), px + f.dx * 0.026, fy + 1.5, pz + f.dz * 0.026, yaw);
+          add(trimMat, new THREE.BoxGeometry(0.3, 0.035, 0.07), px + f.dx * 0.05, fy + 0.98, pz + f.dz * 0.05, yaw);
+          placed++;
+        } else if (pick === 5 && (r.kind === 'storage' || r.kind === 'warehouse' || r.kind === 'vault')) {
+          add(frameMat, new THREE.BoxGeometry(1.25, 0.85, 0.045), px, fy + 1.55, pz, yaw);
+          add(corkMat, new THREE.PlaneGeometry(1.17, 0.77), px + f.dx * 0.026, fy + 1.55, pz + f.dz * 0.026, yaw);
+          placed++;
+        } else if (pick === 6 && office) {
+          // Fire extinguisher on a wall bracket, a small green tag above it.
+          add(redMat, new THREE.CylinderGeometry(0.09, 0.11, 0.62, 10), px, fy + 0.82, pz);
+          add(frameMat, new THREE.BoxGeometry(0.11, 0.1, 0.09), px, fy + 1.18, pz, yaw);
+          add(redMat, new THREE.PlaneGeometry(0.16, 0.09), px + f.dx * 0.05, fy + 1.36, pz + f.dz * 0.05, yaw);
+          placed++;
+        }
+      }
+    }
+
+    // EXIT signage above each door, on both faces of the wall so it reads from either room.
+    for (const d of l.doors) {
+      const fy = d.floorY ?? 0;
+      const cx = d.cx + 0.5, cz = d.cz + 0.5;
+      if (d.horiz) {
+        add(exitMat, new THREE.PlaneGeometry(0.72, 0.24), d.cx + 0.01, fy + 2.55, cz, -Math.PI / 2);
+        add(exitMat, new THREE.PlaneGeometry(0.72, 0.24), d.cx + 0.99, fy + 2.55, cz, Math.PI / 2);
+      } else {
+        add(exitMat, new THREE.PlaneGeometry(0.72, 0.24), cx, fy + 2.55, d.cz + 0.01, Math.PI);
+        add(exitMat, new THREE.PlaneGeometry(0.72, 0.24), cx, fy + 2.55, d.cz + 0.99, 0);
+      }
+    }
+
+    // Area rugs, laid flat under whatever furniture is already in the room. A PlaneGeometry stands
+    // upright by default and add() only turns it around Y, so without this the rugs rose up as
+    // floating dark plates in the middle of rooms that you could walk straight through.
+    for (const r of l.rooms) {
+      if (r.w < 6 || r.h < 5) continue;
+      if (r.kind !== 'office' && r.kind !== 'lobby' && r.kind !== 'bedroom' && r.kind !== 'club') continue;
+      const fy = (r.floorY ?? 0) + 0.014;
+      const rug = new THREE.PlaneGeometry(Math.min(r.w - 3, 3.6), Math.min(r.h - 3, 2.6));
+      rug.rotateX(-Math.PI / 2);
+      add(rugs[(r.id + l.index) % rugs.length], rug, r.x + r.w / 2, fy, r.z + r.h / 2, 0);
+    }
+
+    for (const [mat, geos] of buckets) {
+      if (!geos.length) continue;
+      const merged = mergeGeometries(geos, false);
+      for (const q of geos) q.dispose();
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(merged, mat);
+      mesh.receiveShadow = quality >= 2;
+      g.add(mesh);
+    }
+
+    // Ceiling grilles: a pair per larger room, just below the lamps.
+    for (const r of l.rooms) {
+      if (r.kind !== 'corridor' && r.kind !== 'office' && r.kind !== 'warehouse') continue;
+      if (r.w < 5 || r.h < 5) continue;
+      const y = (r.floorY ?? 0) + 2.975;
+      for (let i = 0; i < 2; i++) {
+        const x = r.x + 1.5 + ((i + 0.5) * (r.w - 3)) / 2, z = r.z + 1.5 + ((i + 0.5) * (r.h - 3)) / 2;
+        if (x >= r.x + r.w - 1 || z >= r.z + r.h - 1) continue;
+        g.add(box(0.62, 0.03, 0.32, ventMat, x, y, z));
+      }
+    }
+  }
+
   private buildExterior(quality: number) {
     const l = this.sim.level, g = this.group;
     const darkSteel = std({ color: 0x181c22, roughness: 0.35, metalness: 0.72 });
@@ -719,6 +1083,40 @@ export class LevelView {
       placeCityModel('street_lamp_01', { x, y: 0, z, ry, scale: 1.18 });
       addLight(x, 4.35, z, col, 14, 15, 1.55);
     };
+    // Kenney CC0 traffic cones (public/models/props/LICENSE.txt) dressing up docks, alleys
+    // and cordons. Purely visual: no colliders, so they can never block the squad or a route.
+    const addTrafficCones = (spots: [number, number][]) => {
+      if (!coneOrangeMat) coneOrangeMat = std({ color: 0xd8541e, roughness: 0.6 });
+      if (!coneWhiteMat) coneWhiteMat = std({ color: 0xe8e4da, roughness: 0.55 });
+      const coneOrange = coneOrangeMat, coneWhite = coneWhiteMat;
+      const buildProcedural = (parent: THREE.Group) => {
+        const base = box(0.3, 0.04, 0.3, coneOrange, 0, 0.02, 0);
+        base.castShadow = false; base.receiveShadow = true; parent.add(base);
+        const c = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.52, 12), coneOrange);
+        c.position.y = 0.3; c.castShadow = false; c.receiveShadow = true; parent.add(c);
+        const band = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.105, 0.1, 12), coneWhite);
+        band.position.y = 0.32; band.castShadow = false; band.receiveShadow = true; parent.add(band);
+      };
+      extPromises.push(loadConeTemplate().then(tpl => {
+        if (this.disposed) return;
+        if (!tpl) {
+          for (const [x, z] of spots) {
+            const grp = new THREE.Group();
+            grp.position.set(x, 0, z);
+            buildProcedural(grp);
+            g.add(grp);
+          }
+          return;
+        }
+        for (const [x, z] of spots) {
+          const cone = tpl.clone(true);
+          cone.position.set(x, 0, z);
+          cone.rotation.y = (x * 3.1 + z * 1.7) % (Math.PI * 2);
+          cone.traverse((o: any) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; } });
+          g.add(cone);
+        }
+      }));
+    };
 
     if (l.theme === 'office') {
       // Cylindrical portico pillars flanking glass entrance (x=14.5, z=20.5)
@@ -754,6 +1152,7 @@ export class LevelView {
       placeCityModel('metal_trash_can', { x: 9.2, y: 0, z: 24.2 });
       placeCityModel('fire_hydrant', { x: 4.9, y: 0, z: 25.4 });
       placeCityModel('concrete_road_barrier_02', { x: 26.2, y: 0, z: 26.2, ry: 0.18 });
+      addTrafficCones([[9.0, 23.8], [18.8, 23.8]]);
       addStreetLamp(6.5, 25.4, 0xd8e8ff);
       addStreetLamp(27.5, 25.4, 0xd8e8ff, Math.PI);
     } else if (l.theme === 'warehouse') {
@@ -783,6 +1182,7 @@ export class LevelView {
       }
       placeCityModel('concrete_road_barrier', { x: 11.4, y: 0, z: 29.8, ry: 0.1 });
       placeCityModel('concrete_road_barrier', { x: 35.8, y: 0, z: 29.4, ry: -0.2 });
+      addTrafficCones([[13.2, 27.2], [18.6, 27.0], [11.4, 28.6], [35.8, 28.2], [27.2, 26.8]]);
       addStreetLamp(4.8, 25.0, 0xffc888);
       addStreetLamp(36.0, 25.0, 0xffc888, Math.PI);
     } else if (l.theme === 'hotel') {
@@ -805,6 +1205,7 @@ export class LevelView {
       placeCityModel('hotel_neighbor', { x: 50.5, y: 0, z: 15.5, w: 12.0, h: 15.5, d: 13.0, ry: -Math.PI / 2 });
       placeCityModel('hotel_neighbor', { x: 23.0, y: 0, z: -12.0, w: 30.0, h: 12.5, d: 14.0 });
       placeCityModel('fire_hydrant', { x: 14.4, y: 0, z: 26.8 });
+      addTrafficCones([[19.5, 27.2], [25.5, 27.2]]);
       placeCityModel('metal_trash_can', { x: 28.4, y: 0, z: 25.8 });
       addStreetLamp(13.5, 26.4, 0xffd59e);
       addStreetLamp(38.5, 26.4, 0xffd59e, Math.PI);
@@ -830,6 +1231,7 @@ export class LevelView {
       addTree(7.8, 26.2, 1.6); addTree(30.8, 26.2, 1.6);
       for (const lx of [12.5, 15.5, 18.5]) addLight(lx, 5.8, 25.8, 0xffdfb8, 18, 12, 1.5);
       placeCityModel('concrete_road_barrier_02', { x: 21.8, y: 0, z: 28.4 });
+      addTrafficCones([[9.0, 28.6], [21.8, 27.4]]);
       placeCityModel('fire_hydrant', { x: 6.4, y: 0, z: 27.4 });
       addStreetLamp(6.2, 26.8, 0xffe4b8);
       addStreetLamp(32.5, 26.8, 0xffe4b8, Math.PI);
@@ -842,6 +1244,7 @@ export class LevelView {
       placeCityModel('hotel_neighbor', { x: 48.0, y: 0, z: 12.0, w: 18.0, h: 11.0, d: 11.0, ry: -Math.PI / 2 });
       placeCityModel('modular_fire_escape', { x: 4.8, y: 2.6, z: 27.0, ry: Math.PI / 2, scale: 0.72 });
       placeCityModel('metal_trash_can', { x: 6.8, y: 0, z: 28.4, ry: Math.PI / 2 });
+      addTrafficCones([[10.5, 26.8], [12.0, 28.4], [23.0, 28.2]]);
       placeCityModel('street_lamp_02', { x: 6.2, y: 3.4, z: 26.6, ry: Math.PI / 2 });
       g.add(box(1.2, 6.5, 6.0, brick, 5.5, 3.25, 27.0), box(1.2, 6.5, 6.0, brick, 24.0, 3.25, 27.0));
       addSign('ECLIPSE', '#12061c', '#ff52e0', '#d438ff', 3.4, 0.72, 13.5, 3.25, 24.06);
@@ -897,16 +1300,18 @@ export class LevelView {
         addLight(tx, 7.1, fz + 0.6, 0xdfe8ff, 26, 22, 1.4);
       }
       placeCityModel('concrete_road_barrier', { x: sx - 3.6, y: 0, z: fz + 1.1, ry: 0.2 });
+      addTrafficCones([[sx - 5.2, fz + 1.2], [sx + 5.2, fz + 1.2], [sx - 3.6, fz + 2.2]]);
       placeCityModel('metal_trash_can', { x: 6.4, y: 0, z: fz + 0.9 });
       addTree(4.5, fz + 1.4, 1.5); addTree(36.6, fz + 1.4, 1.5);
     } else if (l.theme === 'tower') {
       // Kista-inspired glass-and-steel campus: the licensed office-tower asset is a skyline
       // silhouette beyond the playable perimeter, while the actual F1/F2 walls remain walkable.
-      const glass = new THREE.MeshPhysicalMaterial({ color: 0x5b829b, roughness: 0.22, metalness: 0.35, transparent: true, opacity: 0.56 });
+      // A steel canopy on two posts marks the entrance; there is deliberately no glass screen in
+      // front of the facade — one stood here with no collider, so the building read as a solid
+      // glass wall and you walked through it to get in. The facade's own entrance panes do the job.
       const steel = std({ color: 0x202a35, roughness: 0.32, metalness: 0.72 });
       g.add(box(12.4, 0.22, 3.0, steel, 8.5, 3.12, 34.2));
       for (const x of [3.2, 13.8]) g.add(box(0.22, 3.05, 0.22, steel, x, 1.52, 34.5));
-      for (const x of [4.0, 5.8, 7.6, 9.4, 11.2, 13.0]) g.add(box(1.55, 2.35, 0.045, glass, x, 1.55, 33.56));
       const entrySign = new THREE.Mesh(new THREE.PlaneGeometry(4.8, 0.62), new THREE.MeshBasicMaterial({ map: T.signTex('KISTA TECH CENTER', '#0c1624', '#dbeafe', '#3b82f6') }));
       entrySign.position.set(8.5, 3.5, 35.73); entrySign.rotation.y = Math.PI; g.add(entrySign);
       const exitSign = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 0.28), new THREE.MeshBasicMaterial({ map: T.signTex('NÖDUTGÅNG · EXIT', '#093818', '#52ff88', '#34e86a') }));
@@ -920,6 +1325,7 @@ export class LevelView {
       addLight(15.3, 4.0, 36.1, 0xcde7ff, 12, 13, 1.5);
       placeCityModel('metal_trash_can', { x: 16.8, y: 0, z: 35.9 });
       addBollard(4.0, 36.0); addBollard(13.0, 36.0);
+      addTrafficCones([[2.0, 35.2], [15.8, 35.0]]);
     }
     if (l.vehicle) {
       extPromises.push(this.spawnPoliceUnit(l.vehicle.x, l.vehicle.z, l.vehicle.yaw, quality));
@@ -983,6 +1389,38 @@ export class LevelView {
       d.wedge.visible = !!d.door.wedged;
       d.tripwire.visible = !!(d.door.trapped && d.door.trapKnown);
       if (d.glass && d.glass.visible && this.sim.brokenDoorGlass.has(d.door.id)) d.glass.visible = false;
+    }
+    // Landing doors follow the car's state: opening, held open, closing, and open again on arrival.
+    for (const v of this.liftViews) {
+      const car = this.sim.elevators[v.id];
+      const elevator = this.sim.level.elevators[v.id];
+      if (!car || !elevator) continue;
+      const k = Math.max(0, Math.min(1, car.door));
+      v.left.position.x = -0.2725 - k * 0.55;
+      v.right.position.x = 0.2725 + k * 0.55;
+      v.left.visible = k < 0.995;
+      v.right.visible = k < 0.995;
+      const stop = elevator.stops[v.stopIndex];
+      const to = elevator.stops[car.target];
+      const goingUp = to.floorY > stop.floorY;
+      const active = car.phase !== 'idle';
+      v.up.color.setHex(active && goingUp ? 0xffb545 : 0x1b2a33);
+      v.down.color.setHex(active && !goingUp ? 0xffb545 : 0x1b2a33);
+      // The indicator lights the landing the car is actually at, and the pip rides between floors.
+      v.floorLamps.forEach((m, i) => m.color.setHex(car.at === i ? (i === 1 ? 0x9ee8ff : 0xffd88a) : 0x1b2a33));
+      const pipFloor = car.phase === 'moving' ? car.at + (car.target - car.at) * Math.max(0, Math.min(1, car.travel)) : car.at;
+      v.carPip.position.y = 2.57 + pipFloor * 0.12;
+      v.cabButtons.forEach((m, i) => m.color.setHex(car.at === i ? (i === 1 ? 0x9ee8ff : 0xffd88a) : 0x1b2a33));
+      // The landing button lights for the trip, and blinks while the empty car is on its way over.
+      const atLanding = active && car.phase !== 'moving';
+      const blink = Math.sin(this.sim.time * 9) > -0.2;
+      const calling = !!car.pending || car.calling;
+      const callUpLit = calling ? car.at < v.stopIndex && blink : atLanding && goingUp;
+      const callDownLit = calling ? car.at > v.stopIndex && blink : atLanding && !goingUp;
+      v.callUp.color.setHex(callUpLit ? 0xffb545 : 0x1b2a33);
+      v.callDown.color.setHex(callDownLit ? 0xffb545 : 0x1b2a33);
+      const warm = 0.06 + k * 1.25;
+      v.cabLight.color.setRGB(warm * 1.0, warm * 0.86, warm * 0.66);
     }
     // Sync dropped evidence weapons on the floor
     const activeEvIds = new Set<number>();
@@ -1252,7 +1690,11 @@ export class ActorView {
     g.obj.position.x = this.leanK * 0.12;
     g.obj.position.y = -P_DROP() * this.kneelK - (a.kind === 'player' && a.crouch && a.alive ? 0.25 : 0) + this.proneK * 0.2 + (a.alive ? a.jumpY : 0); g.obj.position.z = this.proneK * 0.8;
     if (g.gun) g.gun.visible = armed && a.alive && !a.down && !a.downed;
-    if (this.op) { this.op.update(g, dt, { alive: a.alive, aim: !!a.target || a.ads || this.shootT > 0, armed }); this.gun.visible = false; }
+    if (this.op) {
+      // Feet are planted on the floor only while he is actually standing on it (not crouched, prone, downed or airborne).
+      const plant = a.alive && !a.crouch && !a.prone && !a.down && !a.downed && a.jumpY <= 0.01;
+      this.op.update(g, dt, { alive: a.alive, aim: !!a.target || a.ads || this.shootT > 0, armed, plant }); this.gun.visible = false;
+    }
     else if (this.rifle) { this.gun.visible = armed && a.alive; const G = (window as any).__gun; if (G) { this.gun.position.set(G.p[0], G.p[1], G.p[2]); this.gun.rotation.set(G.r[0], G.r[1], G.r[2]); this.gun.scale.setScalar(G.s); } }
     if (this.label) this.label.visible = a.alive;
     if (this.dropped) this.dropped.visible = !a.armed || !a.alive;
@@ -1394,7 +1836,7 @@ export class FX {
   private gasTex = softPuffTex('rgba(190,225,110,0.55)', 'rgba(140,185,70,0.24)');
   private gunSmokeTex = softPuffTex('rgba(215,220,226,0.34)', 'rgba(160,168,176,0.12)');
   private shells: { m: THREE.Mesh; vx: number; vy: number; vz: number; rx: number; rz: number; life: number }[] = []; private shi = 0;
-  private laserDot: THREE.Mesh;
+  private laserDot: THREE.Sprite;
   private irBeam: THREE.Line;
   light = new THREE.PointLight(0xffc070, 0, 12, 1.6); private lightT = 0; private markers: { m: THREE.Mesh; t: number }[] = [];
   private pings: { g: THREE.Group; ring: THREE.Mesh; sp: THREE.Sprite; t: number }[] = [];
@@ -1445,11 +1887,10 @@ export class FX {
       m.visible = false; this.group.add(m);
       this.shells.push({ m, vx: 0, vy: 0, vz: 0, rx: 0, rz: 0, life: 0 });
     }
-    this.laserDot = new THREE.Mesh(
-      new THREE.SphereGeometry(0.016, 8, 8),
-      new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.92 }),
-    );
-    this.laserDot.visible = false; this.group.add(this.laserDot);
+    // A flat sprite, not a sphere: its size is set from the distance every frame, so the dot keeps
+    // the same small size on screen instead of ballooning when the player stands close to a wall.
+    this.laserDot = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glowTex(), color: 0xff2a1e, transparent: true, opacity: 0.95, depthWrite: false }));
+    this.laserDot.visible = false; this.laserDot.renderOrder = 3; this.group.add(this.laserDot);
     const beamGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
     this.irBeam = new THREE.Line(beamGeo, new THREE.LineBasicMaterial({ color: 0x64ff88, transparent: true, opacity: 0.42 }));
     this.irBeam.visible = false; this.irBeam.frustumCulled = false; this.group.add(this.irBeam);
@@ -1525,19 +1966,23 @@ export class FX {
     s.rx = (Math.random() - 0.5) * 28; s.rz = (Math.random() - 0.5) * 28;
     s.life = 5.5;
   }
-  setLaser(on: boolean, x = 0, y = 0, z = 0, ox = 0, oy = 0, oz = 0, irBeam = false) {
+  /** The laser dot and its beam. `dotDist` is the distance from the eye to the dot, used to keep the dot a constant small size on screen. */
+  setLaser(on: boolean, x = 0, y = 0, z = 0, ox = 0, oy = 0, oz = 0, irBeam = false, dotDist = 6) {
     this.laserDot.visible = on;
-    if (on) {
-      this.laserDot.position.set(x, y, z);
-      (this.laserDot.material as THREE.MeshBasicMaterial).color.setHex(irBeam ? 0x80ff98 : 0xff2222);
-    }
-    this.irBeam.visible = on && irBeam;
-    if (this.irBeam.visible) {
-      const p = this.irBeam.geometry.attributes.position as THREE.BufferAttribute;
-      p.setXYZ(0, ox, oy, oz);
-      p.setXYZ(1, x, y, z);
-      p.needsUpdate = true;
-    }
+    this.irBeam.visible = on;
+    if (!on) return;
+    this.laserDot.position.set(x, y, z);
+    // ~6 px on screen at any distance: the world size grows with the distance
+    this.laserDot.scale.setScalar(Math.max(0.004, dotDist * 0.009));
+    const mat = this.laserDot.material as THREE.SpriteMaterial;
+    mat.color.setHex(irBeam ? 0x80ff98 : 0xff2a1e);
+    const beam = this.irBeam.material as THREE.LineBasicMaterial;
+    beam.color.setHex(irBeam ? 0x64ff88 : 0xff2a1e);
+    beam.opacity = irBeam ? 0.5 : 0.26;
+    const p = this.irBeam.geometry.attributes.position as THREE.BufferAttribute;
+    p.setXYZ(0, ox, oy, oz);
+    p.setXYZ(1, x, y, z);
+    p.needsUpdate = true;
   }
   shieldHit(x: number, y: number, z: number) {
     this.burst(x, y, z, 14, 0xffd27a, 4.2, 6, 0.28);

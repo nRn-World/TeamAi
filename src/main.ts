@@ -1,6 +1,6 @@
 import { loadModels, modelsReady } from './game/models';
 import * as THREE from 'three';
-import { Sim, Actor, Command, Team, Ev, fwd, PrimaryLoadout, SecondaryLoadout, CoopMods, PrePlan } from './sim/sim';
+import { Sim, Actor, Command, Team, Ev, fwd, yawTo, PrimaryLoadout, SecondaryLoadout, CoopMods, PrePlan } from './sim/sim';
 import { MISSIONS, WALL, DOOR, LOW, HIGH, WINDOW, buildLevel, groundHeightAt, Level, Door, Room, roomAt } from './sim/level';
 import { MenuScene } from './game/menuscene';
 import { operatorEnv } from './game/operator';
@@ -42,17 +42,47 @@ const missionParam = Number(missionText);
 const DIRECT_MISSION = missionText?.trim() && Number.isInteger(missionParam) && missionParam >= 0 && missionParam < MISSIONS.length ? missionParam : null;
 
 // ---------------- settings & career ----------------
-const defaults = { sens: 1, adsSens: 0.65, vol: 0.8, music: 1, mic: 1, ptt: 1, lang: 'en-US', asr: 'local', tts: 1, head: 0, qual: 1, diff: 1, name: '', ai: 0, aiModel: AI_MODELS[0].id as string, primary: 'carbine' as PrimaryLoadout, secondary: 'pistol' as SecondaryLoadout, stream: 0, censor: 1, pip: 1 };
+const defaults = { sens: 1, adsSens: 0.65, vol: 0.8, music: 1, mic: 1, ptt: 1, lang: 'en-US', asr: 'local', tts: 1, head: 0, qual: 2, diff: 1, name: '', ai: 0, aiModel: AI_MODELS[0].id as string, primary: 'carbine' as PrimaryLoadout, secondary: 'pistol' as SecondaryLoadout, stream: 0, censor: 1, pip: 1, binds: {} as Record<string, string> };
 type Settings = typeof defaults;
-const S: Settings = { ...defaults, ...JSON.parse(localStorage.getItem('teamai.settings') || '{}') };
+/** Read a JSON value without letting a corrupt save take the whole game down before the menu paints. */
+function readStore<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const v = JSON.parse(raw);
+    return v && typeof v === 'object' ? v as T : fallback;
+  } catch { return fallback; }
+}
+// Rebindable actions: logical code is what the rest of the game checks, physical is what is pressed.
+const BIND_ACTIONS = [
+  ['forward', 'Move forward', 'KeyW'], ['back', 'Move back', 'KeyS'], ['left', 'Strafe left', 'KeyA'], ['right', 'Strafe right', 'KeyD'],
+  ['sprint', 'Sprint', 'ShiftLeft'], ['crouch', 'Crouch', 'KeyC'], ['prone', 'Crawl', 'KeyZ'], ['slow', 'Sneak', 'KeyX'],
+  ['jump', 'Jump / stand up', 'Space'], ['use', 'Open / use / kick', 'KeyF'], ['reload', 'Reload', 'KeyR'], ['shout', 'Shout compliance', 'CapsLock'],
+  ['grenade', 'Cycle grenade', 'Period'], ['voice', 'Talk to the squad (hold)', 'KeyV'],
+] as const;
+type BindAction = typeof BIND_ACTIONS[number][0];
+const DEFAULT_BINDS = Object.fromEntries(BIND_ACTIONS.map(([a, , k]) => [a, k])) as Record<BindAction, string>;
+const RESERVED_KEYS = new Set(['Escape', 'Enter', 'Tab', 'F2', 'F8', 'KeyQ', 'KeyE', 'KeyG', 'KeyU', 'KeyY', 'KeyO', 'KeyN', 'KeyK', 'KeyP', 'KeyJ', 'KeyH', 'KeyB', 'KeyM', 'KeyI', 'KeyT', 'KeyL', 'Backquote', 'Comma', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9']);
+function normaliseBinds(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw && typeof raw === 'object') for (const [a] of BIND_ACTIONS) {
+    const v = (raw as Record<string, unknown>)[a];
+    if (typeof v === 'string' && v) out[a] = v;
+  }
+  return out;
+}
+const KEY_LABELS: Record<string, string> = { ShiftLeft: 'SHIFT', ShiftRight: 'RSHIFT', CapsLock: 'CAPS', Space: 'SPACE', Period: '.', Comma: ',', Backquote: '`', ControlLeft: 'CTRL', AltLeft: 'ALT', Enter: 'ENTER', Tab: 'TAB' };
+const keyLabel = (code: string) => KEY_LABELS[code] ?? code.replace(/^Key/, '').replace(/^Digit/, '');
+const S: Settings = { ...defaults, ...readStore<Partial<Settings>>('teamai.settings', {}) };
+S.binds = normaliseBinds(S.binds);
 if (!String(S.lang).startsWith('en')) S.lang = 'en-US'; // English only
 if (!AI_MODELS.some(m => m.id === S.aiModel)) S.aiModel = AI_MODELS[0].id;
-const best: Record<string, number> = JSON.parse(localStorage.getItem('teamai.best') || '{}');
-const dailyBest: Record<string, number> = JSON.parse(localStorage.getItem('teamai.daily') || '{}');
+const best: Record<string, number> = readStore('teamai.best', {});
+const dailyBest: Record<string, number> = readStore('teamai.daily', {});
 const career = loadCareer();
 const getRank = (xp: number) => rankOf(xp).name;
 if (params.has('q')) S.qual = +params.get('q')!;
-const saveSettings = () => localStorage.setItem('teamai.settings', JSON.stringify(S));
+const saveSettings = () => { try { localStorage.setItem('teamai.settings', JSON.stringify(S)); } catch { /* private mode */ } };
 const dailyInfo = () => {
   const d = new Date();
   const key = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
@@ -119,6 +149,12 @@ class Game {
   breachBannerT = 0; mutinyT = 0;
   private lobbyVoiceTimer = 0;
   state: 'menu' | 'play' | 'pause' | 'end' = 'menu'; mission = 0; seed = 1;
+  perfOn = params.has('perf'); perfSamples: number[] = []; perfRender: number[] = []; perfFrame = 0; perfT = 0; perfFps = 0; perfMs = 0; perfP95 = 0;
+  /** One entry per second of the live overlay, so an exported report shows the curve, not a single frame. */
+  perfLog: { t: number; fps: number; frameMs: number; p95Ms: number; scale: number; calls: number; tris: number }[] = []; perfLogT = 0;
+  renderScale = 1; perfGuardT = 0; perfGuardAt = 0; perfGuardOn = !params.has('noperfguard');
+  trainingOn = false; trainingDone = false; trainingStart = { x: 0, z: 0 };
+  trainingSteps = { move: false, aim: false, shout: false, order: false, crouch: false, reload: false };
   yaw = 0; pitch = 0; keys = new Set<string>(); mouseDown = false; eye = 1.62; bob = 0; stepAcc = 0; recoil = 0; vmKick = 0; sway = new THREE.Vector2();
   weapon = 0; ammo = [30, 15]; reserve = [150, 60]; fireCd = 0; reloadT = 0; semiLock = false; torchOn = true; laserOn = true; fireMode: 'auto' | 'semi' = 'auto'; mapOn = true;
   nvgOn = false; bodycamOn = false; wheelOn = false; nvgLight: THREE.AmbientLight | null = null; ambLight: THREE.AmbientLight | null = null;
@@ -182,7 +218,8 @@ class Game {
     window.addEventListener('pointerdown', unlockMenuAudio, { once: true });
     window.addEventListener('keydown', unlockMenuAudio, { once: true });
     requestAnimationFrame(() => this.frame());
-    if (AUTO) this.start(+(params.get('auto') || 0), START_SEED);
+    if (params.has('training')) this.startTraining();
+    else if (AUTO) this.start(+(params.get('auto') || 0), START_SEED);
     else if (DIRECT_MISSION !== null) { this.directMissionRun = true; this.start(DIRECT_MISSION, START_SEED); }
   }
   syncMenuMusic() {
@@ -196,13 +233,14 @@ class Game {
   resize() {
     const w = innerWidth, h = innerHeight;
     const cap = S.qual >= 3 ? 2 : S.qual === 2 ? 1.5 : S.qual === 1 ? 1.15 : 1;
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, cap));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, cap) * this.renderScale);
     this.renderer.setSize(w, h, false);
     this.camera.aspect = this.viewCam.aspect = w / h; this.camera.updateProjectionMatrix(); this.viewCam.updateProjectionMatrix();
     this.post?.setSize(w, h, this.renderer.getPixelRatio());
   }
   applySettings() {
     ActorView.detailed = S.qual > 0;
+    this.renderScale = 1; this.perfGuardT = 0; this.perfGuardAt = 0;
     this.post?.setQuality(S.qual);
     this.renderer.shadowMap.enabled = S.qual >= 2;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -215,11 +253,13 @@ class Game {
     }
     this.menu.setQuality(S.qual);
     if (this.scene && S.qual > 0) this.scene.environmentIntensity = S.qual >= 3 ? 0.3 : S.qual === 2 ? 0.22 : 0.14;
-    this.audio.setVolume(S.vol); this.speech.enabled = !!S.tts; this.speech.lang = S.lang;
+    this.audio.setVolume(S.vol);
     const local = LocalVoice.supported && ((S.asr === 'local' && !this.localVoice.failed) || !Voice.supported), nv = local ? this.localVoice : this.webVoice;
     if (nv !== this.voice) { this.voice.stop(); this.voice = nv; }
     this.webVoice.setLang(S.lang); this.localVoice.setLang('en'); this.voice.ptt = !!S.ptt; this.micState(this.voice.state);
-    if (local && S.mic && !AUTO) this.localVoice.preload();
+    // The speech model is several hundred MB. Never start that download from the menu: it begins
+    // when the player deploys, presses V, or asks for it in Settings.
+    if (local && S.mic && !AUTO && this.state === 'play') this.localVoice.preload();
     this.asrInfo();
     ($('sSens') as HTMLInputElement).value = String(S.sens); ($('sAdsSens') as HTMLInputElement).value = String(S.adsSens); ($('sVol') as HTMLInputElement).value = String(S.vol);
     for (const [id, k] of [['sMusic', 'music'], ['sMic', 'mic'], ['sPtt', 'ptt'], ['sLang', 'lang'], ['sAsr', 'asr'], ['sTts', 'tts'], ['sHead', 'head'], ['sQual', 'qual'], ['sDiff', 'diff'], ['sAi', 'ai'], ['sAiModel', 'aiModel'], ['sStream', 'stream'], ['sCensor', 'censor'], ['sPip', 'pip']] as const) ($(id) as HTMLSelectElement).value = String(S[k]);
@@ -346,6 +386,7 @@ class Game {
       b.textContent = `0${i + 1}`;
       b.onclick = () => {
         this.audio.init(); this.audio.ui();
+
         this.selectMission(i);
       };
       pills.appendChild(b);
@@ -370,6 +411,7 @@ class Game {
     });
     $('btnStartMission').onclick = () => {
       this.audio.init(); this.audio.ui(); this.isDaily = false;
+
       this.openBrief(this.mission);
     };
     const di = dailyInfo();
@@ -402,6 +444,8 @@ class Game {
     ($('btnFirstRunOk') as HTMLButtonElement).onclick = () => {
       career.tutorialDone = true; saveCareer(career); show('firstrun', false); this.audio.ui();
     };
+    ($('btnFirstRunTraining') as HTMLButtonElement).onclick = () => this.startTraining();
+    ($('btnTraining') as HTMLButtonElement).onclick = () => this.startTraining();
     if (!career.tutorialDone) show('firstrun', true);
     this.refreshCareerUi();
     this.menu.setHeroLoadout(S.primary, S.secondary);
@@ -686,7 +730,7 @@ class Game {
     const ring = document.querySelector('#wheel .wring')!;
     const items: { label: string; cmd: Command }[] = [
       { label: 'Follow', cmd: { team: 'ALL', action: 'follow' } },
-      { label: 'Sök & Säkra', cmd: { team: 'ALL', action: 'secure' } },
+      { label: 'Search & Secure', cmd: { team: 'ALL', action: 'secure' } },
       { label: 'Hold / Cover', cmd: { team: 'ALL', action: 'cover' } },
       { label: 'Stack Up', cmd: { team: 'ALL', action: 'stack' } },
       { label: 'Breach', cmd: { team: 'ALL', action: 'breach' } },
@@ -818,7 +862,7 @@ class Game {
         this.dispatchPlaying = true;
         btn.textContent = '■ STOP DISPATCH';
         btn.classList.add('playing');
-        this.audio.playDispatch(this.mission, this.speech, () => {
+        this.audio.playDispatch(this.mission, () => {
           this.dispatchPlaying = false;
           btn.textContent = '▶ PLAY 911 DISPATCH';
           btn.classList.remove('playing');
@@ -884,6 +928,7 @@ class Game {
       if (next >= MISSIONS.length) return;
       show('debrief', false); this.isDaily = false; this.newRound(next);
     });
+    click('btnTrainingEnd', () => this.endTraining());
     click('btnDispatchToggle', () => { show('pause', false); this.state = 'play'; this.toggleDispatch(true); });
     click('btnCloseDispatch', () => { this.toggleDispatch(false); if (this.state === 'play') this.lock(); });
     document.querySelectorAll<HTMLElement>('#dispatchPanel [data-dp]').forEach(b => b.onclick = () => {
@@ -916,13 +961,54 @@ class Game {
     ($('sAiModel') as HTMLSelectElement).innerHTML = AI_MODELS.map(m => `<option value="${m.id}">${m.label}</option>`).join('');
     bind('sSens', 'sens'); bind('sAdsSens', 'adsSens'); bind('sVol', 'vol'); bind('sMusic', 'music'); bind('sMic', 'mic'); bind('sPtt', 'ptt'); bind('sLang', 'lang', false); bind('sAsr', 'asr', false); bind('sTts', 'tts'); bind('sHead', 'head'); bind('sQual', 'qual'); bind('sDiff', 'diff'); bind('sAi', 'ai'); bind('sAiModel', 'aiModel', false); bind('sStream', 'stream'); bind('sCensor', 'censor'); bind('sPip', 'pip');
     click('btnMenuMusic', () => { S.music = S.music ? 0 : 1; saveSettings(); this.applySettings(); });
+    click('btnAsrLoad', () => { this.audio.init(); this.audio.ui(); this.localVoice.preload(); this.asrInfo(); });
+    $('btnKeysReset').onclick = () => {
+      S.binds = {}; this.binding = null; saveSettings(); this.buildKeyBinds();
+      const n = $('keysNote'); n.textContent = 'Default keys restored.'; n.className = 'note';
+    };
+    this.buildKeyBinds();
     $('btnAiLoad').onclick = () => {
       this.audio.init(); this.audio.ui();
       if (!S.ai) { S.ai = 1; saveSettings(); ($('sAi') as HTMLSelectElement).value = '1'; }
       void this.ai.ensureLoaded(S.aiModel);
     };
   }
-  toMenu() { this.stopReplay(); this.dispatchPlaying = false; this.audio.stopDispatch(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.remoteCombat.clear(); this.directMissionRun = false; this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn', 'mutinyWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); this.updateRankDock(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
+  toMenu() { this.stopReplay(); this.trainingOn = false; this.renderScale = 1; this.perfGuardT = 0; this.perfGuardAt = 0; this.resize(); show('training', false); this.dispatchPlaying = false; this.audio.stopDispatch(); document.body.classList.remove('ingame'); this.net.close(); this.connIdx.clear(); this.connName.clear(); this.lobbyMeta.clear(); this.remoteCombat.clear(); this.directMissionRun = false; this.lobbyReady = false; this.debReady = false; show('lobby', false); this.state = 'menu'; this.speech.stop(); this.voice.stop(); for (const id of ['pause', 'debrief', 'hud', 'brief', 'pipFrame', 'dispatchPanel', 'radioCard', 'coopHud', 'breachBanner', 'ffWarn', 'mutinyWarn']) show(id, false); $('bcCensor').innerHTML = ''; this.pipOn = false; this.pipManual = false; this.pipKind = 'ally'; this.optiwandDoor = null; this.dispatchOn = false; this.isDaily = false; this.buildMenu(); this.updateRankDock(); show('menu', true); this.syncMenuMusic(); if (document.pointerLockElement) document.exitPointerLock(); }
+  // ---------------- optional training ----------------
+  startTraining() {
+    this.audio.init(); this.audio.ui();
+    this.trainingOn = true; this.trainingDone = false;
+    this.trainingSteps = { move: false, aim: false, shout: false, order: false, crouch: false, reload: false };
+    this.isDaily = false;
+    show('trainingDone', false);
+    for (const id of ['firstrun', 'menu', 'help', 'settings', 'brief']) show(id, false);
+    void this.start(0, 1, 1, 0, 0, [], { training: true });
+  }
+  endTraining() {
+    this.trainingOn = false; show('training', false); this.toMenu();
+  }
+  updateTraining() {
+    const sim = this.sim; if (!sim || !this.trainingOn) return;
+    const p = sim.player;
+    // Count the input immediately; a trainee can be standing against a door or a wall and still
+    // be practising the movement keys.
+    if (this.keys.has('KeyW') || this.keys.has('KeyA') || this.keys.has('KeyS') || this.keys.has('KeyD') || Math.hypot(p.x - this.trainingStart.x, p.z - this.trainingStart.z) > 0.35) this.trainingSteps.move = true;
+    if (this.ads) this.trainingSteps.aim = true;
+    if (p.crouch) this.trainingSteps.crouch = true;
+    for (const el of document.querySelectorAll<HTMLElement>('[data-tr]')) {
+      const key = el.dataset.tr as keyof typeof this.trainingSteps;
+      el.classList.toggle('done', !!this.trainingSteps[key]);
+    }
+    const done = Object.values(this.trainingSteps).filter(Boolean).length;
+    const total = Object.keys(this.trainingSteps).length;
+    if (done === total && !this.trainingDone) {
+      this.trainingDone = true; career.tutorialDone = true; saveCareer(career);
+      show('trainingDone', true); this.audio.ok();
+      this.log('Training complete: controls and rules of engagement confirmed.', 'me');
+    }
+    const obj = $('objective');
+    if (obj) obj.innerHTML = `TRAINING · ${done}/${total} COMPLETE`;
+  }
   // ---------------- online co-op ----------------
   private currentMods(): CoopMods & { daily?: boolean } {
     const black = ($('modBlackout') as HTMLInputElement).checked;
@@ -1022,7 +1108,7 @@ class Game {
     };
     this.net.onClosed = why => { if (!this.net.online) return; this.toMenu(); $('mpErr').textContent = why; };
     this.net.onMsg = (c, m) => { if (this.net.role === 'host') this.fromClient(c, m); else this.fromHost(m); };
-    $('btnTts').onclick = () => { this.audio.init(); setTimeout(() => { $('latInfo').textContent = this.audio.latencyMs ? `Audio latency reported by the browser: ${this.audio.latencyMs} ms.` : ''; }, 300); const n = this.speech.voiceCount; if (!this.speak('Copy, following you.', null, { voice: 'o1' })) this.speech.say('Team A, copy. Following you.', 1, 1.1, 1, true); $('ttsInfo').textContent = n === 0 ? 'The browser has no speech voices – lines without a recorded clip stay silent. Install a voice in the operating system’s speech settings or use Chrome/Edge.' : this.speech.hasLangVoice ? `${n} voices found. Hear nothing? Check the volume and that the tab is not muted.` : `${n} voices found, but none in the chosen language – the browser's default voice is used.`; };
+    $('btnTts').onclick = () => { this.audio.init(); setTimeout(() => { $('latInfo').textContent = this.audio.latencyMs ? `Audio latency reported by the browser: ${this.audio.latencyMs} ms.` : ''; }, 300); const played = this.speak('Copy, following you.', null, { voice: 'o1' }); $('ttsInfo').textContent = played ? 'All voices are recorded clips – the browser’s robotic speech synthesis is never used.' : 'The voice clips are still loading – press the button again in a second.'; };
   }
   lobbyMe = 0;
   private updateDebReadyUi() {
@@ -1308,8 +1394,8 @@ class Game {
       $('loadTitle').textContent = 'Loading...';
       $('loadMission').textContent = MISSIONS[mission]?.name ?? 'Operation';
       const propLevel = buildLevel(mission, seed);
-      const propsPromise = loadProps(propAssetKeysFor(propLevel.props, propLevel.theme));
-      setLoad(18, 'Loading this operation’s 3D props, weapons & squad models...');
+      const propsPromise = S.qual >= 2 ? loadProps(propAssetKeysFor(propLevel.props, propLevel.theme)) : Promise.resolve();
+      setLoad(18, S.qual >= 2 ? 'Loading this operation’s 3D props, weapons & squad models...' : 'Loading weapons & squad models...');
       for (const id of ['lobby', 'debrief', 'pause', 'brief', 'firstrun', 'help', 'settings', 'menu']) show(id, false);
       show('loading', true);
       await nextFrame();
@@ -1318,7 +1404,7 @@ class Game {
       setLoad(62, 'Building operation environment...');
       await nextFrame();
 
-      this.mission = mission; this.seed = seed; this.audio.init(); void this.audio.setMenuMusic(false); this.audio.stopDispatch();
+      this.mission = mission; this.seed = seed; this.renderScale = 1; this.perfGuardT = 0; this.perfGuardAt = 0; this.resize(); this.audio.init(); void this.audio.setMenuMusic(false); this.audio.stopDispatch();
       document.body.classList.remove('menu-wait');
       this.netTargets.clear(); this.pings = []; this.breachBannerT = 0; this.mutinyT = 0;
       // career roster: injured officers sit out, rookies take their place (solo only)
@@ -1366,8 +1452,15 @@ class Game {
       setLoad(100, 'Deployment ready.');
       await nextFrame();
       this.state = 'play'; this.last = performance.now(); $('log').innerHTML = ''; $('heard').textContent = ''; $('parsed').textContent = '';
+      this.perfFrame = 0; this.perfSamples = []; this.perfRender = []; this.perfT = 0;
       this.ai.resetHistory();
-      this.buildMap(); show('loading', false); show('menu', false); show('hud', true); this.updateHud(true);
+      this.buildMap(); show('loading', false); show('menu', false); show('hud', true); this.togglePerf(this.perfOn);
+      if (this.trainingOn) {
+        this.trainingStart = { x: sim.player.x, z: sim.player.z };
+        this.trainingDone = false;
+        show('training', true); this.updateTraining();
+      } else show('training', false);
+      this.updateHud(true);
       if (S.mic && !AUTO) this.voice.start();
       if (S.ai && !mp && !AUTO) void this.ai.ensureLoaded(S.aiModel);
       this.aiState(this.ai.state, this.ai.state === 'loading' ? this.ai.progress : this.ai.error);
@@ -1383,7 +1476,43 @@ class Game {
   }
 
   // ---------------- input ----------------
+  /** The key currently bound to an action, falling back to the default layout. */
+  bindKey(a: BindAction): string { return S.binds[a] || DEFAULT_BINDS[a]; }
+  /** Translate a physical key press into the logical code the game checks. */
+  logicalCode(code: string): string {
+    for (const [a, , logical] of BIND_ACTIONS) if (this.bindKey(a) === code) return logical;
+    // A default key that has been moved to another key must stop firing its old action.
+    for (const [, , logical] of BIND_ACTIONS) if (logical === code) return 'Unbound';
+    return code;
+  }
+  binding: BindAction | null = null;
+  buildKeyBinds() {
+    const box = $('keybinds'); if (!box) return;
+    box.innerHTML = BIND_ACTIONS.map(([a, label]) => `<button type="button" class="kbrow${this.binding === a ? ' listening' : ''}" data-bind="${a}"><span>${label}</span><kbd>${this.binding === a ? 'PRESS A KEY…' : keyLabel(this.bindKey(a))}</kbd></button>`).join('');
+    box.querySelectorAll<HTMLButtonElement>('[data-bind]').forEach(b => {
+      b.onclick = () => { this.binding = b.dataset.bind as BindAction; this.buildKeyBinds(); };
+    });
+  }
   bindInput() {
+    // Key-binding capture runs before the game handler and swallows the press.
+    window.addEventListener('keydown', e => {
+      if (!this.binding) return;
+      e.preventDefault(); e.stopPropagation();
+      const action = this.binding; this.binding = null;
+      const note = $('keysNote');
+      if (e.code === 'Escape') { this.buildKeyBinds(); return; }
+      if (RESERVED_KEYS.has(e.code)) {
+        note.textContent = `${keyLabel(e.code)} is used by a fixed action (grenades, gear, team keys). Pick another key.`;
+        note.className = 'note warn';
+        this.buildKeyBinds();
+        return;
+      }
+      const old = this.bindKey(action);
+      for (const [a] of BIND_ACTIONS) if (a !== action && this.bindKey(a) === e.code) S.binds[a] = old;
+      S.binds[action] = e.code; saveSettings();
+      note.textContent = ''; note.className = 'note';
+      this.buildKeyBinds();
+    }, true);
     const c = $('c');
     c.addEventListener('click', () => { if (this.state === 'play' && !document.pointerLockElement) this.lock(); });
     document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement && this.state === 'play' && !AUTO && !this.typing && !this.wheelOn && !this.dispatchOn) this.pause(); });
@@ -1405,7 +1534,7 @@ class Game {
         if (sp?.alive && !sp.downed && !this.typing && !this.wheelOn && this.fireCd <= 0 && this.reloadT <= 0 && this.ammo[this.weapon] > 0 && !this.semiLock && !this.preShot && !ws.taser) { this.preShot = true; this.audio.shot(0, 0, true, this.activeGun(ws)); }
       }
       if (e.button === 1) { e.preventDefault(); this.ping(); }
-      if (e.button === 2) this.ads = true;
+      if (e.button === 2) { this.ads = true; if (this.trainingOn) { this.trainingSteps.aim = true; this.updateTraining(); } }
     });
     document.addEventListener('contextmenu', e => { if (this.state === 'play') e.preventDefault(); });
     document.addEventListener('mouseup', e => { if (e.button === 0) { this.mouseDown = false; this.semiLock = false; } if (e.button === 2) this.ads = false; });
@@ -1413,8 +1542,11 @@ class Game {
       if (this.typing) { if (e.code === 'Enter') { const inp = $<HTMLInputElement>('cmdinput'); const v = inp.value.trim(); inp.value = ''; this.setTyping(false); if (v) this.heard(v, false); e.preventDefault(); } else if (e.code === 'Escape') this.setTyping(false); return; }
       if (e.code === 'Escape') { if (this.dispatchOn) { this.toggleDispatch(false); this.lock(); return; } if (this.wheelOn) { this.toggleWheel(false); this.lock(); return; } if (!$('help').classList.contains('hidden') || !$('settings').classList.contains('hidden')) { show('help', false); show('settings', false); } else if (this.state === 'pause') this.resume(); else if (this.state === 'play' && AUTO) this.pause(); return; }
       if (this.state !== 'play') return;
-      if (e.code === 'Tab' || e.code === 'Space' || e.code === 'CapsLock') e.preventDefault();
-      if (e.repeat) return; this.keys.add(e.code); this.onKey(e.code, e.shiftKey);
+      const code = this.logicalCode(e.code);
+      if (code === 'Tab' || code === 'Space' || code === 'CapsLock') e.preventDefault();
+      if (e.repeat) return; this.keys.add(code);
+      if (this.trainingOn && (code === 'KeyW' || code === 'KeyA' || code === 'KeyS' || code === 'KeyD')) { this.trainingSteps.move = true; this.updateTraining(); }
+      this.onKey(code, e.shiftKey);
     });
     document.addEventListener('wheel', e => {
       if (this.state !== 'play' || !this.ads || !document.pointerLockElement) return;
@@ -1424,7 +1556,7 @@ class Game {
         this.updateHud(true);
       }
     }, { passive: true });
-    document.addEventListener('keyup', e => { this.keys.delete(e.code); if (e.code === 'KeyV') this.voice.release(); });
+    document.addEventListener('keyup', e => { const code = this.logicalCode(e.code); this.keys.delete(code); if (code === 'KeyV') this.voice.release(); });
     window.addEventListener('blur', () => { this.voice.release(); this.keys.clear(); this.mouseDown = false; });
   }
   setTyping(on: boolean) { this.typing = on; show('cmdbox', on); const inp = $<HTMLInputElement>('cmdinput'); if (on) { this.keys.clear(); inp.focus(); } else inp.blur(); }
@@ -1459,6 +1591,7 @@ class Game {
       case 'KeyU': if (this.mirror) this.net.send({ t: 'c2' }); else sim.playerC2(sim.player); break;
       case 'KeyY': if (this.mirror) this.net.send({ t: 'wedge' }); else if (sim.playerWedge(sim.player)) this.audio.wedge(); break;
       case 'KeyN': this.toggleNvg(); break;
+      case 'F4': this.exportPerf(); break;
       case 'KeyK': this.toggleBodycam(); break;
       case 'KeyP': this.togglePip(true); break;
       case 'KeyJ': this.breachSync(); break;
@@ -1466,6 +1599,7 @@ class Game {
       case 'KeyH': this.toggleWheel(); if (!this.wheelOn) this.lock(); break;
       case 'KeyB': if (this.net.online) { this.net.setMuted(!this.net.muted); this.audio.ui(); } break;
       case 'KeyR': {
+        if (this.trainingOn) { this.trainingSteps.reload = true; this.updateTraining(); }
         const now = performance.now();
         const isDouble = now - this.lastRT < 360;
         this.lastRT = now;
@@ -1501,6 +1635,7 @@ class Game {
         break;
       }
       case 'KeyM': this.mapOn = !this.mapOn; break;
+      case 'F3': this.togglePerf(); break;
       case 'KeyC': if (sim.player.prone) { sim.player.prone = false; sim.player.crouch = true; } else sim.player.crouch = !sim.player.crouch; break;
       case 'KeyZ': sim.player.prone = !sim.player.prone; sim.player.crouch = false; break;
       case 'KeyX': this.slow = !this.slow; this.audio.ui(); break;
@@ -1545,7 +1680,7 @@ class Game {
       info.className = 'note'; info.textContent = 'Click «Load AI model now» or start a Solo mission to load the model.';
     }
   }
-  /** Speaks a line as a given character: recorded clip with a per-character voice, else the browser's speech synthesis. */
+  /** Speaks a line as a given character. Every line is a recorded human-like clip; a line without a clip stays silent (the browser's robotic speech synthesis is never used). */
   speak(text: string, a: Actor | null, o: { gain?: number; pan?: number; muffle?: boolean; pitch?: number; rate?: number; voice?: string } = {}) {
     if (!S.tts) return 0;
     let clean = text.replace(/^Team [AB]: /, ''); const kind = a?.kind ?? 'player';
@@ -1554,7 +1689,7 @@ class Game {
     const voice = o.voice ?? (kind === 'officer' ? 'o' + ((a!.slot % 4) + 1) : kind === 'suspect' ? ['s1', 's2', 's4', 's3', 's5'][a!.id % 5] : kind === 'civ' ? 'c' + ((a!.id % 5) + 1) : 'p1');
     const rate = kind === 'player' && a && a !== this.sim?.player ? 0.94 + (a.pi % 3) * 0.06 : 1, loud = this.audio.isShout(clean);
     const ms = this.audio.line(clean, { voice, rate, radio: kind === 'officer' && !loud, gruff: kind === 'suspect', shout: loud, gain: o.gain ?? 1, pan: o.pan, muffle: o.muffle });
-    if (ms) this.speech.busy(ms); else this.speech.say(text, o.pitch ?? 1, o.rate ?? 1.2, o.gain ?? 0.9);
+    if (ms) this.speech.busy(ms);
     return ms;
   }
   heard(text: string, fromMic: boolean) {
@@ -1627,7 +1762,7 @@ class Game {
     p.textContent = labels.length ? `AI › ${labels.join(' · ')}` : `AI › ${speaker ? speaker.name.toUpperCase() : 'SWAT'} RADIO`;
     const heardTxt = $('heard').textContent?.replace(/^«\s*|\s*»$/g, '') || '';
     if (heardTxt) this.showRadioCard(heardTxt, labels.join(' · ') || 'RADIO REPLY');
-    if (res.commands.length && !anyOk) this.audio.fail(); else this.audio.ok();
+    if (res.commands.length && !anyOk) this.audio.fail(); else { this.audio.ok(); if (this.trainingOn && res.commands.length) { this.trainingSteps.order = true; this.updateTraining(); } }
     if (speaker && res.reply) sim.say(speaker, res.reply);
     if (res.relayTo != null && res.relayMsg) {
       setTimeout(() => {
@@ -1672,7 +1807,7 @@ class Game {
     p.textContent = labels.join(' · ');
     const heardTxt = $('heard').textContent?.replace(/^«\s*|\s*»$/g, '') || '';
     if (heardTxt && labels.length) this.showRadioCard(heardTxt, labels.join(' · '));
-    if (anyOk) this.audio.ok(); else this.audio.fail();
+    if (anyOk) { this.audio.ok(); if (this.trainingOn) { this.trainingSteps.order = true; this.updateTraining(); } } else this.audio.fail();
     this.updateHud(true);
   }
   exec(cmd: Command, byKey: boolean) {
@@ -1686,7 +1821,7 @@ class Game {
   }
   private shoutT = 0;
   shout(tts: boolean) {
-    const sim = this.sim!; if (!sim.player.alive) return; if (this.mirror) this.net.send({ t: 'shout' }); else sim.playerShout();
+    const sim = this.sim!; if (!sim.player.alive) return; if (this.trainingOn) { this.trainingSteps.shout = true; this.updateTraining(); } if (this.mirror) this.net.send({ t: 'shout' }); else sim.playerShout();
     void tts; const now = performance.now(); if (now - this.shoutT > 900) { this.shoutT = now; this.speak(SHOUTS[0], null, { pitch: 0.7, rate: 1.3, gain: 1 }); } // your own voice yells the challenge, also when you gave it by microphone
     this.log('YOU: Police! Drop the weapon!', 'me');
   }
@@ -1944,6 +2079,13 @@ class Game {
       case 'hurt': this.views.get(e.a)?.wound(); if (e.a === p) { this.dmgFx = 1; this.stress = Math.min(1, this.stress + 0.42); this.audio.hurt(); this.recoil += 0.03; } else if (e.a.kind !== 'officer') { /* hit marker only for own shots handled below */ } break;
       case 'death': if (e.a !== p) { const y = groundHeightAt(sim.level, e.a.x, e.a.z); fx.burst(e.a.x, y + 1.1, e.a.z, 26, 0x8a0f0f, 2.6, 8, 0.7); fx.burst(e.a.x, y + 0.5, e.a.z, 14, 0x6a0808, 1.4, 6, 0.9); } if (e.a.kind === 'officer') this.log(`${e.a.name} has been killed.`, 'warn'); break;
       case 'door': { const q = this.pan(e.door.cx + 0.5, e.door.cz + 0.5); this.audio.door(q.d, q.pan, e.open, !!e.kick); break; }
+      case 'elevator': {
+        const stop = sim.level.elevators[e.id]?.stops[e.stop ?? 0];
+        const q = stop ? this.pan(stop.x, stop.z) : { d: 0, pan: 0 };
+        this.audio.elevator(e.kind, q.d, q.pan);
+        if (e.kind === 'move') this.camShake = Math.max(this.camShake, 0.004);
+        break;
+      }
       case 'say': {
         const o = e.a;
         const key = e.text.replace(/^Team [AB]: /, ''), now = performance.now();
@@ -1967,16 +2109,13 @@ class Game {
         this.recentSay.set(SHOUTS[0], now); this.lastTeamShoutT = now;
         this.log(`${e.a.name}: Police! Drop the weapon!`, '');
         const q = this.pan(e.a.x, e.a.z);
-        if (!this.audio.hasLine(SHOUTS[0]) || !S.tts) this.audio.vocal('shout', 0.9, q.d, q.pan);
-        else this.speak(SHOUTS[0], e.a, { gain: 1 / (1 + q.d * 0.1), pan: q.pan });
+        this.speak(SHOUTS[0], e.a, { gain: 1 / (1 + q.d * 0.1), pan: q.pan });
       } break;
       case 'bark': {
         const a = e.a, q = this.pan(a.x, a.z); if (q.d > 22) break;
         const near = sim.los(p.x, p.z, a.x, a.z) ? 1 : 0.45, pitch = (a.kind === 'civ' ? 1.25 : 0.85) + (a.variant % 3) * 0.12;
-        const d2 = q.d / near; // muffled through walls
-        const clip = !!S.tts && this.audio.linesReady; // recorded lines replace the synthetic shout
-        if (e.kind === 'pain') { this.audio.vocal('pain', pitch, d2, q.pan); break; }
-        if (e.kind === 'die') { this.audio.vocal('die', pitch, d2, q.pan); break; }
+        // non-verbal grunts are gone: only the recorded human voices speak
+        if (e.kind === 'pain' || e.kind === 'die') break;
 
         const now = performance.now();
         const actorGap = e.kind === 'surrender' ? 2500 : 9000;
@@ -1992,14 +2131,13 @@ class Game {
         };
 
         let line = '';
-        if (e.kind === 'spot') { line = pickFresh(['Cops!', 'The cops are here!', "They're coming in!", 'Shoot them!', 'We got company!', 'Get them!']); if (line && !clip) this.audio.vocal('shout', pitch, d2, q.pan); }
-        else if (e.kind === 'unrest') { line = pickFresh(["I'm out of here!"]); if (line && !clip) this.audio.vocal('shout', pitch, d2, q.pan); }
-        else if (e.kind === 'panic') { line = pickFresh(['Help!', 'No, no!', "Don't shoot!", "What's going on?"]); if (line) this.audio.vocal('whimper', pitch, d2, q.pan); }
+        if (e.kind === 'spot') { line = pickFresh(['Cops!', 'The cops are here!', "They're coming in!", 'Shoot them!', 'We got company!', 'Get them!']); }
+        else if (e.kind === 'unrest') { line = pickFresh(["I'm out of here!"]); }
+        else if (e.kind === 'panic') { line = pickFresh(['Help!', 'No, no!', "Don't shoot!", "What's going on?"]); }
         else if (e.kind === 'surrender') {
           line = a.kind === 'civ'
             ? pickFresh(["Don't shoot, please!", "I'll do what you say!", 'Help me!', "Please don't hurt me!"], 10000)
             : pickFresh(["Don't shoot! I give up!", 'Okay, okay! I give up!', "I'm dropping the gun!"], 10000);
-          if (line && (!clip || a.kind === 'civ')) this.audio.vocal(a.kind === 'civ' ? 'whimper' : 'yes', pitch, d2, q.pan);
         }
         if (line && q.d < 16) {
           this.recentBarkActor.set(a.id, now);
@@ -2149,6 +2287,22 @@ class Game {
     } else show('debSquadMvp', false);
     this.updateDebReadyUi();
     $('debTable').innerHTML = sc.parts.filter(p => p.max > 0 || p.pts < 0).map(p => `<tr><td>${p.label}</td><td class="${p.pts < 0 ? 'neg' : ''}">${p.pts}${p.max ? ' / ' + p.max : ''}</td></tr>`).join('') + `<tr class="total"><td>Total</td><td>${sc.total} / 100</td></tr>`;
+    const st = sim.stats;
+    const cleanRoe = st.unauthorized === 0 && st.civsKilledByPolice === 0;
+    const roeHint = cleanRoe
+      ? (st.officersDown ? 'Use of force stayed inside policy; keep the squad behind cover next time.' : 'Challenges, arrests and controlled force — a clean tactical result.')
+      : st.civsKilledByPolice > 0
+        ? 'A civilian was killed by police. Identify the target and challenge before firing.'
+        : 'One or more suspects were engaged without a challenge. Shout first and use less-lethal tools.';
+    const roeCards: [string, string, string][] = [
+      ['SUSPECTS ARRESTED', `${st.suspectsArrested}/${sim.suspects.length}`, st.suspectsArrested === sim.suspects.length ? 'good' : 'warn'],
+      ['UNAUTHORIZED FORCE', String(st.unauthorized), st.unauthorized ? 'bad' : 'good'],
+      ['CIVILIANS KILLED BY POLICE', String(st.civsKilledByPolice), st.civsKilledByPolice ? 'bad' : 'good'],
+      ['OFFICERS DOWN', String(st.officersDown), st.officersDown ? 'warn' : 'good'],
+      ['EVIDENCE BAGGED', sim.evidence.length ? `${st.evidenceSecured ?? 0}/${sim.evidence.length}` : '—', 'good'],
+      ['NON-LETHAL HITS', String(st.nonLethalHits), st.nonLethalHits ? 'good' : 'warn'],
+    ];
+    $('debRoe').innerHTML = `<div class="roe-head ${cleanRoe ? 'good' : 'bad'}"><b>RULES OF ENGAGEMENT · ${cleanRoe ? 'CLEAN' : 'REVIEW'}</b><span>${roeHint}</span></div><div class="roe-grid">${roeCards.map(([label, value, tone]) => `<div class="roe-card ${tone}"><span>${label}</span><b>${value}</b></div>`).join('')}</div>`;
     $('debNotes').innerHTML = sim.debriefNotes().map(n => `<div>• ${n}</div>`).join('');
     // ---- career: XP, unlocks, injuries, campaign order ----
     const solo = !this.net.online;
@@ -2163,10 +2317,10 @@ class Game {
       if (win) career.arrests += sim.stats.suspectsArrested;
       saveCareer(career);
       if (win) {
-        if ((best[this.mission] ?? -1) < sc.total) { best[this.mission] = sc.total; localStorage.setItem('teamai.best', JSON.stringify(best)); }
+        if ((best[this.mission] ?? -1) < sc.total) { best[this.mission] = sc.total; try { localStorage.setItem('teamai.best', JSON.stringify(best)); } catch { /* private mode */ } }
         if (this.isDaily) {
           const di = dailyInfo();
-          if ((dailyBest[di.key] ?? -1) < sc.total) { dailyBest[di.key] = sc.total; localStorage.setItem('teamai.daily', JSON.stringify(dailyBest)); }
+          if ((dailyBest[di.key] ?? -1) < sc.total) { dailyBest[di.key] = sc.total; try { localStorage.setItem('teamai.daily', JSON.stringify(dailyBest)); } catch { /* private mode */ } }
         }
       }
     }
@@ -2300,7 +2454,7 @@ class Game {
   asrInfo() {
     const lv = this.localVoice, a = $('asrInfo'), pct = (v: number) => Math.round(v * 100) + ' %';
     if (this.voice !== lv) a.textContent = lv.failed ? `The local model could not be loaded (${lv.lastError || 'unknown error'}) – the browser speech service is used instead.` : 'Browser speech service: only in Chrome and Edge, and what you say is sent to the browser maker for recognition.';
-    else a.textContent = lv.modelReady ? `Ready – Whisper runs on ${lv.device === 'webgpu' ? 'your graphics card' : 'your processor'}${lv.lastMs ? `, last answer took ${lv.lastMs} ms` : ''}. Nothing you say leaves this computer.` : lv.failed ? `Could not be loaded: ${lv.lastError}` : !S.mic ? 'Speech recognition is off.' : `Downloading the speech model${lv.sizeMb ? ` (about ${lv.sizeMb} MB, once)` : ''}: ${pct(lv.progress)}`;
+    else a.textContent = lv.modelReady ? `Ready – Whisper runs on ${lv.device === 'webgpu' ? 'your graphics card' : 'your processor'}${lv.lastMs ? `, last answer took ${lv.lastMs} ms` : ''}. Nothing you say leaves this computer.` : lv.failed ? `Could not be loaded: ${lv.lastError}` : !S.mic ? 'Speech recognition is off.' : lv.progress > 0 ? `Downloading the speech model${lv.sizeMb ? ` (about ${lv.sizeMb} MB, once)` : ''}: ${pct(lv.progress)}` : 'The speech model is not downloaded yet. It starts when you deploy, hold V, or press «Download speech model now». One-time download, kept in the browser cache.';
     a.className = 'note' + (lv.failed ? ' warn' : '');
   }
   micState(s: string, detail?: string) {
@@ -2342,10 +2496,21 @@ class Game {
     for (const stair of sim.level.staircases) {
       g.strokeStyle = '#8ee7ff'; g.lineWidth = 1.7; g.setLineDash([3, 2]);
       g.beginPath(); g.moveTo(stair.x0 * k, stair.z0 * k); g.lineTo(stair.x1 * k, stair.z1 * k); g.stroke(); g.setLineDash([]);
+      // Mark the two ends with their floor and travel direction, so a stairwell is readable
+      // without guessing which dashed line goes up or down.
+      const low = stair.fromY <= stair.toY ? { x: stair.x0, z: stair.z0, y: stair.fromY } : { x: stair.x1, z: stair.z1, y: stair.toY };
+      const high = stair.fromY <= stair.toY ? { x: stair.x1, z: stair.z1, y: stair.toY } : { x: stair.x0, z: stair.z0, y: stair.fromY };
+      const floorName = (y: number) => y > 0.7 ? 'F2' : 'F1';
+      g.font = '600 7px ui-monospace, Consolas, monospace'; g.textAlign = 'center';
+      g.fillStyle = '#bff4ff'; g.fillText(floorName(low.y), Math.max(8, Math.min(m.width - 8, low.x * k)), Math.min(m.height - 4, low.z * k + 9));
+      g.fillText(floorName(high.y), Math.max(8, Math.min(m.width - 8, high.x * k)), Math.max(8, high.z * k - 5));
+      g.fillStyle = '#8ee7ff'; g.fillText('↑', ((stair.x0 + stair.x1) / 2) * k, Math.max(8, ((stair.z0 + stair.z1) / 2) * k - 4));
     }
     for (const elevator of sim.level.elevators) for (const stop of elevator.stops) {
       g.fillStyle = '#a78bfa'; g.strokeStyle = '#ede9fe'; g.lineWidth = 1;
       g.beginPath(); g.arc(stop.x * k, stop.z * k, 3.3, 0, 6.28); g.fill(); g.stroke();
+      g.fillStyle = '#ede9fe'; g.font = '600 7px ui-monospace, Consolas, monospace'; g.textAlign = 'center';
+      g.fillText(stop.label.replace('FLOOR ', 'F'), Math.max(8, Math.min(m.width - 8, stop.x * k)), Math.max(8, stop.z * k - 6));
     }
     for (const d of sim.level.doors) {
       if (d.open > 0.5) { g.fillStyle = '#18212a'; g.fillRect(d.cx * k, d.cz * k, k, k); }
@@ -2392,16 +2557,30 @@ class Game {
       magEl.classList.toggle('on', this.magnifier);
       magEl.textContent = this.magnifier ? '3× MAGNIFIER ON [SHIFT]' : '1× HOLO [SHIFT]';
     } else magEl.classList.add('hidden');
-    const floorTag = sim.level.staircases.length
-      ? (groundHeightAt(sim.level, p.x, p.z) < 0.55 ? 'F1' : groundHeightAt(sim.level, p.x, p.z) > 2.45 ? 'F2' : 'STAIRS') + ' · '
-      : '';
-    $('objective').innerHTML = `${floorTag}SUSPECTS <b>${r.suspects}</b> · CIVILIANS <b>${r.civs}</b>${sim.level.breaker ? ` · POWER <b>${sim.powerOn ? 'ON' : 'OFF'}</b>` : ''}`;
-    const bt = $('bombtimer');
+    let floorTag = '';
+    if (sim.level.staircases.length) {
+      const y = groundHeightAt(sim.level, p.x, p.z);
+      const stair = sim.level.staircases.find(s => Math.hypot(p.x - (s.x0 + s.x1) / 2, p.z - (s.z0 + s.z1) / 2) < 12);
+      const up = stair ? stair.toY > stair.fromY : true;
+      floorTag = (y < 0.55 ? 'F1' : y > 2.45 ? 'F2' : 'STAIRS') + (stair ? ` · STAIRS ${up ? '↑' : '↓'}` : '') + ' · ';
+    }
+    const trDone = Object.values(this.trainingSteps).filter(Boolean).length;
+    $('objective').innerHTML = this.trainingOn
+      ? `TRAINING · ${trDone}/6 COMPLETE · ${floorTag.replace(/ · $/, '')}`
+      : `${floorTag}SUSPECTS <b>${r.suspects}</b> · CIVILIANS <b>${r.civs}</b>${sim.level.breaker ? ` · POWER <b>${sim.powerOn ? 'ON' : 'OFF'}</b>` : ''}`;
+    const bt = $('bombtimer'), bh = $('bombHint');
     if (sim.bomb && !sim.bomb.defused) {
       bt.classList.remove('hidden');
       const sec = Math.max(0, Math.ceil(sim.bomb.time)), mm = Math.floor(sec / 60), ss = String(sec % 60).padStart(2, '0');
-      bt.textContent = `BOMB ACTIVE · ${mm}:${ss}`;
-    } else bt.classList.add('hidden');
+      bt.textContent = sim.bomb.started ? `BOMB ACTIVE · ${mm}:${ss}` : 'BOMB · TIMER HELD';
+      bt.classList.toggle('held', !sim.bomb.started);
+      bh.classList.remove('hidden');
+      const dx = sim.bomb.x - p.x, dz = sim.bomb.z - p.z, bd = Math.hypot(dx, dz);
+      const bearing = (y: number) => ((((-y * 180) / Math.PI) % 360) + 360) % 360;
+      const delta = ((bearing(yawTo(dx, dz)) - bearing(p.yaw) + 540) % 360) - 180;
+      bh.innerHTML = `<i style="transform:rotate(${Math.round(delta)}deg)">▲</i> BOMB ${Math.round(bd)} m${sim.bomb.started ? '' : ' · timer starts when you close in or a firefight begins'}`;
+    } else { bt.classList.add('hidden'); bh.classList.add('hidden'); }
+    $('compliance').innerHTML = `ARRESTS <b>${sim.stats.suspectsArrested}</b> · KILLS <b>${sim.stats.suspectsKilled}</b> · SECURED <b>${sim.stats.civsSecured}/${sim.civs.length}</b>${sim.stats.unauthorized ? ` · <i>UNAUTHORIZED ${sim.stats.unauthorized}</i>` : ''}`;
     if (this.bodycamOn) {
       $('bcTime').textContent = new Date().toISOString().replace('T', ' ').slice(0, 19) + 'Z';
       const baseBpm = p.hp < 40 ? 132 : p.hp < 70 ? 96 : 74;
@@ -2429,7 +2608,7 @@ class Game {
       html += '</div>';
     }
     $('team').innerHTML = html;
-    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · Hold <kbd>Q/E</kbd> Lean/peek · <kbd>.</kbd> Grenade · <kbd>,</kbd> Sensor · <kbd>Caps</kbd> Shout · <kbd>F2</kbd> Sök &amp; Säkra · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>P</kbd> Cam${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
+    $('quick').innerHTML = `<kbd>Tab</kbd> <b>${this.selTeam === 'ALL' ? 'ALL' : 'TEAM ' + this.selTeam}</b> · Hold <kbd>Q/E</kbd> Lean/peek · <kbd>.</kbd> Grenade · <kbd>,</kbd> Sensor · <kbd>${keyLabel(this.bindKey('shout'))}</kbd> Shout · <kbd>F2</kbd> Search &amp; Secure · <kbd>H</kbd> Wheel · <kbd>N</kbd> NVG · <kbd>P</kbd> Cam${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync · <kbd>O</kbd> Share' : ''}`;
     const it = sim.interactTarget(), pr = $('prompt');
     if (p.downed && p.alive) {
       pr.style.opacity = '1'; pr.textContent = `DOWNED — BLEEDOUT IN ${Math.max(0, Math.ceil(p.bleedT))}s (WAIT FOR TEAMMATE)`;
@@ -2437,21 +2616,44 @@ class Game {
     }
     else if (p.reviving) { pr.style.opacity = '1'; pr.textContent = `Reviving ${p.reviving.name}…`; $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = (p.reviveT / 2.8) * 100 + '%'; }
     else if (p.cuff) { pr.style.opacity = '1'; pr.textContent = 'Cuffing…'; $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = (p.cuffT / 1.6) * 100 + '%'; }
-    else if (sim.bomb && !sim.bomb.defused && sim.bomb.defuseT > 0) { pr.style.opacity = '1'; pr.textContent = 'Defusing bomb…'; $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = (sim.bomb.defuseT / 2.2) * 100 + '%'; }
+    else if (sim.bomb && !sim.bomb.defused && (p.defusing || sim.bomb.defuseT > 0)) {
+      const byPlayer = p.defusing, frac = byPlayer ? p.defuseT / 3.2 : sim.bomb.defuseT / 3.5;
+      pr.style.opacity = '1'; pr.textContent = byPlayer ? 'Defusing bomb… hold position' : 'Squad defusing bomb…';
+      $('progress').style.opacity = '1'; ($('progress').firstElementChild as HTMLElement).style.width = Math.min(100, frac * 100) + '%';
+    }
     else {
       $('progress').style.opacity = '0';
-      if (it?.revive) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Revive ${it.revive.name} (${Math.ceil(it.revive.bleedT)}s)`; }
+      const lift = sim.elevatorNear(p);
+      if (lift && lift.car.phase !== 'idle') {
+        const car = lift.car, to = lift.elevator.stops[car.target];
+        const coming = !!car.pending || car.calling;
+        const up = coming ? car.at < lift.stopIndex : to.floorY > lift.stop.floorY;
+        const state = car.phase === 'opening' ? 'DOORS OPENING'
+          : car.phase === 'open' ? `DOORS OPEN · ${lift.stop.label}`
+            : car.phase === 'closing' ? 'DOORS CLOSING'
+              : coming ? `CAR ARRIVING ${up ? '▲' : '▼'} · ${lift.stop.label}`
+                : `TRAVELLING ${up ? '▲' : '▼'} · ${to.label}`;
+        pr.style.opacity = '1';
+        pr.innerHTML = `<b>${lift.elevator.name.toUpperCase()}</b> · ${state}`;
+        const frac = car.phase === 'moving' ? car.travel : car.phase === 'closing' ? 1 - car.door : car.door;
+        $('progress').style.opacity = '1';
+        ($('progress').firstElementChild as HTMLElement).style.width = `${Math.round(frac * 100)}%`;
+      }
+      else if (it?.revive) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Revive ${it.revive.name} (${Math.ceil(it.revive.bleedT)}s)`; }
       else if (it?.actor) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Handcuff'; }
       else if (it?.evidence) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Bag Evidence (+25)'; }
-      else if (it?.elevator && it.elevatorTo) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Ride ${it.elevator.name} → ${it.elevatorTo.label}`; }
-      else if (it?.bomb) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Defuse Bomb'; }
+      else if (it?.elevator && it.elevatorTo) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> Call ${it.elevator.name} · ${it.elevatorTo.label}`; }
+      else if (it?.bomb) { pr.style.opacity = '1'; pr.innerHTML = '<kbd>F</kbd> Defuse Bomb <small>(3.2 s · hold position)</small>'; }
       else if (it?.breaker) { pr.style.opacity = '1'; pr.innerHTML = `<kbd>F</kbd> ${sim.powerOn ? 'Cut Building Power' : 'Restore Power'}`; }
       else if (it?.door) {
         pr.style.opacity = '1';
         if (it.door.trapped && it.door.trapKnown) {
           pr.innerHTML = '<kbd>F</kbd> Disarm Tripwire · <kbd>U</kbd> Breach Charge';
         } else {
-          pr.innerHTML = it.door.locked ? '<kbd>F</kbd> Pick Lock · <kbd>U</kbd> Breach Charge · <kbd>O</kbd> FiberCam'
+          pr.innerHTML = it.door.locked
+            ? (sim.isMetalDoor(it.door)
+              ? '<kbd>U</kbd> Breach Charge <small>(metal door)</small> · <kbd>O</kbd> FiberCam'
+              : `<kbd>F</kbd> Kick door · <kbd>U</kbd> Breach Charge · <kbd>O</kbd> FiberCam`)
             : `<kbd>F</kbd> ${it.door.target ? 'Close' : 'Open'} · <kbd>Shift+F</kbd> Crack · <kbd>O</kbd> FiberCam · <kbd>Y</kbd> ${it.door.wedged ? 'Unwedge' : 'Wedge'}${sim.players.length > 1 ? ' · <kbd>J</kbd> Sync' : ''}`;
         }
       } else if (this.ammo[this.weapon] <= 0 && this.reserve[this.weapon] > 0 && this.reloadT <= 0) {
@@ -2474,9 +2676,120 @@ class Game {
   // ---------------- frame ----------------
   frame() {
     requestAnimationFrame(() => this.frame());
-    const now = performance.now(), dt = Math.min(0.05, (now - this.last) / 1000); this.last = now;
+    const now = performance.now(), raw = Math.max(0, (now - this.last) / 1000), dt = Math.min(0.05, raw); this.last = now;
+    const t0 = performance.now();
     if ((this.state === 'play' || (this.state === 'pause' && this.net.online)) && this.sim) this.tick(dt);
     this.render();
+    // Simulate with the clamped delta (a long stall must not teleport anyone), but measure the real
+    // frame: feeding the probe the clamped value pinned FPS at 20 and p95 at 50 ms during hitches.
+    this.samplePerf(raw, performance.now() - t0);
+  }
+  /** Live performance probe used by the F3 overlay and the browser smoke test. */
+  togglePerf(on = !this.perfOn) {
+    this.perfOn = on;
+    show('perfHud', on);
+    this.perfT = 0;
+    this.perfLog = []; this.perfLogT = 0;
+    this.samplePerf(0, 0);
+  }
+  /** GPU actually drawing the frame. SwiftShader/llvmpipe means this is not a measurement of real hardware. */
+  private gpuInfo() {
+    const gl = this.renderer.getContext();
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const renderer = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) ?? '') : String(gl.getParameter(gl.RENDERER) ?? '');
+    const vendor = ext ? String(gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) ?? '') : String(gl.getParameter(gl.VENDOR) ?? '');
+    const software = /swiftshader|llvmpipe|software|basic render|microsoft basic/i.test(renderer);
+    return { vendor, renderer, software };
+  }
+  /**
+   * The numbers from the F3 overlay as a portable report. A player on a real GPU presses F4 (or
+   * calls `__taPerfReport()`) and gets a JSON file that shows which GPU produced the timings, so a
+   * software-rendered CI machine can never be mistaken for a graphics-card measurement.
+   */
+  perfReport() {
+    const gl = this.gpuInfo();
+    const quality = S.qual >= 3 ? 'ULTRA' : S.qual === 2 ? 'HIGH' : S.qual === 1 ? 'MEDIUM' : 'LOW';
+    return {
+      schema: 'teamai.perf/1',
+      generatedAt: new Date().toISOString(),
+      note: gl.software
+        ? 'Software renderer: these timings do not represent a real GPU. Run the export on the target graphics card.'
+        : 'Hardware measurement from the browser that produced it.',
+      gpu: gl,
+      quality, qualityIndex: S.qual,
+      high: S.qual >= 2,
+      device: { userAgent: navigator.userAgent, devicePixelRatio, width: innerWidth, height: innerHeight, pixelRatio: this.renderer.getPixelRatio(), renderScale: this.renderScale, perfGuard: this.perfGuardOn },
+      scene: { mission: this.mission, missionName: MISSIONS[this.mission]?.name ?? '', state: this.state, arms: !!this.arms.ready, post: !!this.post?.enabled, shadows: this.renderer.shadowMap.enabled },
+      now: { fps: +this.perfFps.toFixed(1), frameMs: +this.perfMs.toFixed(2), p95Ms: +this.perfP95.toFixed(2), drawCalls: this.renderer.info.render.calls, triangles: this.renderer.info.render.triangles, frames: this.perfFrame },
+      series: this.perfLog.map(s => ({ ...s })),
+    };
+  }
+  exportPerf() {
+    const report = this.perfReport();
+    const stamp = report.generatedAt.replace(/[:.]/g, '-');
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `teamai-perf-${report.quality.toLowerCase()}-${stamp}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    if (this.sim) this.log(`Performance report exported (${report.quality}${report.gpu.software ? ', software renderer — not a GPU measurement' : ''}).`, 'me');
+    return report;
+  }
+  samplePerf(dt: number, renderMs: number) {
+    this.perfFrame++;
+    if (dt > 0) {
+      this.perfSamples.push(dt * 1000);
+      if (this.perfSamples.length > 120) this.perfSamples.shift();
+    }
+    if (renderMs > 0) {
+      this.perfRender.push(renderMs);
+      if (this.perfRender.length > 120) this.perfRender.shift();
+    }
+    if (this.perfSamples.length) {
+      const recent = this.perfSamples.slice(-30);
+      this.perfMs = recent.reduce((a, v) => a + v, 0) / recent.length;
+      this.perfFps = this.perfMs > 0 ? 1000 / this.perfMs : 0;
+      const sorted = [...this.perfSamples].sort((a, b) => a - b);
+      this.perfP95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0;
+    }
+    const r = this.renderer;
+    (window as any).__taPerf = {
+      quality: S.qual, shadows: r.shadowMap.enabled, post: !!this.post?.enabled, postQuality: (this.post as any)?.quality ?? -1, hasPost: !!this.post, state: this.state,
+      arms: !!this.arms.ready, fps: +this.perfFps.toFixed(1), frameMs: +this.perfMs.toFixed(2),
+      p95Ms: +this.perfP95.toFixed(2), drawCalls: r.info.render.calls, triangles: r.info.render.triangles,
+      frames: this.perfFrame, pixelRatio: r.getPixelRatio(), renderScale: this.renderScale, width: innerWidth, height: innerHeight,
+    };
+    (window as any).__taPerfReport = () => this.perfReport();
+    if (this.perfOn) {
+      this.perfLogT += dt;
+      // The first sample lands as soon as a real frame has been drawn, so an export taken right
+      // after F3 still carries data.
+      if (this.perfLogT >= 1 || this.perfLog.length === 0) {
+        this.perfLogT = 0;
+        // Skip the kill screen and other frames that drew nothing: a report full of zero draw calls
+        // says nothing about a mission frame.
+        if (r.info.render.calls > 0) {
+          this.perfLog.push({ t: +performance.now().toFixed(0), fps: +this.perfFps.toFixed(1), frameMs: +this.perfMs.toFixed(2), p95Ms: +this.perfP95.toFixed(2), scale: +this.renderScale.toFixed(2), calls: r.info.render.calls, tris: r.info.render.triangles });
+          if (this.perfLog.length > 300) this.perfLog.shift();
+        }
+      }
+    }
+    if (this.perfGuardOn && this.state === 'play' && S.qual >= 2) {
+      const now = performance.now();
+      if (!this.perfGuardAt) this.perfGuardAt = now;
+      this.perfGuardT += (now - this.perfGuardAt) / 1000; this.perfGuardAt = now;
+      if (this.perfGuardT > 2) {
+        this.perfGuardT = 0;
+        if (this.perfMs > 24 && this.renderScale > 0.7) { this.renderScale = Math.max(0.7, this.renderScale - 0.1); this.resize(); }
+        else if (this.perfMs < 15 && this.renderScale < 1) { this.renderScale = Math.min(1, this.renderScale + 0.05); this.resize(); }
+      }
+    } else this.perfGuardAt = 0;
+    this.perfT += dt;
+    if (!this.perfOn || this.perfT < 0.25) return;
+    this.perfT = 0;
+    const q = S.qual >= 3 ? 'ULTRA' : S.qual === 2 ? 'HIGH' : S.qual === 1 ? 'MEDIUM' : 'LOW';
+    $('perfHud').innerHTML = `<b>PERF · ${q}</b><br>${this.perfFps.toFixed(0)} FPS · ${this.perfMs.toFixed(1)} ms<br>p95 ${this.perfP95.toFixed(1)} ms · ${r.info.render.calls} calls<br>${(r.info.render.triangles / 1000).toFixed(0)}k tris · scale ${(this.renderScale * 100).toFixed(0)}%<br>shadows ${r.shadowMap.enabled ? 'on' : 'off'} · post ${this.post?.enabled ? 'on' : 'off'} · arms ${this.arms.ready ? 'ready' : '—'}<br><b>F4</b> EXPORT REPORT`;
   }
   tick(dt: number) {
     const sim = this.sim!, p = sim.player, K = this.keys;
@@ -2624,6 +2937,10 @@ class Game {
     if (p.alive && !p.downed && !sim.over) {
       const ad = this.aimDir();
       const rh = sim.ray(p.x + lo.lx, this.eye, p.z + lo.lz, ad.x, ad.y, ad.z, 26, p, false);
+      // The crosshair is the centre of the camera, so the laser follows the camera itself. Walking
+      // bob and recoil shake move the camera, and the dot has to move with it to stay on the crosshair.
+      const cd = this.camera.getWorldDirection(new THREE.Vector3());
+      const lh = sim.ray(this.camera.position.x, this.camera.position.y, this.camera.position.z, cd.x, cd.y, cd.z, 26, p, false);
       // A leaned ADS weapon also tucks back if the muzzle line is still blocked by nearby cover.
       nearWall = rh.kind === 'wall' && rh.d < 0.85 && (!this.ads || Math.abs(lo.actual) > 0.15);
       const friendly = !!(rh.actor && (rh.actor.kind === 'player' || (rh.actor.kind === 'officer' && !this.sim?.squadHostile) || (rh.actor.kind === 'civ' && !rh.actor.hostile)));
@@ -2633,13 +2950,16 @@ class Game {
         show('ffWarn', true);
       } else show('ffWarn', false);
       const wsNow = this.weaponSpecs[this.weapon];
-      if (this.laserOn && !wsNow.taser && this.reloadT <= 0 && rh.d < 22) {
-        const hx = rh.x - ad.x * 0.03, hy = rh.y - ad.y * 0.03, hz = rh.z - ad.z * 0.03;
-        const fw = fwd(this.yaw);
-        const ox = p.x + lo.lx + fw.x * 0.35 - fw.z * (0.14 * (1 - this.aimK));
-        const oy = this.eye - (0.12 - 0.05 * this.aimK);
-        const oz = p.z + lo.lz + fw.z * 0.35 + fw.x * (0.14 * (1 - this.aimK));
-        this.fx.setLaser(true, hx, hy, hz, ox, oy, oz, this.nvgOn);
+      if (this.laserOn && !wsNow.taser && this.reloadT <= 0 && lh.kind !== 'none' && lh.d < 28) {
+        // Laser sight, CS/SWAT style: the dot sits exactly where the weapon is aimed – under the
+        // crosshair – and the beam starts at the muzzle. It never droops or rises on its own.
+        const mz = new THREE.Vector3(0.12, -0.24, 0.5); // fallback screen position of the muzzle
+        if (this.arms.ready) mz.copy(this.arms.muzzle.getWorldPosition(new THREE.Vector3())).project(this.viewCam);
+        const origin = new THREE.Vector3(mz.x, mz.y, 0.5).unproject(this.camera).sub(this.camera.position).normalize().multiplyScalar(0.45).add(this.camera.position);
+        // pull the dot a couple of centimetres off the surface so it cannot fight with it
+        const dx = lh.x - origin.x, dy = lh.y - origin.y, dz = lh.z - origin.z, len = Math.hypot(dx, dy, dz) || 1;
+        const hx = lh.x - dx / len * 0.02, hy = lh.y - dy / len * 0.02, hz = lh.z - dz / len * 0.02;
+        this.fx.setLaser(true, hx, hy, hz, origin.x, origin.y, origin.z, this.nvgOn, this.camera.position.distanceTo(new THREE.Vector3(hx, hy, hz)));
       } else {
         this.fx.setLaser(false);
       }
@@ -2739,6 +3059,7 @@ class Game {
     cross.classList.toggle('ads', this.aimK > 0.35);
     cross.style.opacity = p.alive ? '1' : '0'; // keep crisp optical center dot visible when zooming down sights
     if (this.parsedT > 0) { this.parsedT -= dt; if (this.parsedT <= 0) { $('parsed').textContent = ''; $('heard').textContent = ''; } }
+    if (this.trainingOn) this.updateTraining();
     this.updateHud();
     this.mapT -= dt;
     if (this.mapT <= 0) { this.mapT = 0.055; this.drawMap(); }
@@ -2802,6 +3123,9 @@ class Game {
       r.render(this.menu.scene, this.menu.cam);
     }
     else if (this.sim) {
+      // Keep one stats window across the world, weapon and post passes; otherwise the last
+      // full-screen FXAA pass reports only one draw call and hides the real High workload.
+      r.info.autoReset = false; r.info.reset();
       const post = this.ensurePost();
       if (post) {
         post.flash = Math.min(1, this.dmgFx * 0.6 + this.hitFx * 0.3);
@@ -2854,11 +3178,13 @@ class Game {
           }
         }
       }
+      r.info.autoReset = true;
     }
   }
 }
 
 const game = new Game();
+
 const weaponsDone = loadWeapons().then(async () => {
   if (weaponsReady) { upgradeViewModel(game.vm); game.menu.upgradeWeapons(); }
   if (S.qual > 0 && await game.arms.load()) { // animated arms replace the static weapon (not on the lowest graphics setting)
