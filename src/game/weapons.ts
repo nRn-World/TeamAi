@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import * as T from './textures';
+import { loadGltfWithRetry } from './loader';
 
 export type WeaponModelKind = 'rifle' | 'pistol' | 'shotgun' | 'beanbag' | 'taser';
 
@@ -314,7 +315,7 @@ export async function loadWeapons(base = './models/weapons/'): Promise<void> {
   try {
     const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
     const loaded = await Promise.allSettled((Object.keys(SPECS) as ('rifle' | 'pistol' | 'shotgun')[]).map(async k => {
-      const sp = SPECS[k], src = (await loader.loadAsync(base + sp.dir + '/' + sp.file)).scene, drop: THREE.Object3D[] = [];
+      const sp = SPECS[k], src = (await loadGltfWithRetry(loader, base + sp.dir + '/' + sp.file, 3, 450)).scene, drop: THREE.Object3D[] = [];
       src.traverse((o: any) => {
         if (o.isLight || o.isCamera) drop.push(o);
         if (!o.isMesh) return; o.castShadow = true;
@@ -379,7 +380,7 @@ export class FpsArms {
   muzzle = new THREE.Object3D(); ready = false; private turn = new THREE.Group();
   async load(url = './models/fpsarms/scene.gltf') {
     try {
-      const g = await new GLTFLoader().loadAsync(url), sc = g.scene; let cam: THREE.Object3D | null = null, rif: THREE.Object3D | null = null;
+      const g = await loadGltfWithRetry(new GLTFLoader(), url, 3, 500), sc = g.scene; let cam: THREE.Object3D | null = null, rif: THREE.Object3D | null = null;
       sc.traverse((o: any) => {
         if (o.name.startsWith('Head_Cam_0')) cam = o; if (o.name.startsWith('Hand_R_')) rif = o; if (/^(Arm_L_|IK_Hand_Cntrl_L_|IK_PoleTrgt_L_)/.test(o.name)) this.left.push(o);
         if (!o.isMesh) return; o.frustumCulled = false;

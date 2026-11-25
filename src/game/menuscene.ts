@@ -6,6 +6,7 @@ import { loadOperator, menuOperator, equipOperatorLoadout } from './operator';
 import type { PrimaryLoadout, SecondaryLoadout } from '../sim/sim';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { loadGltfWithRetry, runChunked } from './loader';
 
 const HERO = [[-0.65, 2.0, 0.25], [0.45, 1.15, -0.15], [-1.75, 0.9, 0.45]]; // x, z, yaw — framed left-center so right briefing card never covers the squad
 const TRUCK = [0.05, -4.05, 3.48, 2.3, 0.9, 2.05, 1.42]; // Paramount Marauder: x, z, yaw, fallback roof height, light bar x, lettering x & y
@@ -300,9 +301,9 @@ export class MenuScene {
     ] as const;
 
     const kits: Record<string, THREE.Group> = {};
-    await Promise.all(cityFiles.map(async name => {
+    await runChunked(cityFiles, 4, async name => {
       try {
-        const g = await loader.loadAsync(`./models/city/${name}.glb`);
+        const g = await loadGltfWithRetry(loader, `./models/city/${name}.glb`, 3, 450);
         const sc = g.scene;
         sc.updateMatrixWorld(true);
         sc.traverse((o: any) => {
@@ -321,7 +322,7 @@ export class MenuScene {
       } catch (e) {
         console.warn('city asset failed:', name, e);
       }
-    }));
+    });
 
     const inst = new Map<string, InstEntry>();
     const modCache: Record<string, FacadeModule | null> = {};
@@ -547,7 +548,7 @@ export class MenuScene {
 
     // Real CC0 Kenney 3D traffic cones along the perimeter cordon
     try {
-      const cg = await loader.loadAsync('./models/props/traffic_cone.glb');
+      const cg = await loadGltfWithRetry(loader, './models/props/traffic_cone.glb', 2, 400);
       const proto = cg.scene;
       proto.traverse((o: any) => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } });
       for (const [cx, cz, sMul] of [[-3.75, 0.7, 1.15], [-4.45, -1.65, 1.15], [4.45, -1.35, 1.15], [5.05, -3.55, 1.15]]) {
@@ -560,7 +561,7 @@ export class MenuScene {
 
     // Parked CC0 Innerscene sedan further down the wet curb for street depth
     try {
-      const sg = await loader.loadAsync('./models/vehicle/sedan_parked.glb');
+      const sg = await loadGltfWithRetry(loader, './models/vehicle/sedan_parked.glb', 2, 400);
       const car = sg.scene;
       car.updateMatrixWorld(true);
       const rb = new THREE.Box3().setFromObject(car);
@@ -641,7 +642,7 @@ export class MenuScene {
   /** Armored SWAT truck («Paramount Marauder») + Police SUV cruiser behind the squad on the wet street. */
   async vehicle(url: string) {
     const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
-    const marauderJob = loader.loadAsync(url).then(g => {
+    const marauderJob = loadGltfWithRetry(loader, url, 3, 500).then(g => {
       const v = g.scene, C = (window as any).__truck ?? TRUCK;
       v.traverse((o: any) => {
         if (!o.isMesh) return;
@@ -706,7 +707,7 @@ export class MenuScene {
   /** Realistic CC0 Police SUV cruiser parked to the right-rear with glowing headlights & flashing beacon. */
   async patrolCar(url: string): Promise<THREE.Group | null> {
     try {
-      const g = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(url);
+      const g = await loadGltfWithRetry(new GLTFLoader().setMeshoptDecoder(MeshoptDecoder), url, 3, 500);
       const v = g.scene;
       v.updateMatrixWorld(true);
       const rawBox = new THREE.Box3().setFromObject(v);

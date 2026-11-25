@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import type { Prop } from '../sim/level';
+import { loadGltfWithRetry } from './loader';
 
 const PROP_FILES = {
   plant_leafy: { file: 'plant_leafy.glb', fit: 'h', size: 1.12, maxXZ: 0.94, doubleSide: true },
@@ -135,7 +136,7 @@ export function loadProps(keys: readonly PropAssetKey[] = Object.keys(PROP_FILES
     const existing = ASSET_LOADS.get(key);
     if (existing) return existing;
     const spec = PROP_FILES[key];
-    const task = loader.loadAsync(base + spec.file)
+    const task = loadGltfWithRetry(loader, base + spec.file, 2, 400)
       .then(gltf => { TPL[key] = normalizeAsset(gltf.scene, spec); })
       .catch(() => { /* keep the procedural fallback and allow a later retry */ })
       .finally(() => ASSET_LOADS.delete(key));

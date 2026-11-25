@@ -128,6 +128,7 @@ const ORDER_LABEL: Record<string, string> = {
 const orderText = (type: string | undefined): string => (type && ORDER_LABEL[type]) || 'STANDBY';
 
 let assetsDone: Promise<unknown> = Promise.resolve();
+let ensureGameAssets: () => Promise<unknown> = () => assetsDone;
 
 class Game {
   renderer: THREE.WebGLRenderer; post: PostFX | null = null; postScene: THREE.Scene | null = null;
@@ -1400,7 +1401,7 @@ class Game {
       show('loading', true);
       await nextFrame();
       await nextFrame();
-      await withTimeout(Promise.all([assetsDone, propsPromise]), 10000);
+      await withTimeout(Promise.all([ensureGameAssets(), propsPromise]), 15000);
       setLoad(62, 'Building operation environment...');
       await nextFrame();
 
@@ -3185,17 +3186,24 @@ class Game {
 
 const game = new Game();
 
-const weaponsDone = loadWeapons().then(async () => {
-  if (weaponsReady) { upgradeViewModel(game.vm); game.menu.upgradeWeapons(); }
-  if (S.qual > 0 && await game.arms.load()) { // animated arms replace the static weapon (not on the lowest graphics setting)
-    game.vm.rifle.clear(); game.vm.pistol.clear(); game.vm.shotgun.clear(); game.vm.beanbag.clear();
-    game.viewCam.add(game.arms.root); game.viewScene.environment = studioEnv(game.renderer); game.viewScene.environmentIntensity = 0.5;
-  }
-});
-const modelsDone = loadModels().then(() => {
-  $('modelStatus').textContent = modelsReady ? '' : 'The 3D characters could not be loaded – built-in figures are used.';
-});
-assetsDone = Promise.all([weaponsDone, modelsDone]);
+let gameAssetsStarted = false;
+ensureGameAssets = () => {
+  if (gameAssetsStarted) return assetsDone;
+  gameAssetsStarted = true;
+  const weaponsDone = loadWeapons().then(async () => {
+    if (weaponsReady) { upgradeViewModel(game.vm); game.menu.upgradeWeapons(); }
+    if (S.qual > 0 && await game.arms.load()) { // animated arms replace the static weapon (not on the lowest graphics setting)
+      game.vm.rifle.clear(); game.vm.pistol.clear(); game.vm.shotgun.clear(); game.vm.beanbag.clear();
+      game.viewCam.add(game.arms.root); game.viewScene.environment = studioEnv(game.renderer); game.viewScene.environmentIntensity = 0.5;
+    }
+  });
+  const modelsDone = loadModels().then(() => {
+    $('modelStatus').textContent = modelsReady ? '' : 'The 3D characters could not be loaded – built-in figures are used.';
+  });
+  assetsDone = Promise.all([weaponsDone, modelsDone]);
+  return assetsDone;
+};
+
 document.body.classList.add('menu-wait');
 const revealMenu = () => {
   if (game.menu.ready) return;
@@ -3203,24 +3211,27 @@ const revealMenu = () => {
   game.menuT = performance.now();
   document.body.classList.remove('menu-wait');
 };
-const menuSafety = setTimeout(revealMenu, 6000);
+const menuSafety = setTimeout(revealMenu, 20000);
 if (S.qual > 0) {
   game.menu.env(game.renderer);
   operatorEnv(game.menu.scene.environment);
+  // Load ONLY the menu's 3D backdrop first (operators, vehicles, city) so in-game
+  // weapons/arms/characters never flood the network or starve the cold-cache load.
   void Promise.all([
     game.menu.whenReady(),
     game.menu.hero(3).then(async heroOk => {
-      if (!heroOk) { await modelsDone; game.menu.squad(); }
+      if (!heroOk) { await ensureGameAssets(); game.menu.squad(); }
     }),
     game.menu.vehicle('./models/vehicle/marauder.glb'),
   ]).finally(() => {
     clearTimeout(menuSafety);
     revealMenu();
+    void ensureGameAssets();
   });
 } else {
   void Promise.all([
     game.menu.whenReady(),
-    modelsDone.then(() => game.menu.squad()),
+    ensureGameAssets().then(() => game.menu.squad()),
   ]).finally(() => {
     clearTimeout(menuSafety);
     revealMenu();

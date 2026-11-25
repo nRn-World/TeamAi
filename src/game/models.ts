@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as skinnedClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { loadGltfWithRetry, runChunked } from './loader';
 
 const FILES = ['swat', 'punk', 'hoodie', 'casual', 'suit', 'worker', 'wcasual', 'wformal'] as const;
 type Name = typeof FILES[number];
@@ -14,7 +15,7 @@ export const HEIGHT = 1.8;
 export async function loadModels(base = './models/'): Promise<void> {
   try {
     const loader = new GLTFLoader();
-    const all = await Promise.all(FILES.map(f => loader.loadAsync(base + f + '.glb')));
+    const all = await runChunked(FILES, 4, f => loadGltfWithRetry(loader, base + f + '.glb', 3, 450));
     all.forEach((gltf, i) => {
       const src = gltf.scene; src.updateMatrixWorld(true);
       src.traverse((m: any) => {

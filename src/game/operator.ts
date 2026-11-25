@@ -7,6 +7,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as skinnedClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { Rig, HEIGHT } from './models';
 import { weaponModel, buildBallisticShield } from './weapons';
+import { loadGltfWithRetry } from './loader';
 
 const V = () => new THREE.Vector3(), Q = () => new THREE.Quaternion();
 const key = (n: string) => /mixamorig:?(\w+?)_\d+$/.exec(n)?.[1] ?? '';
@@ -34,9 +35,10 @@ const bonesOf = (o: THREE.Object3D) => { const b: Record<string, THREE.Bone> = {
 const inWrap = (wrap: THREE.Object3D, b: THREE.Object3D, out = Q()) => b.getWorldQuaternion(out).premultiply(wrap.getWorldQuaternion(Q()).invert());
 
 export function loadOperator(url = './models/operator/scene.gltf'): Promise<boolean> {
+  if (T) return Promise.resolve(true);
   return loading ??= (async () => {
     try {
-      const g = await new GLTFLoader().loadAsync(url), scene = g.scene; scene.updateMatrixWorld(true);
+      const g = await loadGltfWithRetry(new GLTFLoader(), url, 3, 500), scene = g.scene; scene.updateMatrixWorld(true);
       const bb = new THREE.Box3().setFromObject(scene), k = 1.84 / (bb.max.y - bb.min.y);
       scene.traverse((o: any) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = !o.isSkinnedMesh; if (o.material) { o.material.envMapIntensity = 0.6; if (o.material.name === 'eyes') o.material.color.setScalar(0.5); } } });
       const wrap = new THREE.Group(); scene.scale.setScalar(k); scene.position.y = -bb.min.y * k; wrap.add(scene); wrap.updateMatrixWorld(true);
@@ -58,7 +60,7 @@ export function loadOperator(url = './models/operator/scene.gltf'): Promise<bool
       (window as any).__opT = { wrap, B };
       T = { wrap, clip, rest, dir, hips: wrap.worldToLocal(B.Hips.getWorldPosition(V())), gunIn, lIn, rIn };
       return true;
-    } catch (e) { console.warn('operator model', e); return false; }
+    } catch (e) { console.warn('operator model', e); loading = null; return false; }
   })();
 }
 /** A copy for the menu: plays the model's own animation. */
