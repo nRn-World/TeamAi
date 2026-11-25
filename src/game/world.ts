@@ -1207,10 +1207,9 @@ export class LevelView {
       placeCityModel('fire_hydrant', { x: 4.9, y: 0, z: 25.4 });
       placeCityModel('utility_box_01', { x: 22.8, y: 0, z: 21.6, ry: Math.PI });
       placeCityModel('concrete_road_barrier_02', { x: 26.2, y: 0, z: 26.2, ry: 0.18 });
-      // Opposite-side modern office streetscape + patrol cruiser & parked sedan (matches mission 0 preview)
+      // Opposite-side modern office streetscape + parked sedan (matches mission 0 preview)
       placeCityModel('office_tower', { x: 16.0, y: 0, z: 42.0, w: 28.0, h: 16.0, d: 12.0, ry: Math.PI });
       placeCityModel('office_neighbor', { x: -12.0, y: 0, z: 38.0, w: 18.0, h: 12.0, d: 12.0, ry: Math.PI });
-      extPromises.push(this.spawnPatrolCruiser(24.5, 29.5, -2.55, quality));
       extPromises.push(this.spawnParkedSedan(4.5, 31.0, 1.52));
       addTrafficCones([[9.0, 23.8], [18.8, 23.8]]);
       addStreetLamp(6.5, 25.4, 0xd8e8ff);
@@ -1284,8 +1283,7 @@ export class LevelView {
       placeCityModel('fire_hydrant', { x: 14.4, y: 0, z: 26.8 });
       addTrafficCones([[19.5, 27.2], [25.5, 27.2]]);
       placeCityModel('metal_trash_can', { x: 28.4, y: 0, z: 25.8 });
-      // Police cruiser & parked car along wet downtown avenue (matches mission 2 preview)
-      extPromises.push(this.spawnPatrolCruiser(32.0, 32.2, -1.85, quality));
+      // Parked car along wet downtown avenue (matches mission 2 preview)
       extPromises.push(this.spawnParkedSedan(12.2, 32.5, 1.55));
       addStreetLamp(13.5, 26.4, 0xffd59e);
       addStreetLamp(22.5, 34.8, 0xffd59e, Math.PI);
@@ -1314,8 +1312,6 @@ export class LevelView {
       addTree(7.8, 26.2, 1.6); addTree(30.8, 26.2, 1.6);
       for (const lx of [12.5, 15.5, 18.5]) { addLight(lx, 5.8, 25.8, 0xffdfb8, 20, 14, 1.45); addHalo(lx, 5.9, 25.8, 0xffe4be, 2.0, 0.5); }
       placeCityModel('concrete_road_barrier_02', { x: 21.8, y: 0, z: 28.4 });
-      // Police cruiser right outside the granite bank columns with headlights & flashing bar (matches mission 3 preview)
-      extPromises.push(this.spawnPatrolCruiser(10.5, 32.5, 1.35, quality));
       extPromises.push(this.spawnParkedSedan(28.5, 33.2, -1.6));
       addTrafficCones([[9.0, 28.6], [21.8, 27.4]]);
       placeCityModel('fire_hydrant', { x: 6.4, y: 0, z: 27.4 });
@@ -1392,7 +1388,7 @@ export class LevelView {
           g.add(post);
         }
       }));
-      // Outskirts industrial compound: shipping containers, barrels, floodlights & police cruisers (matches mission 5 preview)
+      // Outskirts industrial compound: shipping containers, barrels & floodlights (matches mission 5 preview)
       addContainer(8.5, 1.25, fz - 4.2, 'raid_c1', '#384b58', '#222f38', 0.05);
       addContainer(31.5, 1.25, fz - 4.0, 'raid_c2', '#6e3a28', '#472318', -0.08);
       placeCityModel('metal_barrel', { x: sx - 5.8, y: 0, z: fz - 1.2, scale: 1.05 });
@@ -1402,8 +1398,6 @@ export class LevelView {
       placeCityModel('security_light', { x: sx, y: 3.2, z: fz - 3.6 });
       addFloodLight(5.8, fz + 1.2, 0.5, 0xd8ecff);
       addFloodLight(34.5, fz + 1.2, -0.5, 0xd8ecff);
-      extPromises.push(this.spawnPatrolCruiser(sx + 6.5, fz + 6.2, -2.35, quality));
-      extPromises.push(this.spawnPatrolCruiser(sx - 7.5, fz + 6.8, 2.25, quality));
       for (const tx of [5.0, 36.2]) {
         g.add(box(0.22, 7.5, 0.22, darkSteel, tx, 3.75, fz + 0.3));
         g.add(box(0.9, 0.3, 0.2, soffitMat, tx, 7.4, fz + 0.3));
@@ -1445,44 +1439,6 @@ export class LevelView {
       extPromises.push(this.spawnPoliceUnit(l.vehicle.x, l.vehicle.z, l.vehicle.yaw, quality));
     }
     this.readyPromise = Promise.all(extPromises).then(() => {});
-  }
-  private async spawnPatrolCruiser(x: number, z: number, yaw: number, quality: number) {
-    try {
-      const gltf = await loadGltfWithRetry(new GLTFLoader().setMeshoptDecoder(MeshoptDecoder), './models/vehicle/police_suv.glb', 3, 500);
-      if (this.disposed) { disposeLoadedObjectResources(gltf.scene); return; }
-      const v = gltf.scene;
-      v.updateMatrixWorld(true);
-      const rawBox = new THREE.Box3().setFromObject(v);
-      const rawSize = rawBox.getSize(new THREE.Vector3());
-      const sf = 4.75 / Math.max(rawSize.x, rawSize.z, 0.001);
-      v.scale.multiplyScalar(sf);
-      v.updateMatrixWorld(true);
-      const box3 = new THREE.Box3().setFromObject(v);
-      v.position.y -= box3.min.y;
-      let beaconIdx = 0;
-      v.traverse((o: any) => {
-        if (!o.isMesh) return;
-        o.receiveShadow = true;
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        for (const m of mats) {
-          if (!m) continue;
-          if ('envMapIntensity' in m) m.envMapIntensity = 1.05;
-          if (m.name === 'Paint') { m.color.setHex(0x141c27); m.roughness = 0.25; m.metalness = 0.65; }
-          if (m.name === 'Headlight') { m.emissive = new THREE.Color(0xfff0d6); m.emissiveIntensity = 4.2; }
-          if (m.name === 'Taillight') { m.emissive = new THREE.Color(0xff1e1e); m.emissiveIntensity = 2.0; }
-          if (m.name === 'Beacon') {
-            m.emissive = new THREE.Color(beaconIdx++ % 2 === 0 ? 0x2674ff : 0xff2b2b);
-            m.emissiveIntensity = 4.0;
-          }
-        }
-      });
-      const w = new THREE.Group();
-      w.add(v); w.position.set(x, 0, z); w.rotation.y = yaw;
-      if (quality > 0 && this.lightPool.length > 0) {
-        this.lightSources.push({ x, y: 2.3, z, color: 0x3b82ff, intensity: 14, distance: 14, decay: 1.6 });
-      }
-      this.group.add(w);
-    } catch { /* optional patrol cruiser */ }
   }
   private async spawnParkedSedan(x: number, z: number, yaw: number) {
     try {
