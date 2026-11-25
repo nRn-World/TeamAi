@@ -10,7 +10,7 @@ import { loadProps, propAssetKeysFor } from './game/props';
 import '@fontsource/barlow-condensed/500.css'; import '@fontsource/barlow-condensed/600.css'; import '@fontsource/barlow-condensed/700.css'; import '@fontsource/barlow/400.css'; import '@fontsource/barlow/600.css';
 import { parseCommands, shouldUseAiBrain, ACTION_LABEL, DIR_LABEL } from './sim/commands';
 import { TacticalAi, AI_MODELS, AiState, AiResult } from './game/ai';
-import { LevelView, ActorView, FX, makeViewModel, TEAM_COLOR } from './game/world';
+import { LevelView, ActorView, FX, makeViewModel, TEAM_COLOR, themeAtmosphere } from './game/world';
 import { PostFX } from './game/postfx';
 import { disconnectRemotePlayer, findReconnectSlot, moveRemotePlayer, reconnectRemotePlayer, type RemoteMovementBudget } from './game/netplayers';
 import { canRemoteFireDuringReload, cancelRemoteShellReloadForFire } from './game/netcombat';
@@ -1423,12 +1423,15 @@ class Game {
       show('coopHud', sim.players.length > 1);
       show('breachBanner', false); show('ffWarn', false); show('mutinyWarn', false);
       this.post?.dispose(); this.post = null; this.postScene = null;
-      this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x070a10); this.scene.fog = new THREE.FogExp2(0x070a10, 0.0135);
-      if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = S.qual >= 3 ? 0.3 : S.qual === 2 ? 0.22 : 0.14; }
-      this.ambLight = new THREE.AmbientLight(0x9fb0c8, (mods.blackout ? (S.qual ? 0.05 : 0.1) : (S.qual ? 0.15 : 1.1)));
+      const atmo = themeAtmosphere(sim.level.theme);
+      this.scene = new THREE.Scene();
+      this.scene.background = new THREE.Color(mods.blackout ? 0x090d14 : atmo.fog);
+      this.scene.fog = new THREE.FogExp2(mods.blackout ? 0x090d14 : atmo.fog, mods.blackout ? 0.013 : atmo.fogDensity);
+      if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = mods.blackout ? 0.14 : (S.qual >= 3 ? 0.5 : S.qual === 2 ? 0.42 : 0.28); }
+      this.ambLight = new THREE.AmbientLight(atmo.sky, mods.blackout ? (S.qual ? 0.06 : 0.14) : (S.qual ? 0.34 : 1.1));
       this.nvgLight = new THREE.AmbientLight(0x6aff99, 0);
-      this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(0xb8c8ff, 0x2a241c, mods.blackout ? (S.qual ? 0.08 : 0.18) : (S.qual ? 0.2 : 0.55)));
-      const moon = new THREE.DirectionalLight(0xa8c0ff, mods.blackout ? 0.3 : 0.7); moon.position.set(-8, 14, 6); this.scene.add(moon);
+      this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(atmo.sky, atmo.ground, mods.blackout ? (S.qual ? 0.14 : 0.24) : (S.qual ? 0.62 : 0.72)));
+      const moon = new THREE.DirectionalLight(atmo.moon, mods.blackout ? 0.35 : 1.25); moon.position.set(-14, 22, 12); this.scene.add(moon);
       this.level?.dispose();
       this.level = new LevelView(sim, S.qual); this.scene.add(this.level.group);
       this.fx = new FX(); this.scene.add(this.fx.group);

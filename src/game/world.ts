@@ -10,6 +10,7 @@ import { propsReady, onPropsReady, propModel, exteriorPlanterModel, exteriorTree
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { loadGltfWithRetry } from './loader';
 
 const BOX = new THREE.BoxGeometry(1, 1, 1);
 const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, ...o });
@@ -38,8 +39,7 @@ const CITY_CACHE = new Map<string, Promise<THREE.Group | null>>();
 let coneTplPromise: Promise<THREE.Group | null> | null = null;
 function loadConeTemplate(): Promise<THREE.Group | null> {
   if (!coneTplPromise) {
-    coneTplPromise = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
-      .loadAsync('./models/props/traffic_cone.glb')
+    coneTplPromise = loadGltfWithRetry(new GLTFLoader().setMeshoptDecoder(MeshoptDecoder), './models/props/traffic_cone.glb', 2, 400)
       .then(tpl => { tpl.scene.updateMatrixWorld(true); return tpl.scene as THREE.Group; })
       .catch(() => null);
   }
@@ -50,7 +50,7 @@ let coneWhiteMat: THREE.MeshStandardMaterial | null = null;
 function loadCityAsset(name: string): Promise<THREE.Group | null> {
   let p = CITY_CACHE.get(name);
   if (!p) {
-    p = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(`./models/city/${name}.glb`).then(gltf => {
+    p = loadGltfWithRetry(new GLTFLoader().setMeshoptDecoder(MeshoptDecoder), `./models/city/${name}.glb`, 3, 450).then(gltf => {
       const sc = gltf.scene;
       sc.updateMatrixWorld(true);
       sc.traverse((o: any) => {
@@ -239,14 +239,18 @@ async function buildFacadeBlock(
 const MARAUDER_PAINT: Record<string, [number, number, number]> = { Body_2: [0x3d485e, 0.45, 0.58], Metal_UP_5: [0x4b5363, 0.5, 0.62] };
 
 const THEME = {
-  office: { wall: '#c9c3b6', trim: '#4a443c', brickA: '#3a3e46', brickB: '#2f333b', fog: 0x0b0e12 },
-  warehouse: { wall: '#8b9095', trim: '#33373b', brickA: '#5f6469', brickB: '#4e5358', fog: 0x090b0d },
-  hotel: { wall: '#bfa58e', trim: '#4d2e24', brickA: '#695c52', brickB: '#584c43', fog: 0x0d0b0a },
-  bank: { wall: '#d6d4ce', trim: '#2d3b4e', brickA: '#6d737c', brickB: '#5d636b', fog: 0x0a0d12 },
-  club: { wall: '#282633', trim: '#6a1b6a', brickA: '#28202c', brickB: '#1f1823', fog: 0x05030a },
-  raid: { wall: '#b8b4aa', trim: '#3b3c40', brickA: '#635c54', brickB: '#524b44', fog: 0x090b0e },
-  tower: { wall: '#c7d0d9', trim: '#253b52', brickA: '#384552', brickB: '#2d3945', fog: 0x09111a },
+  office:    { wall: '#c9c3b6', trim: '#4a443c', brickA: '#3a3e46', brickB: '#2f333b', fog: 0x132234, fogDensity: 0.0085, sky: 0x8bb6e6, ground: 0x26313e, moon: 0xb8d4ff },
+  warehouse: { wall: '#8b9095', trim: '#33373b', brickA: '#5f6469', brickB: '#4e5358', fog: 0x1d1914, fogDensity: 0.0105, sky: 0xd9a870, ground: 0x2c2620, moon: 0xffd29e },
+  hotel:     { wall: '#bfa58e', trim: '#4d2e24', brickA: '#695c52', brickB: '#584c43', fog: 0x171a26, fogDensity: 0.0085, sky: 0x9cb4db, ground: 0x332b24, moon: 0xffe0b8 },
+  bank:      { wall: '#d6d4ce', trim: '#2d3b4e', brickA: '#6d737c', brickB: '#5d636b', fog: 0x131d2b, fogDensity: 0.0085, sky: 0x9ec0e8, ground: 0x28303b, moon: 0xc8deff },
+  club:      { wall: '#282633', trim: '#6a1b6a', brickA: '#28202c', brickB: '#1f1823', fog: 0x160d24, fogDensity: 0.0095, sky: 0x9b72c8, ground: 0x241830, moon: 0xd4a8ff },
+  raid:      { wall: '#b8b4aa', trim: '#3b3c40', brickA: '#635c54', brickB: '#524b44', fog: 0x121d26, fogDensity: 0.0105, sky: 0x88b4cc, ground: 0x252d33, moon: 0xbce0f2 },
+  tower:     { wall: '#c7d0d9', trim: '#253b52', brickA: '#384552', brickB: '#2d3945', fog: 0x132430, fogDensity: 0.0085, sky: 0x8cc0dc, ground: 0x24333e, moon: 0xc2e2f5 },
 };
+
+export function themeAtmosphere(theme: keyof typeof THEME) {
+  return THEME[theme] ?? THEME.office;
+}
 
 function disposeLoadedObjectResources(root: THREE.Object3D) {
   const geometries = new Set<THREE.BufferGeometry>(), materials = new Set<THREE.Material>(), textures = new Set<THREE.Texture>();
@@ -1079,10 +1083,60 @@ export class LevelView {
     const addLight = (x: number, y: number, z: number, color: number, intensity: number, distance: number, decay = 1.5) => {
       if (this.lightPool.length > 0) this.lightSources.push({ x, y, z, color, intensity, distance, decay });
     };
+    const haloTex = T.glowTex();
+    const addHalo = (x: number, y: number, z: number, color: number, size = 2.6, opacity = 0.62) => {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: haloTex, color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      sp.position.set(x, y, z);
+      sp.scale.set(size, size, 1);
+      g.add(sp);
+    };
     const addStreetLamp = (x: number, z: number, col = 0xffe0b2, ry = 0) => {
       placeCityModel('street_lamp_01', { x, y: 0, z, ry, scale: 1.18 });
-      addLight(x, 4.35, z, col, 14, 15, 1.55);
+      addHalo(x, 4.35, z, col, 2.8, 0.65);
+      addLight(x, 4.35, z, col, 20, 18, 1.5);
     };
+    const addFloodLight = (x: number, z: number, ry = 0, col = 0xffe4b8) => {
+      placeCityModel('flood_lights', { x, y: 0, z, ry, h: 3.1 });
+      addHalo(x, 2.95, z, col, 3.4, 0.72);
+      addLight(x, 2.95, z, col, 26, 22, 1.4);
+    };
+    const addContainer = (x: number, y: number, z: number, key: string, base: string, rib: string, ry = 0) => {
+      const mat = std({ map: T.containerTex(key, base, rib), roughness: 0.58, metalness: 0.42 });
+      const c = box(5.8, 2.5, 2.4, mat, x, y, z);
+      c.rotation.y = ry; g.add(c);
+    };
+
+    // Atmospheric themed sky dome so the exterior horizon is NEVER a pitch-black void.
+    const sky = new THREE.Mesh(
+      new THREE.SphereGeometry(120, 24, 16),
+      new THREE.MeshBasicMaterial({ map: T.skyDomeTex(l.theme), side: THREE.BackSide, fog: false }),
+    );
+    sky.position.set(l.w / 2, 0, l.h / 2);
+    g.add(sky);
+
+    // Wide wet exterior ground skirt surrounding the entire level so there is never an empty black abyss.
+    const groundSpec: Record<string, [string, string, string, number, number]> = {
+      office:    ['office_ext', '#262e3a', '#151b24', 0.34, 0.25],
+      warehouse: ['dock_ext', '#2d2b27', '#1a1815', 0.56, 0.16],
+      hotel:     ['hotel_ext', '#272a32', '#14171d', 0.3, 0.28],
+      bank:      ['bank_ext', '#2c323b', '#171b22', 0.32, 0.24],
+      club:      ['club_cobble', '#26222c', '#131018', 0.38, 0.22],
+      raid:      ['raid_ext', '#292e33', '#171b1f', 0.52, 0.18],
+      tower:     ['tower_ext', '#26313c', '#151d26', 0.32, 0.28],
+    };
+    const [gKey, gBase, gLine, gRough, gMetal] = groundSpec[l.theme] ?? groundSpec.office;
+    const extGroundTex = T.plazaTex(gKey, gBase, gLine);
+    extGroundTex.repeat.set(36, 36);
+    const extGround = new THREE.Mesh(
+      new THREE.PlaneGeometry(150, 150),
+      std({ map: extGroundTex, roughness: gRough, metalness: gMetal }),
+    );
+    extGround.rotation.x = -Math.PI / 2;
+    extGround.position.set(l.w / 2, -0.025, l.h / 2);
+    extGround.receiveShadow = true;
+    g.add(extGround);
     // Kenney CC0 traffic cones (public/models/props/LICENSE.txt) dressing up docks, alleys
     // and cordons. Purely visual: no colliders, so they can never block the squad or a route.
     const addTrafficCones = (spots: [number, number][]) => {
@@ -1151,10 +1205,18 @@ export class LevelView {
       placeCityModel('hotel_neighbor', { x: 18.0, y: 0, z: -12.0, w: 24.0, h: 11.5, d: 12.0 });
       placeCityModel('metal_trash_can', { x: 9.2, y: 0, z: 24.2 });
       placeCityModel('fire_hydrant', { x: 4.9, y: 0, z: 25.4 });
+      placeCityModel('utility_box_01', { x: 22.8, y: 0, z: 21.6, ry: Math.PI });
       placeCityModel('concrete_road_barrier_02', { x: 26.2, y: 0, z: 26.2, ry: 0.18 });
+      // Opposite-side modern office streetscape + patrol cruiser & parked sedan (matches mission 0 preview)
+      placeCityModel('office_tower', { x: 16.0, y: 0, z: 42.0, w: 28.0, h: 16.0, d: 12.0, ry: Math.PI });
+      placeCityModel('office_neighbor', { x: -12.0, y: 0, z: 38.0, w: 18.0, h: 12.0, d: 12.0, ry: Math.PI });
+      extPromises.push(this.spawnPatrolCruiser(24.5, 29.5, -2.55, quality));
+      extPromises.push(this.spawnParkedSedan(4.5, 31.0, 1.52));
       addTrafficCones([[9.0, 23.8], [18.8, 23.8]]);
       addStreetLamp(6.5, 25.4, 0xd8e8ff);
+      addStreetLamp(16.5, 32.5, 0xd8e8ff, Math.PI);
       addStreetLamp(27.5, 25.4, 0xd8e8ff, Math.PI);
+      addStreetLamp(4.5, 32.5, 0xd8e8ff);
     } else if (l.theme === 'warehouse') {
       const haz = std({ color: 0xc2921e, roughness: 0.6 });
       g.add(box(35.4, 0.24, 20.2, darkSteel, 21.5, 3.22, 13.9));
@@ -1163,28 +1225,41 @@ export class LevelView {
       placeCityModel('rollershutter_door', { x: 11.6, y: 0, z: 24.06 });
       placeCityModel('rollershutter_door', { x: 25.4, y: 0, z: 24.06 });
       placeCityModel('exterior_aircon_unit', { x: 28.4, y: 2.3, z: 24.15 });
+      placeCityModel('security_light', { x: 11.6, y: 3.1, z: 24.25 });
+      placeCityModel('security_light', { x: 25.4, y: 3.1, z: 24.25 });
       placeCityModel('warehouse_depot', { x: -11.5, y: 0, z: 14.0, w: 24.0, h: 8.5, d: 10.5, ry: Math.PI / 2 });
       placeCityModel('warehouse_depot', { x: 52.0, y: 0, z: 14.0, w: 24.0, h: 8.5, d: 10.5, ry: -Math.PI / 2 });
       placeCityModel('warehouse_depot', { x: 21.0, y: 0, z: -10.0, w: 28.0, h: 8.5, d: 10.0 });
       g.add(box(5.6, 0.25, 1.6, darkSteel, 16.5, 3.18, 23.8), box(5.6, 0.1, 0.12, haz, 16.5, 3.05, 24.55));
       addSign('WAREHOUSE 04', '#161a1e', '#f0c050', '#c89020', 2.6, 0.48, 16.5, 3.18, 24.62);
-      addLight(16.5, 2.95, 24.1, 0xffb454, 18, 13, 1.5);
-      const cont = (x: number, y: number, z: number, col: number, ry = 0) => {
-        const c = box(5.8, 2.5, 2.4, std({ color: col, roughness: 0.62, metalness: 0.45 }), x, y, z);
-        c.rotation.y = ry; g.add(c);
-      };
-      cont(7.2, 1.25, 27.6, 0x6b2e26, 0.08); cont(7.2, 3.75, 27.6, 0x2b4554, -0.04);
-      cont(31.2, 1.25, 28.0, 0x2b4554, -0.14);
+      addLight(16.5, 2.95, 24.1, 0xffb454, 22, 16, 1.45);
+      // Ribbed docklands shipping containers stacked along both sides of the misty harbor yard (matches mission 1 preview)
+      addContainer(7.2, 1.25, 27.6, 'red', '#6f2e24', '#4a1c15', 0.08);
+      addContainer(7.2, 3.75, 27.6, 'blue', '#254a62', '#173042', -0.04);
+      addContainer(31.2, 1.25, 28.0, 'ochre', '#8a5d22', '#5c3c14', -0.14);
+      addContainer(31.2, 3.75, 28.0, 'green', '#274c3c', '#183226', -0.1);
+      addContainer(19.5, 1.25, 35.5, 'blue2', '#264458', '#172b39', 0.04);
+      addContainer(19.5, 3.75, 35.5, 'rust', '#693424', '#452014', 0.02);
+      addContainer(9.5, 1.25, 35.8, 'ochre2', '#825620', '#543510', -0.05);
+      // Poly Haven CC0 industrial barrels, floodlight towers & tarp-covered car
+      placeCityModel('metal_barrel', { x: 13.8, y: 0, z: 25.0, scale: 1.05 });
+      placeCityModel('metal_barrel', { x: 14.7, y: 0, z: 25.3, ry: 1.2, scale: 1.05 });
+      placeCityModel('metal_barrel', { x: 26.8, y: 0, z: 25.4, ry: 2.1, scale: 1.05 });
+      placeCityModel('covered_car', { x: 2.8, y: 0, z: 31.8, ry: 0.35, h: 1.45 });
+      addFloodLight(3.8, 25.8, 0.6, 0xffb866);
+      addFloodLight(35.2, 26.2, -0.6, 0xffb866);
       for (const cx of [-2.5, 37.5]) {
         g.add(box(1.1, 16, 1.1, darkSteel, cx, 8, -2), box(1.1, 16, 1.1, darkSteel, cx + 3.2, 8, -2));
         g.add(box(14, 0.9, 1.2, haz, cx + 4, 15.5, -2));
-        addLight(cx + 4, 14.5, -1, 0xffa64d, 24, 24, 1.4);
+        addHalo(cx + 4, 14.8, -1, 0xffb055, 5.5, 0.72);
+        addLight(cx + 4, 14.5, -1, 0xffa64d, 26, 26, 1.35);
       }
       placeCityModel('concrete_road_barrier', { x: 11.4, y: 0, z: 29.8, ry: 0.1 });
       placeCityModel('concrete_road_barrier', { x: 35.8, y: 0, z: 29.4, ry: -0.2 });
       addTrafficCones([[13.2, 27.2], [18.6, 27.0], [11.4, 28.6], [35.8, 28.2], [27.2, 26.8]]);
-      addStreetLamp(4.8, 25.0, 0xffc888);
-      addStreetLamp(36.0, 25.0, 0xffc888, Math.PI);
+      addStreetLamp(4.8, 25.0, 0xffc078);
+      addStreetLamp(21.5, 32.8, 0xffc078, Math.PI);
+      addStreetLamp(36.0, 25.0, 0xffc078, Math.PI);
     } else if (l.theme === 'hotel') {
       const stone = std({ color: 0x3b3530, roughness: 0.65 });
       const brass = std({ color: 0xc29848, roughness: 0.3, metalness: 0.8 });
@@ -1195,19 +1270,25 @@ export class LevelView {
       }
       g.add(box(11.4, 0.35, 3.0, darkSteel, 22.5, 3.4, 25.3));
       addSign('HOTEL NORTH STAR', '#1c1510', '#ffd480', '#e0a238', 3.8, 0.54, 22.5, 3.42, 26.82);
-      for (const lx of [20.5, 22.5, 24.5]) addLight(lx, 3.1, 25.6, 0xffcf88, 18, 12, 1.5);
+      for (const lx of [20.5, 22.5, 24.5]) { addLight(lx, 3.1, 25.6, 0xffcf88, 20, 14, 1.45); addHalo(lx, 3.15, 25.6, 0xffd596, 1.8, 0.55); }
       addShrub(18.6, 25.5); addShrub(26.4, 25.5);
       addTree(16.2, 25.8, 1.65); addTree(36.6, 26.2, 1.65);
-      // Roof deck + towering Marina-style hotel skyscraper above the lobby & neighboring residential blocks
+      // Roof deck + towering Marina-style hotel skyscraper above the lobby & neighboring European city blocks
       g.add(box(38.4, 0.28, 21.4, stone, 23.0, 3.24, 14.4));
       placeCityModel('hotel_main', { x: 23.0, y: 3.26, z: 14.4, w: 38.4, h: 24.0, d: 21.4 });
       placeCityModel('hotel_neighbor', { x: -5.5, y: 0, z: 15.5, w: 12.0, h: 15.5, d: 13.0, ry: Math.PI / 2 });
       placeCityModel('hotel_neighbor', { x: 50.5, y: 0, z: 15.5, w: 12.0, h: 15.5, d: 13.0, ry: -Math.PI / 2 });
       placeCityModel('hotel_neighbor', { x: 23.0, y: 0, z: -12.0, w: 30.0, h: 12.5, d: 14.0 });
+      placeCityModel('hotel_neighbor', { x: 22.5, y: 0, z: 45.0, w: 32.0, h: 14.0, d: 12.0, ry: Math.PI });
+      placeCityModel('large_iron_gate', { x: 11.2, y: 0, z: 26.2, h: 2.6 });
       placeCityModel('fire_hydrant', { x: 14.4, y: 0, z: 26.8 });
       addTrafficCones([[19.5, 27.2], [25.5, 27.2]]);
       placeCityModel('metal_trash_can', { x: 28.4, y: 0, z: 25.8 });
+      // Police cruiser & parked car along wet downtown avenue (matches mission 2 preview)
+      extPromises.push(this.spawnPatrolCruiser(32.0, 32.2, -1.85, quality));
+      extPromises.push(this.spawnParkedSedan(12.2, 32.5, 1.55));
       addStreetLamp(13.5, 26.4, 0xffd59e);
+      addStreetLamp(22.5, 34.8, 0xffd59e, Math.PI);
       addStreetLamp(38.5, 26.4, 0xffd59e, Math.PI);
     } else if (l.theme === 'bank') {
       const limestone = std({ color: 0x767a82, roughness: 0.62 });
@@ -1225,34 +1306,51 @@ export class LevelView {
       placeCityModel('office_tower', { x: 22.0, y: 3.26, z: 14.4, w: 36.2, h: 14.5, d: 21.2 });
       placeCityModel('bank_annex', { x: -6.5, y: 0, z: 17.0, w: 18.5, h: 12.5, d: 12.0, ry: Math.PI / 2 });
       placeCityModel('bank_annex', { x: 50.5, y: 0, z: 17.0, w: 18.5, h: 12.5, d: 12.0, ry: -Math.PI / 2 });
+      placeCityModel('bank_annex', { x: 18.0, y: 0, z: 45.5, w: 28.0, h: 13.5, d: 12.0, ry: Math.PI });
       placeCityModel('hotel_neighbor', { x: 22.0, y: 0, z: -13.0, w: 26.0, h: 16.0, d: 15.0 });
+      placeCityModel('large_iron_gate', { x: 27.4, y: 0, z: 26.4, h: 2.7 });
       for (const bx of [9.6, 11.2, 12.8, 18.2, 19.8]) addBollard(bx, 27.1);
       addShrub(12.3, 25.7); addShrub(18.7, 25.7);
       addTree(7.8, 26.2, 1.6); addTree(30.8, 26.2, 1.6);
-      for (const lx of [12.5, 15.5, 18.5]) addLight(lx, 5.8, 25.8, 0xffdfb8, 18, 12, 1.5);
+      for (const lx of [12.5, 15.5, 18.5]) { addLight(lx, 5.8, 25.8, 0xffdfb8, 20, 14, 1.45); addHalo(lx, 5.9, 25.8, 0xffe4be, 2.0, 0.5); }
       placeCityModel('concrete_road_barrier_02', { x: 21.8, y: 0, z: 28.4 });
+      // Police cruiser right outside the granite bank columns with headlights & flashing bar (matches mission 3 preview)
+      extPromises.push(this.spawnPatrolCruiser(10.5, 32.5, 1.35, quality));
+      extPromises.push(this.spawnParkedSedan(28.5, 33.2, -1.6));
       addTrafficCones([[9.0, 28.6], [21.8, 27.4]]);
       placeCityModel('fire_hydrant', { x: 6.4, y: 0, z: 27.4 });
       addStreetLamp(6.2, 26.8, 0xffe4b8);
+      addStreetLamp(16.0, 35.5, 0xffe4b8, Math.PI);
       addStreetLamp(32.5, 26.8, 0xffe4b8, Math.PI);
     } else if (l.theme === 'club') {
-      const brick = std({ map: T.brickTex('club_ext', '#261e2a', '#1b1520') });
+      const brick = std({ map: T.brickTex('club_ext', '#2e2234', '#201826') });
       g.add(box(32.2, 0.26, 21.2, brick, 20.0, 3.22, 13.4));
       placeCityModel('club_main', { x: 20.0, y: 3.24, z: 13.4, w: 32.2, h: 13.5, d: 21.2 });
       placeCityModel('club_alley', { x: -4.2, y: 0, z: 22.0, w: 14.0, h: 12.0, d: 14.0, ry: Math.PI / 2 });
       placeCityModel('club_alley', { x: 34.5, y: 0, z: 24.5, w: 14.0, h: 12.0, d: 14.0, ry: -Math.PI / 2 });
+      placeCityModel('club_alley', { x: 15.0, y: 0, z: 42.0, w: 22.0, h: 12.0, d: 12.0, ry: Math.PI });
       placeCityModel('hotel_neighbor', { x: 48.0, y: 0, z: 12.0, w: 18.0, h: 11.0, d: 11.0, ry: -Math.PI / 2 });
+      // Gritty cobblestone neon brick alleyway (matches mission 4 preview)
       placeCityModel('modular_fire_escape', { x: 4.8, y: 2.6, z: 27.0, ry: Math.PI / 2, scale: 0.72 });
+      placeCityModel('barrel_stove', { x: 6.7, y: 0, z: 25.4, scale: 1.05 });
+      placeCityModel('utility_box_01', { x: 23.0, y: 0, z: 26.8, ry: -Math.PI / 2 });
+      placeCityModel('security_light', { x: 13.5, y: 3.8, z: 24.2 });
+      placeCityModel('covered_car', { x: 21.4, y: 0, z: 32.6, ry: -0.22, h: 1.45 });
       placeCityModel('metal_trash_can', { x: 6.8, y: 0, z: 28.4, ry: Math.PI / 2 });
       addTrafficCones([[10.5, 26.8], [12.0, 28.4], [23.0, 28.2]]);
       placeCityModel('street_lamp_02', { x: 6.2, y: 3.4, z: 26.6, ry: Math.PI / 2 });
+      addHalo(6.5, 3.45, 26.6, 0x38d8ff, 2.4, 0.7);
       g.add(box(1.2, 6.5, 6.0, brick, 5.5, 3.25, 27.0), box(1.2, 6.5, 6.0, brick, 24.0, 3.25, 27.0));
       addSign('ECLIPSE', '#12061c', '#ff52e0', '#d438ff', 3.4, 0.72, 13.5, 3.25, 24.06);
+      addHalo(13.5, 3.25, 24.3, 0xff46d8, 4.2, 0.65);
+      addLight(13.5, 2.9, 24.8, 0xff46d8, 22, 14, 1.5);
       addShrub(7.6, 24.6); addShrub(15.2, 24.6);
       for (const [sx, sz, col] of [[6.15, 25.5, 0xd438ff], [6.15, 28.0, 0x38c8ff], [23.35, 25.5, 0x38c8ff], [23.35, 28.0, 0xd438ff]] as const) {
         g.add(box(0.14, 0.45, 0.2, new THREE.MeshBasicMaterial({ color: col }), sx, 2.3, sz));
-        addLight(sx + (sx < 13 ? 0.5 : -0.5), 2.3, sz, col, 14, 10, 1.6);
+        addHalo(sx + (sx < 13 ? 0.25 : -0.25), 2.3, sz, col, 2.2, 0.62);
+        addLight(sx + (sx < 13 ? 0.5 : -0.5), 2.3, sz, col, 18, 12, 1.5);
       }
+      addStreetLamp(14.5, 33.5, 0x80b8ff, Math.PI);
       const ballGrp = new THREE.Group(); ballGrp.position.set(14.0, 2.62, 16.5);
       const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 1), std({ color: 0xe6eeff, metalness: 0.95, roughness: 0.08, emissive: 0x384460 }));
       ballGrp.add(ball); g.add(ballGrp); this.discoBall = ballGrp;
@@ -1294,21 +1392,31 @@ export class LevelView {
           g.add(post);
         }
       }));
+      // Outskirts industrial compound: shipping containers, barrels, floodlights & police cruisers (matches mission 5 preview)
+      addContainer(8.5, 1.25, fz - 4.2, 'raid_c1', '#384b58', '#222f38', 0.05);
+      addContainer(31.5, 1.25, fz - 4.0, 'raid_c2', '#6e3a28', '#472318', -0.08);
+      placeCityModel('metal_barrel', { x: sx - 5.8, y: 0, z: fz - 1.2, scale: 1.05 });
+      placeCityModel('metal_barrel', { x: sx - 4.9, y: 0, z: fz - 0.9, ry: 1.4, scale: 1.05 });
+      placeCityModel('barrel_stove', { x: sx + 6.4, y: 0, z: fz - 1.1, scale: 1.05 });
+      placeCityModel('covered_car', { x: 34.0, y: 0, z: fz + 4.8, ry: -0.45, h: 1.45 });
+      placeCityModel('security_light', { x: sx, y: 3.2, z: fz - 3.6 });
+      addFloodLight(5.8, fz + 1.2, 0.5, 0xd8ecff);
+      addFloodLight(34.5, fz + 1.2, -0.5, 0xd8ecff);
+      extPromises.push(this.spawnPatrolCruiser(sx + 6.5, fz + 6.2, -2.35, quality));
+      extPromises.push(this.spawnPatrolCruiser(sx - 7.5, fz + 6.8, 2.25, quality));
       for (const tx of [5.0, 36.2]) {
         g.add(box(0.22, 7.5, 0.22, darkSteel, tx, 3.75, fz + 0.3));
         g.add(box(0.9, 0.3, 0.2, soffitMat, tx, 7.4, fz + 0.3));
-        addLight(tx, 7.1, fz + 0.6, 0xdfe8ff, 26, 22, 1.4);
+        addHalo(tx, 7.2, fz + 0.5, 0xdceeff, 4.2, 0.72);
+        addLight(tx, 7.1, fz + 0.6, 0xdfe8ff, 28, 24, 1.35);
       }
       placeCityModel('concrete_road_barrier', { x: sx - 3.6, y: 0, z: fz + 1.1, ry: 0.2 });
       addTrafficCones([[sx - 5.2, fz + 1.2], [sx + 5.2, fz + 1.2], [sx - 3.6, fz + 2.2]]);
       placeCityModel('metal_trash_can', { x: 6.4, y: 0, z: fz + 0.9 });
       addTree(4.5, fz + 1.4, 1.5); addTree(36.6, fz + 1.4, 1.5);
     } else if (l.theme === 'tower') {
-      // Kista-inspired glass-and-steel campus: the licensed office-tower asset is a skyline
-      // silhouette beyond the playable perimeter, while the actual F1/F2 walls remain walkable.
-      // A steel canopy on two posts marks the entrance; there is deliberately no glass screen in
-      // front of the facade — one stood here with no collider, so the building read as a solid
-      // glass wall and you walked through it to get in. The facade's own entrance panes do the job.
+      // Kista Tech Center glass-and-steel Nordic campus (matches mission 6 preview):
+      // warm amber lobby spill, modern dark-steel canopy, surrounding tech towers & lit wet plaza!
       const steel = std({ color: 0x202a35, roughness: 0.32, metalness: 0.72 });
       g.add(box(12.4, 0.22, 3.0, steel, 8.5, 3.12, 34.2));
       for (const x of [3.2, 13.8]) g.add(box(0.22, 3.05, 0.22, steel, x, 1.52, 34.5));
@@ -1316,15 +1424,22 @@ export class LevelView {
       entrySign.position.set(8.5, 3.5, 35.73); entrySign.rotation.y = Math.PI; g.add(entrySign);
       const exitSign = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 0.28), new THREE.MeshBasicMaterial({ map: T.signTex('NÖDUTGÅNG · EXIT', '#093818', '#52ff88', '#34e86a') }));
       exitSign.position.set(8.5, 2.48, 32.87); g.add(exitSign);
-      for (const x of [5.2, 8.5, 11.8]) addLight(x, 2.85, 34.6, 0xdbeafe, 16, 12, 1.45);
+      for (const x of [5.2, 8.5, 11.8]) { addLight(x, 2.85, 34.6, 0xffe0b2, 20, 14, 1.4); addHalo(x, 2.95, 34.6, 0xffe2b5, 2.0, 0.55); }
+      // Surrounding modern Kista campus skyline so the horizon is never empty
       placeCityModel('office_tower', { x: 44.5, y: 0, z: -14.5, w: 31, h: 34, d: 21, ry: -0.12 });
       placeCityModel('office_tower', { x: -13.5, y: 0, z: 10.0, w: 22, h: 18, d: 15, ry: Math.PI / 2 });
-      placeCityModel('street_lamp_01', { x: 2.6, y: 0, z: 36.3, scale: 1.1 });
-      placeCityModel('street_lamp_02', { x: 15.3, y: 0, z: 36.1, scale: 1.05 });
-      addLight(2.6, 4.2, 36.3, 0xcde7ff, 12, 13, 1.5);
-      addLight(15.3, 4.0, 36.1, 0xcde7ff, 12, 13, 1.5);
+      placeCityModel('office_tower', { x: 8.5, y: 0, z: 54.0, w: 30, h: 20, d: 14, ry: Math.PI });
+      placeCityModel('office_neighbor', { x: -14.0, y: 0, z: 44.0, w: 18, h: 14, d: 12, ry: Math.PI * 0.75 });
+      placeCityModel('utility_box_01', { x: 17.8, y: 0, z: 33.8, ry: Math.PI });
       placeCityModel('metal_trash_can', { x: 16.8, y: 0, z: 35.9 });
+      extPromises.push(this.spawnPatrolCruiser(18.5, 41.5, -2.4, quality));
+      extPromises.push(this.spawnParkedSedan(-2.5, 42.5, 1.45));
+      addStreetLamp(2.6, 36.3, 0xd4ecff);
+      addStreetLamp(15.3, 36.1, 0xd4ecff, Math.PI);
+      addStreetLamp(-4.5, 41.5, 0xd4ecff);
+      addStreetLamp(12.0, 44.5, 0xd4ecff, Math.PI);
       addBollard(4.0, 36.0); addBollard(13.0, 36.0);
+      addTree(1.0, 36.5, 1.6); addTree(19.5, 36.8, 1.6);
       addTrafficCones([[2.0, 35.2], [15.8, 35.0]]);
     }
     if (l.vehicle) {
@@ -1332,9 +1447,75 @@ export class LevelView {
     }
     this.readyPromise = Promise.all(extPromises).then(() => {});
   }
+  private async spawnPatrolCruiser(x: number, z: number, yaw: number, quality: number) {
+    try {
+      const gltf = await loadGltfWithRetry(new GLTFLoader().setMeshoptDecoder(MeshoptDecoder), './models/vehicle/police_suv.glb', 3, 500);
+      if (this.disposed) { disposeLoadedObjectResources(gltf.scene); return; }
+      const v = gltf.scene;
+      v.updateMatrixWorld(true);
+      const rawBox = new THREE.Box3().setFromObject(v);
+      const rawSize = rawBox.getSize(new THREE.Vector3());
+      const sf = 4.75 / Math.max(rawSize.x, rawSize.z, 0.001);
+      v.scale.multiplyScalar(sf);
+      v.updateMatrixWorld(true);
+      const box3 = new THREE.Box3().setFromObject(v);
+      v.position.y -= box3.min.y;
+      let beaconIdx = 0;
+      v.traverse((o: any) => {
+        if (!o.isMesh) return;
+        o.receiveShadow = true;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (!m) continue;
+          if ('envMapIntensity' in m) m.envMapIntensity = 1.05;
+          if (m.name === 'Paint') { m.color.setHex(0x141c27); m.roughness = 0.25; m.metalness = 0.65; }
+          if (m.name === 'Headlight') { m.emissive = new THREE.Color(0xfff0d6); m.emissiveIntensity = 4.2; }
+          if (m.name === 'Taillight') { m.emissive = new THREE.Color(0xff1e1e); m.emissiveIntensity = 2.0; }
+          if (m.name === 'Beacon') {
+            m.emissive = new THREE.Color(beaconIdx++ % 2 === 0 ? 0x2674ff : 0xff2b2b);
+            m.emissiveIntensity = 4.0;
+          }
+        }
+      });
+      const w = new THREE.Group();
+      w.add(v); w.position.set(x, 0, z); w.rotation.y = yaw;
+      if (quality > 0 && this.lightPool.length > 0) {
+        this.lightSources.push({ x, y: 2.3, z, color: 0x3b82ff, intensity: 14, distance: 14, decay: 1.6 });
+      }
+      this.group.add(w);
+    } catch { /* optional patrol cruiser */ }
+  }
+  private async spawnParkedSedan(x: number, z: number, yaw: number) {
+    try {
+      const gltf = await loadGltfWithRetry(new GLTFLoader().setMeshoptDecoder(MeshoptDecoder), './models/vehicle/sedan_parked.glb', 2, 450);
+      if (this.disposed) { disposeLoadedObjectResources(gltf.scene); return; }
+      const car = gltf.scene;
+      car.updateMatrixWorld(true);
+      const rb = new THREE.Box3().setFromObject(car);
+      const sz = rb.getSize(new THREE.Vector3());
+      const sf = 4.35 / Math.max(sz.x, sz.z, 0.001);
+      car.scale.multiplyScalar(sf);
+      car.updateMatrixWorld(true);
+      const fb = new THREE.Box3().setFromObject(car);
+      car.position.y -= fb.min.y;
+      car.traverse((o: any) => {
+        if (!o.isMesh) return;
+        o.receiveShadow = true;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (!m) continue;
+          if (m.name === 'Paint') { m.color.setHex(0x28323e); m.roughness = 0.3; m.metalness = 0.55; }
+          if (m.name === 'Taillight') { m.emissive = new THREE.Color(0xff2218); m.emissiveIntensity = 1.6; }
+        }
+      });
+      const wrap = new THREE.Group();
+      wrap.add(car); wrap.position.set(x, 0, z); wrap.rotation.y = yaw;
+      this.group.add(wrap);
+    } catch { /* optional parked sedan */ }
+  }
   private async spawnPoliceUnit(x: number, z: number, yaw: number, quality: number) {
     try {
-      const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync('./models/vehicle/marauder.glb');
+      const gltf = await loadGltfWithRetry(new GLTFLoader().setMeshoptDecoder(MeshoptDecoder), './models/vehicle/marauder.glb', 3, 500);
       if (this.disposed) { disposeLoadedObjectResources(gltf.scene); return; }
       const v = gltf.scene;
       v.traverse((o: any) => {

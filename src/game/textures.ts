@@ -134,3 +134,54 @@ export const plazaTex = (key = 'stone', base = '#1e2228', line = '#0d1014') => m
   grain(g, w, h, 16, 4);
 });
 
+/** Ribbed corrugated metal texture for docklands & industrial shipping containers. */
+export const containerTex = (key: string, base: string, rib: string) => make('cont_' + key, 256, 128, (g, w, h) => {
+  const r = rnd(key.length * 31 + 11);
+  g.fillStyle = base; g.fillRect(0, 0, w, h);
+  for (let x = 0; x < w; x += 12) {
+    g.fillStyle = rib; g.fillRect(x, 0, 5, h);
+    g.fillStyle = 'rgba(255,255,255,0.08)'; g.fillRect(x + 5, 0, 2, h);
+  }
+  g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = 4; g.strokeRect(2, 2, w - 4, h - 4);
+  blotches(g, w, h, 12, 'rgba(40,22,12,0.18)', Math.floor(r() * 99) + 1);
+  grain(g, w, h, 14, 7);
+});
+
+/** Atmospheric equirectangular night sky dome per mission theme so exteriors never fall into pitch black. */
+export const skyDomeTex = (theme: string) => make('sky_' + theme, 512, 256, (g, w, h) => {
+  const palettes: Record<string, [string, string, string, string, string]> = {
+    office:    ['#0b1524', '#14263d', '#223e5c', '#2d4f6e', 'rgba(120,175,235,0.16)'],
+    warehouse: ['#121316', '#211d18', '#3c2d1f', '#5a4026', 'rgba(255,185,105,0.22)'],
+    hotel:     ['#0f1420', '#1d2436', '#333034', '#4a3d34', 'rgba(255,205,145,0.18)'],
+    bank:      ['#0d1624', '#192a40', '#2b435e', '#3c5670', 'rgba(150,195,240,0.18)'],
+    club:      ['#0d0818', '#1f1030', '#351748', '#481d58', 'rgba(235,95,215,0.18)'],
+    raid:      ['#0c161e', '#172834', '#263f4c', '#355360', 'rgba(145,205,220,0.18)'],
+    tower:     ['#0d1b28', '#173144', '#25485c', '#335d70', 'rgba(135,195,225,0.20)'],
+  };
+  const [zenith, mid, horizon, glow, cloud] = palettes[theme] ?? palettes.office;
+  const gr = g.createLinearGradient(0, 0, 0, h);
+  gr.addColorStop(0.0, zenith);
+  gr.addColorStop(0.36, mid);
+  gr.addColorStop(0.52, horizon);
+  gr.addColorStop(0.62, glow);
+  gr.addColorStop(0.72, mid);
+  gr.addColorStop(1.0, zenith);
+  g.fillStyle = gr;
+  g.fillRect(0, 0, w, h);
+
+  // Soft drifting overcast cloud bands across the upper sky
+  const r = rnd(theme.length * 43 + 19);
+  for (let i = 0; i < 28; i++) {
+    const cx = r() * w, cy = h * (0.12 + r() * 0.42), rx = 45 + r() * 90, ry = 10 + r() * 24;
+    const cg = g.createRadialGradient(cx, cy, 2, cx, cy, rx);
+    cg.addColorStop(0, cloud);
+    cg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.save();
+    g.translate(cx, cy);
+    g.scale(1, ry / rx);
+    g.fillStyle = cg;
+    g.beginPath(); g.arc(0, 0, rx, 0, Math.PI * 2); g.fill();
+    g.restore();
+  }
+});
+

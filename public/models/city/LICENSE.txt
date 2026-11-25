@@ -13,6 +13,13 @@ City Architecture & Street Furniture 3D Models — Licenses & Attributions
    - rollershutter_door.glb                (Rollershutter Door)
    - modular_chainlink_fence.glb           (Modular Chainlink Fence — WebP + meshopt packed)
    - modular_fire_escape.glb               (Modular Fire Escape — WebP + meshopt packed)
+   - metal_barrel.glb                      (Barrel 01 — https://polyhaven.com/a/Barrel_01 — WebP + meshopt packed)
+   - flood_lights.glb                      (Flood Lights — https://polyhaven.com/a/flood_lights — WebP + meshopt packed)
+   - utility_box_01.glb                    (Utility Box 01 — https://polyhaven.com/a/utility_box_01 — WebP + meshopt packed)
+   - covered_car.glb                       (Covered Car — https://polyhaven.com/a/covered_car — WebP + meshopt packed)
+   - security_light.glb                    (Security Light — https://polyhaven.com/a/security_light — WebP + meshopt packed)
+   - barrel_stove.glb                      (Barrel Stove — https://polyhaven.com/a/barrel_stove — WebP + meshopt packed)
+   - large_iron_gate.glb                   (Large Iron Gate — https://polyhaven.com/a/large_iron_gate — WebP + meshopt packed)
 
 2. Josh Dean / Poly Haven (CC0 1.0 Universal — Public Domain)
    Sources:
