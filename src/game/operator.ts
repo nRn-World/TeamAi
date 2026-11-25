@@ -45,7 +45,7 @@ export function loadOperator(url = './models/operator/scene.gltf'): Promise<bool
       // The rifle and the two patches are loose objects placed for the first frame of the animation: hang them on the bones they belong to.
       const clip = g.animations[0] ?? null, B = bonesOf(wrap), mixer = new THREE.AnimationMixer(wrap);
       if (clip) { mixer.clipAction(clip).play(); mixer.setTime(0); } wrap.updateMatrixWorld(true);
-      const loose: Record<string, string> = { part_2_low_101: 'RightHand', Circle_102: 'LeftArm', Plane_103: 'Spine2' };
+      const loose: Record<string, string> = { part_2_low_101: 'RightHand', Circle_102: 'RightArm', Plane_103: 'Spine2' };
       let gun: THREE.Object3D | null = null; const moved: [THREE.Object3D, THREE.Matrix4][] = [];
       for (const [n, bone] of Object.entries(loose)) { const o = wrap.getObjectByName(n); if (o && B[bone]) { B[bone].attach(o); o.updateMatrix(); moved.push([o, o.matrix.clone()]); if (bone === 'RightHand') { gun = o; o.name = 'OperatorRifle'; } } }
       wrap.updateMatrixWorld(true);
@@ -138,7 +138,7 @@ const P = { // tuning (overridable from the console through window.__op)
   grip: [0.07, 0.02, 0.3],  // where the right hand goes when the rifle is shouldered, from the right shoulder joint (to the left, up, forward) in metres
   twist: -0.55,             // the chest turns so the support arm reaches the handguard
   head: [0.5, 0.12, -0.2],  // the head turns back to the front (share of the twist), tips down and leans to the stock
-  env: 0.55,
+  env: 1.05,
 };
 // rifle axes in its own space: the muzzle points along +y, the sights are on -z
 const AIMQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 1, 0).cross(new THREE.Vector3(0, 0, -1))).transpose())
@@ -146,7 +146,15 @@ const AIMQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().ma
 let ENV: THREE.Texture | null = null; const GAME_MATS = new Map<THREE.Material, THREE.Material>();
 const PLANT_EVERY = 0.05; // seconds between sole measurements
 /** Reflections for the operator's metal and fabric inside the game (the game scene itself has no environment map). */
-export function operatorEnv(t: THREE.Texture | null) { ENV = t; }
+export function operatorEnv(t: THREE.Texture | null) {
+  ENV = t;
+  for (const m of GAME_MATS.values()) {
+    const sm = m as THREE.MeshStandardMaterial;
+    sm.envMap = t;
+    sm.envMapIntensity = P.env;
+    sm.needsUpdate = true;
+  }
+}
 /** One officer in the game. `obj` faces -z like every other character in the game. */
 export class OperatorBody {
   obj = new THREE.Group(); private inner: THREE.Object3D; private B: Record<string, THREE.Bone>; private mixer: THREE.AnimationMixer; private gun: THREE.Object3D | null;

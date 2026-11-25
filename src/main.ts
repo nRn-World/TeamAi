@@ -1427,11 +1427,15 @@ class Game {
       this.scene = new THREE.Scene();
       this.scene.background = new THREE.Color(mods.blackout ? 0x090d14 : atmo.fog);
       this.scene.fog = new THREE.FogExp2(mods.blackout ? 0x090d14 : atmo.fog, mods.blackout ? 0.013 : atmo.fogDensity);
-      if (S.qual > 0) { this.scene.environment = studioEnv(this.renderer); this.scene.environmentIntensity = mods.blackout ? 0.14 : (S.qual >= 3 ? 0.5 : S.qual === 2 ? 0.42 : 0.28); }
-      this.ambLight = new THREE.AmbientLight(atmo.sky, mods.blackout ? (S.qual ? 0.06 : 0.14) : (S.qual ? 0.34 : 1.1));
+      if (S.qual > 0) {
+        this.scene.environment = studioEnv(this.renderer);
+        this.scene.environmentIntensity = mods.blackout ? 0.18 : (S.qual >= 3 ? 0.65 : S.qual === 2 ? 0.55 : 0.36);
+        operatorEnv(this.scene.environment);
+      }
+      this.ambLight = new THREE.AmbientLight(atmo.sky, mods.blackout ? (S.qual ? 0.08 : 0.16) : (S.qual ? 0.48 : 1.15));
       this.nvgLight = new THREE.AmbientLight(0x6aff99, 0);
-      this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(atmo.sky, atmo.ground, mods.blackout ? (S.qual ? 0.14 : 0.24) : (S.qual ? 0.62 : 0.72)));
-      const moon = new THREE.DirectionalLight(atmo.moon, mods.blackout ? 0.35 : 1.25); moon.position.set(-14, 22, 12); this.scene.add(moon);
+      this.scene.add(this.ambLight, this.nvgLight, new THREE.HemisphereLight(atmo.sky, atmo.ground, mods.blackout ? (S.qual ? 0.18 : 0.28) : (S.qual ? 0.85 : 0.85)));
+      const moon = new THREE.DirectionalLight(atmo.moon, mods.blackout ? 0.42 : 1.45); moon.position.set(-14, 22, 12); this.scene.add(moon);
       this.level?.dispose();
       this.level = new LevelView(sim, S.qual); this.scene.add(this.level.group);
       this.fx = new FX(); this.scene.add(this.fx.group);
@@ -1449,7 +1453,7 @@ class Game {
       this.stopReplay();
       show('nvg', false); show('bodycam', this.bodycamOn); show('wheel', false); show('pipFrame', false); $('pipFrame').classList.remove('optiwand'); show('pipMeta', false); show('dispatchPanel', false); show('radioCard', false); $('bcCensor').innerHTML = '';
       $('bcSector').textContent = SECTOR_LOCS[mission] ?? 'SECTOR UNKNOWN';
-      this.renderer.toneMappingExposure = S.qual ? 1.0 : 1.15;
+      this.renderer.toneMappingExposure = S.qual ? 1.18 : 1.2;
       this.selTeam = this.lastTeam = 'ALL'; this.lastWho = null;
       setLoad(86, 'Staging armored transport & gear...');
       await withTimeout(this.level.whenReady(), 8000);

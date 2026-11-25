@@ -18,12 +18,12 @@ const GradeShader = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
     uTime: { value: 0 },
-    uVignette: { value: 0.72 },
-    uGrain: { value: 0.026 },
-    uCa: { value: 0.0015 },
-    uContrast: { value: 1.12 },
-    uSaturation: { value: 1.1 },
-    uTintMix: { value: 0.16 },
+    uVignette: { value: 0.34 },
+    uGrain: { value: 0.02 },
+    uCa: { value: 0.0012 },
+    uContrast: { value: 1.04 },
+    uSaturation: { value: 1.08 },
+    uTintMix: { value: 0.12 },
     uCool: { value: new THREE.Color(0x9fc4ff) },
     uWarm: { value: new THREE.Color(0xffd7a8) },
     uFlash: { value: 0 },
@@ -63,8 +63,10 @@ const GradeShader = {
       col = mix(col, col * uCool, sh * uTintMix);
       col = mix(col, col * uWarm, hi * uTintMix);
 
-      col = (col - 0.5) * uContrast + 0.5;
-      col = (col - 0.01) * 1.01;   // slight toe: crush the washed-out near-black
+      // Power-curve contrast around linear mid-gray (0.18) preserves dark uniform/shadow detail
+      // instead of subtracting into negative values and crushing dark fabrics to pure black.
+      col = max(col, vec3(0.0));
+      col = pow(col / 0.18, vec3(uContrast)) * 0.18;
       float lg = dot(col, vec3(0.2126, 0.7152, 0.0722));
       col = mix(vec3(lg), col, uSaturation);
 
