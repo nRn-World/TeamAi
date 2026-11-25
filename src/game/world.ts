@@ -1432,7 +1432,6 @@ export class LevelView {
       placeCityModel('office_neighbor', { x: -14.0, y: 0, z: 44.0, w: 18, h: 14, d: 12, ry: Math.PI * 0.75 });
       placeCityModel('utility_box_01', { x: 17.8, y: 0, z: 33.8, ry: Math.PI });
       placeCityModel('metal_trash_can', { x: 16.8, y: 0, z: 35.9 });
-      extPromises.push(this.spawnPatrolCruiser(18.5, 41.5, -2.4, quality));
       extPromises.push(this.spawnParkedSedan(-2.5, 42.5, 1.45));
       addStreetLamp(2.6, 36.3, 0xd4ecff);
       addStreetLamp(15.3, 36.1, 0xd4ecff, Math.PI);
