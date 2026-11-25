@@ -81,6 +81,12 @@ const best: Record<string, number> = readStore('teamai.best', {});
 const dailyBest: Record<string, number> = readStore('teamai.daily', {});
 const career = loadCareer();
 const getRank = (xp: number) => rankOf(xp).name;
+/**
+ * TEMPORARY: every weapon and tool is selectable so the maps can be tested with a full
+ * loadout. Flip to false to restore the rank requirements.
+ */
+const UNLOCK_ALL_GEAR = true;
+const gearOpen = (key: GearKey) => UNLOCK_ALL_GEAR || isGearUnlocked(key, career.xp);
 if (params.has('q')) S.qual = +params.get('q')!;
 const saveSettings = () => { try { localStorage.setItem('teamai.settings', JSON.stringify(S)); } catch { /* private mode */ } };
 const dailyInfo = () => {
@@ -317,7 +323,7 @@ class Game {
     const gl = $('gearLocks');
     if (gl) {
       gl.innerHTML = RANKS.filter(r => r.gear).map(r => {
-        const ok = isGearUnlocked(r.gear!, career.xp);
+        const ok = gearOpen(r.gear!);
         return `<div class="gearlock ${ok ? 'on' : 'off'}"><b>${GEAR_NAMES[r.gear!]}</b><span>${ok ? 'unlocked' : `LOCKED · ${gearLockLabel(r.gear!)}`}</span></div>`;
       }).join('');
     }
@@ -329,12 +335,12 @@ class Game {
         const key = opt.value as GearKey;
         if (!opt.dataset.base) opt.dataset.base = opt.textContent || '';
         const base = opt.dataset.base;
-        const ok = isGearUnlocked(key, career.xp);
+        const ok = gearOpen(key);
         opt.disabled = !ok;
         opt.textContent = ok ? base : `${base} · LOCKED — ${gearLockLabel(key)}`;
       }
       const cur = sel.value as GearKey;
-      if (!isGearUnlocked(cur, career.xp)) {
+      if (!gearOpen(cur)) {
         sel.value = sel === lp ? 'carbine' : 'pistol';
         if (sel === lp) S.primary = sel.value as PrimaryLoadout; else S.secondary = sel.value as SecondaryLoadout;
         saveSettings();
@@ -431,12 +437,12 @@ class Game {
     ($('lPrimary') as HTMLSelectElement).value = S.primary; ($('lSecondary') as HTMLSelectElement).value = S.secondary;
     ($('lPrimary') as HTMLSelectElement).onchange = () => {
       const v = ($('lPrimary') as HTMLSelectElement).value as PrimaryLoadout;
-      if (!isGearUnlocked(v as GearKey, career.xp)) { this.audio.fail(); ($('lPrimary') as HTMLSelectElement).value = S.primary; this.refreshCareerUi(); return; }
+      if (!gearOpen(v as GearKey)) { this.audio.fail(); ($('lPrimary') as HTMLSelectElement).value = S.primary; this.refreshCareerUi(); return; }
       S.primary = v; saveSettings(); this.menu.setHeroLoadout(S.primary, S.secondary); this.audio.ui();
     };
     ($('lSecondary') as HTMLSelectElement).onchange = () => {
       const v = ($('lSecondary') as HTMLSelectElement).value as SecondaryLoadout;
-      if (!isGearUnlocked(v as GearKey, career.xp)) { this.audio.fail(); ($('lSecondary') as HTMLSelectElement).value = S.secondary; this.refreshCareerUi(); return; }
+      if (!gearOpen(v as GearKey)) { this.audio.fail(); ($('lSecondary') as HTMLSelectElement).value = S.secondary; this.refreshCareerUi(); return; }
       S.secondary = v; saveSettings(); this.menu.setHeroLoadout(S.primary, S.secondary); this.audio.ui();
     };
     ($('btnIronman') as HTMLButtonElement).onclick = () => {
